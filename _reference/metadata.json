@@ -1,0 +1,6 @@
+{
+  "name": "Truvo Analytics",
+  "description": "Real-time marketing intelligence, multi-stage funnel building, and attribution reporting platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

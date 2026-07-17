@@ -1,0 +1,20 @@
+node_modules/
+dist/
+.next/
+.turbo/
+out/
+build/
+*.tsbuildinfo
+
+# env
+.env
+.env.local
+.env.*.local
+
+# drizzle
+packages/db/migrations/meta/_journal.json.lock
+
+# logs / os
+*.log
+.DS_Store
+Thumbs.db

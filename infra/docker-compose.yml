@@ -1,0 +1,67 @@
+name: truvo-infra
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    container_name: truvo-clickhouse
+    ports:
+      - "8123:8123" # HTTP
+      - "9000:9000" # native
+    environment:
+      CLICKHOUSE_DB: truvo
+      CLICKHOUSE_USER: truvo
+      CLICKHOUSE_PASSWORD: truvo_local
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "localhost:8123/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  redpanda:
+    image: redpandadata/redpanda:v24.2.4
+    container_name: truvo-redpanda
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --overprovisioned
+      - --node-id=0
+      - --kafka-addr=INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092
+      - --advertise-kafka-addr=INTERNAL://redpanda:29092,EXTERNAL://localhost:9092
+      - --check=false
+    ports:
+      - "9092:9092" # Kafka (host)
+      - "9644:9644" # admin
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    container_name: truvo-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  clickhouse_data:
+  redpanda_data:
+  redis_data:
