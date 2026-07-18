@@ -13,12 +13,11 @@ import OnboardingFlow from './components/OnboardingFlow';
 import LoginView from './components/LoginView';
 import { ViewState, Funnel, CampaignRow, Integration, ApiKey, WorkspaceConfig, ProfileConfig } from './types';
 import { initialFunnels, initialCampaigns, initialIntegrations, initialApiKeys } from './data';
+import { useSession } from '@/lib/session';
 import { HelpCircle, RefreshCw, Sparkles, Check } from 'lucide-react';
 
 export default function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
-    return localStorage.getItem('truvo_logged_in') === 'true';
-  });
+  const session = useSession();
 
   const [currentView, setView] = useState<ViewState>('dashboard');
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -51,16 +50,13 @@ export default function App() {
 
   const handleLoginSuccess = (newProfile: ProfileConfig) => {
     setProfile(newProfile);
-    setIsLoggedIn(true);
     localStorage.setItem('truvo_profile', JSON.stringify(newProfile));
-    localStorage.setItem('truvo_logged_in', 'true');
     setView('onboarding');
   };
 
   const handleLogout = () => {
-    setIsLoggedIn(false);
+    session.logout();
     localStorage.removeItem('truvo_profile');
-    localStorage.removeItem('truvo_logged_in');
     setView('dashboard');
   };
 
@@ -125,7 +121,10 @@ export default function App() {
     setFunnels(prev => prev.map(f => f.id === updatedFunnel.id ? updatedFunnel : f));
   };
 
-  if (!isLoggedIn) {
+  if (!session.ready) {
+    return null;
+  }
+  if (!session.mode) {
     return <LoginView onLoginSuccess={handleLoginSuccess} />;
   }
 

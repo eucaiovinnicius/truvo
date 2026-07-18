@@ -18,12 +18,14 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { ProfileConfig } from '../types';
+import { useSession } from '@/lib/session';
 
 interface LoginViewProps {
   onLoginSuccess: (profile: ProfileConfig) => void;
 }
 
 export default function LoginView({ onLoginSuccess }: LoginViewProps) {
+  const session = useSession();
   const [isRegister, setIsRegister] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -38,7 +40,15 @@ export default function LoginView({ onLoginSuccess }: LoginViewProps) {
   // OAuth Loading states
   const [oauthProvider, setOauthProvider] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // Entra no app após sucesso (real ou demo), mantendo o flash de sucesso.
+  const enter = (name: string) => {
+    setSuccess(true);
+    setTimeout(() => {
+      onLoginSuccess({ fullName: name, email: email || 'demo@truvo.ai', avatarUrl: '' });
+    }, 600);
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -53,21 +63,24 @@ export default function LoginView({ onLoginSuccess }: LoginViewProps) {
     }
 
     setIsLoading(true);
+    const result = isRegister
+      ? await session.signup(email, password, fullName)
+      : await session.login(email, password);
+    setIsLoading(false);
 
-    // Simulate network latency
-    setTimeout(() => {
-      setIsLoading(false);
-      setSuccess(true);
-      
-      // Complete login after success animation
-      setTimeout(() => {
-        onLoginSuccess({
-          fullName: isRegister ? fullName : (email.split('@')[0].toUpperCase() || 'Alex Mercer'),
-          email: email,
-          avatarUrl: ''
-        });
-      }, 1000);
-    }, 1500);
+    const displayName = isRegister ? fullName : email.split('@')[0].toUpperCase() || 'Usuário';
+
+    if (result.ok) {
+      enter(displayName);
+    } else if (result.reason === 'invalid') {
+      setError('Credenciais inválidas. Verifique e tente novamente.');
+    } else if (result.reason === 'confirm') {
+      setError('Conta criada! Confirme seu e-mail e faça login para entrar.');
+    } else {
+      // API indisponível → abre em modo demonstração (dados de exemplo).
+      session.demo();
+      enter(displayName || 'Demonstração');
+    }
   };
 
   const handleOAuthLogin = (provider: 'google' | 'github' | 'shopify') => {
@@ -75,6 +88,7 @@ export default function LoginView({ onLoginSuccess }: LoginViewProps) {
     setOauthProvider(provider);
     setIsLoading(true);
 
+    // OAuth social ainda não conectado ao backend → entra em modo demonstração.
     setTimeout(() => {
       setIsLoading(false);
       setSuccess(true);
@@ -92,14 +106,15 @@ export default function LoginView({ onLoginSuccess }: LoginViewProps) {
         shopify: 'loja-shopify@truvo.ai'
       };
 
+      session.demo();
       setTimeout(() => {
         onLoginSuccess({
           fullName: names[provider],
           email: emails[provider],
           avatarUrl: ''
         });
-      }, 1000);
-    }, 1800);
+      }, 900);
+    }, 1200);
   };
 
   // Helper to fill pre-defined demo login credentials

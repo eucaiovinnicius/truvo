@@ -1,6 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
+import { SessionProvider } from '@/lib/session';
 
 /**
  * SPA da marca (login → onboarding → dashboard) portada de _reference/src.
@@ -13,5 +14,9 @@ const App = dynamic(() => import('@/appui/App'), {
 });
 
 export default function HomePage() {
-  return <App />;
+  return (
+    <SessionProvider>
+      <App />
+    </SessionProvider>
+  );
 }
