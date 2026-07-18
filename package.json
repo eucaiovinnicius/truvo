@@ -12,7 +12,10 @@
     "infra:pull": "docker compose -f infra/docker-compose.yml pull",
     "infra:up": "docker compose -f infra/docker-compose.yml up -d",
     "infra:down": "docker compose -f infra/docker-compose.yml down",
-    "infra:logs": "docker compose -f infra/docker-compose.yml logs -f"
+    "infra:logs": "docker compose -f infra/docker-compose.yml logs -f",
+    "db:pg": "pnpm --filter @truvo/db db:push",
+    "db:ch": "pnpm --filter @truvo/db ch:migrate",
+    "db:setup": "pnpm db:pg && pnpm db:ch"
   },
   "devDependencies": {
     "turbo": "^2.1.0",

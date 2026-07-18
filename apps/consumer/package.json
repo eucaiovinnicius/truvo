@@ -6,6 +6,8 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js",
+    "start:identity-worker": "node dist/identity/main.js",
+    "dev:identity-worker": "tsx watch src/identity/main.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
