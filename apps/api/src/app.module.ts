@@ -11,6 +11,12 @@ import { MetricsModule } from './modules/metrics/metrics.module';
 import { AttributionModule } from './modules/attribution/attribution.module';
 import { DataExplorerModule } from './modules/data-explorer/data-explorer.module';
 import { ProfilesModule } from './modules/profiles/profiles.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
+import { IntegrationsOutModule } from './modules/integrations-out/integrations-out.module';
+import { CreativesModule } from './modules/creatives/creatives.module';
+import { AiModule } from './modules/ai/ai.module';
+import { ReportsModule } from './modules/reports/reports.module';
+import { BillingModule } from './modules/billing/billing.module';
 
 @Module({
   imports: [
@@ -26,6 +32,13 @@ import { ProfilesModule } from './modules/profiles/profiles.module';
     AttributionModule,
     DataExplorerModule,
     ProfilesModule,
+    // Onda 4 (final)
+    NotificationsModule, // @Global — registrar cedo
+    IntegrationsOutModule, // M9
+    CreativesModule, // M10 (fornece AD_SPEND_PROVIDER / PLATFORM_METRICS_PROVIDER)
+    AiModule, // M17
+    ReportsModule, // M13
+    BillingModule, // M11
   ],
 })
 export class AppModule {}

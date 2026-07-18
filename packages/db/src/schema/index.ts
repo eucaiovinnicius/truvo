@@ -10,3 +10,9 @@ export * from './metrics'; // M6 — kpi_definitions, dashboards
 export * from './attribution'; // M7 — attribution_settings
 export * from './data-explorer'; // M16 — insights, insight_versions, insight_shares, explorer_catalog
 export * from './profiles'; // M15 — user_profiles, profile_access_log
+export * from './integrations-out'; // M9 — integration_out_configs, integration_out_logs
+export * from './creatives'; // M10 — creatives, creative_ad_accounts, creative_alert_log
+export * from './notifications'; // M12 — notifications, alert_rules, notification_preferences
+export * from './billing'; // M11 — subscriptions, usage_records
+export * from './reports'; // M13 — reports, report_runs
+export * from './ai'; // M17 — ai_objectives, ai_journey_runs, ai_insights, ai_recommendations, ai_conversations
