@@ -24,6 +24,7 @@ import {
   Legend 
 } from 'recharts';
 import { Funnel } from '../types';
+import { useLive } from '@/lib/live';
 
 interface DashboardViewProps {
   funnels: Funnel[];
@@ -31,9 +32,74 @@ interface DashboardViewProps {
   dateRange: string;
 }
 
+// ---- Formas da API real (M6 metrics) ----
+interface KpisResponse {
+  spend_available: boolean;
+  totals: {
+    revenue: number | null;
+    ad_spend: number | null;
+    orders: number | null;
+    purchases: number | null;
+    conversions: number | null;
+    purchasers: number | null;
+    sessions: number | null;
+    visitors: number | null;
+    leads: number | null;
+  };
+  kpis: {
+    roas: number | null;
+    cac: number | null;
+    cpl: number | null;
+    ltv: number | null;
+    aov: number | null;
+    cvr: number | null;
+    mrr: number | null;
+  };
+}
+
+interface TimeseriesResponse {
+  series: { bucket: string; value: number | null }[];
+}
+
+interface BreakdownResponse {
+  rows: { dimension: string; value: number | null }[];
+}
+
+const fmtUSD = (n: number): string =>
+  `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** dateRange (UI) → period (API). */
+function periodFromRange(dateRange: string): string {
+  switch (dateRange) {
+    case 'Today':
+      return 'today';
+    case 'Last 7 Days':
+      return 'last_7_days';
+    case 'Last 30 Days':
+      return 'last_30_days';
+    case 'This Month':
+      return 'last_30_days';
+    default:
+      return 'last_7_days';
+  }
+}
+
 export default function DashboardView({ funnels, setView, dateRange }: DashboardViewProps) {
-  // Mock performance data for 7-day Composed Chart
-  const chartData = [
+  const period = periodFromRange(dateRange);
+
+  // Live (API real) — em modo demo useLive retorna null → cai no mock abaixo.
+  const kpisLive = useLive<KpisResponse>(`/v1/metrics/kpis?period=${period}`, [period]);
+  const tsLive = useLive<TimeseriesResponse>(
+    `/v1/metrics/timeseries?metric=revenue&granularity=day&period=${period}`,
+    [period],
+  );
+  const srcLive = useLive<BreakdownResponse>(
+    `/v1/metrics/breakdown?dimension=utm_source&metric=revenue&period=${period}&limit=5`,
+    [period],
+  );
+
+  // Mock performance data for 7-day Composed Chart (fallback demo)
+  const MOCK_CHART_DATA = [
     { name: 'July 1', Spend: 150, Revenue: 480, Conversions: 11 },
     { name: 'July 2', Spend: 220, Revenue: 710, Conversions: 16 },
     { name: 'July 3', Spend: 190, Revenue: 640, Conversions: 14 },
@@ -43,13 +109,50 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
     { name: 'July 7', Spend: 350, Revenue: 1312, Conversions: 29 },
   ];
 
-  const trafficSources = [
+  const MOCK_TRAFFIC_SOURCES = [
     { source: 'meta / cpc', revenue: 2185.20, conversions: 54, roas: '3.08x', quality: '9.2', status: 'Syncing', statusColor: 'text-teal-600 bg-teal-50' },
     { source: 'google / search', revenue: 1240.50, conversions: 28, roas: '3.52x', quality: '8.8', status: 'Syncing', statusColor: 'text-teal-600 bg-teal-50' },
     { source: 'tiktok / spark', revenue: 310.00, conversions: 7, roas: '0.91x', quality: '6.5', status: 'Error', statusColor: 'text-rose-600 bg-rose-50' },
     { source: 'newsletter / email', revenue: 280.00, conversions: 14, roas: '7.20x', quality: '9.5', status: 'Active', statusColor: 'text-emerald-600 bg-emerald-50' },
     { source: 'direct / none', revenue: 87.80, conversions: 2, roas: '--', quality: '--', status: 'Active', statusColor: 'text-slate-600 bg-slate-50' },
   ];
+
+  // adapt(): mapeia o JSON da API para a MESMA forma que o JSX já consome.
+  const chartData = tsLive.data
+    ? tsLive.data.series.map((s) => ({
+        name: s.bucket,
+        Revenue: s.value ?? 0,
+        Spend: 0,
+        Conversions: 0,
+      }))
+    : MOCK_CHART_DATA;
+
+  const trafficSources = srcLive.data
+    ? srcLive.data.rows.map((r) => ({
+        source: r.dimension || '(direto)',
+        revenue: r.value ?? 0,
+        conversions: 0,
+        roas: '—',
+        quality: '—',
+        status: 'Active',
+        statusColor: 'text-slate-600 bg-slate-50',
+      }))
+    : MOCK_TRAFFIC_SOURCES;
+
+  // KPI cards — valor real com fallback ao literal mock. Sparklines/deltas ficam hardcoded.
+  const kpis = kpisLive.data;
+  const revenueDisplay = kpis ? fmtUSD(kpis.totals?.revenue ?? 0) : '$4,103.50';
+  const roasDisplay = kpis
+    ? kpis.kpis?.roas != null
+      ? `${kpis.kpis.roas.toFixed(2)}x`
+      : '—'
+    : '3.38x';
+  const cacDisplay = kpis
+    ? kpis.kpis?.cac != null
+      ? fmtUSD(kpis.kpis.cac)
+      : '—'
+    : '$13.25';
+  const shareDisplay = kpis && kpis.kpis?.cvr != null ? `${kpis.kpis.cvr}%` : '84.6%';
 
   return (
     <div id="dashboard-view-container" className="space-y-6">
@@ -65,7 +168,7 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
             </span>
           </div>
           <div className="mt-3">
-            <h3 className="text-2xl font-bold text-slate-900 tracking-tight">$4,103.50</h3>
+            <h3 className="text-2xl font-bold text-slate-900 tracking-tight">{revenueDisplay}</h3>
             <p className="text-[10px] text-slate-400 mt-1 flex items-center gap-1 font-mono">
               <Info className="w-3.5 h-3.5 shrink-0" />
               Model-attributable sales
@@ -96,7 +199,7 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
             </span>
           </div>
           <div className="mt-3">
-            <h3 className="text-2xl font-bold text-slate-900 tracking-tight">3.38x</h3>
+            <h3 className="text-2xl font-bold text-slate-900 tracking-tight">{roasDisplay}</h3>
             <p className="text-[10px] text-slate-400 mt-1 flex items-center gap-1 font-mono">
               <Info className="w-3.5 h-3.5 shrink-0" />
               Revenue / Ad Spend ratio
@@ -126,7 +229,7 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
             </span>
           </div>
           <div className="mt-3">
-            <h3 className="text-2xl font-bold text-slate-900 tracking-tight">$13.25</h3>
+            <h3 className="text-2xl font-bold text-slate-900 tracking-tight">{cacDisplay}</h3>
             <p className="text-[10px] text-slate-400 mt-1 flex items-center gap-1 font-mono">
               <Info className="w-3.5 h-3.5 shrink-0" />
               Ad spend per acquisition
@@ -156,7 +259,7 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
             </span>
           </div>
           <div className="mt-3">
-            <h3 className="text-2xl font-bold text-slate-900 tracking-tight font-sans">84.6%</h3>
+            <h3 className="text-2xl font-bold text-slate-900 tracking-tight font-sans">{shareDisplay}</h3>
             <p className="text-[10px] text-slate-400 mt-1 flex items-center gap-1 font-mono">
               <Info className="w-3.5 h-3.5 shrink-0" />
               First-purchase transaction share

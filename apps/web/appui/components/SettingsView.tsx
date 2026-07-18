@@ -15,12 +15,44 @@ import {
   Globe
 } from 'lucide-react';
 import { WorkspaceConfig, ProfileConfig } from '../types';
+import { useSession } from '@/lib/session';
+import { useLive } from '@/lib/live';
 
 interface SettingsViewProps {
   profile: ProfileConfig;
   setProfile: React.Dispatch<React.SetStateAction<ProfileConfig>>;
   workspace: WorkspaceConfig;
   setWorkspace: React.Dispatch<React.SetStateAction<WorkspaceConfig>>;
+}
+
+/** Formato bruto de um membro vindo de GET /v1/workspaces/{id}/members. */
+interface ApiMember {
+  userId: string;
+  role?: string | null;
+  status?: string | null;
+  email?: string | null;
+  name?: string | null;
+  avatarUrl?: string | null;
+}
+
+/** Linha de membro na MESMA forma que a tabela já consome. */
+interface TeamMemberRow {
+  id: number | string;
+  name: string;
+  email: string;
+  role: string;
+  status: string;
+}
+
+/** Mapeia o JSON da API para a forma que o JSX já renderiza. */
+function adaptMembers(rows: ApiMember[]): TeamMemberRow[] {
+  return (rows ?? []).map((m) => ({
+    id: m.userId,
+    name: m.name || m.email || '—',
+    email: m.email ?? '—',
+    role: m.role ?? 'Member',
+    status: m.status || 'Active',
+  }));
 }
 
 export default function SettingsView({ 
@@ -42,6 +74,15 @@ export default function SettingsView({
   const [inviteName, setInviteName] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('Growth Marketer');
+
+  // Team Members ligados à API real. Em demo (ou sem wid) useLive retorna null
+  // → a tabela cai no mock `teamMembers` acima, intacto.
+  const wid = useSession().workspace?.id;
+  const membersPath = wid ? `/v1/workspaces/${wid}/members` : null;
+  const liveMembers = useLive<ApiMember[]>(membersPath, [wid]);
+  const displayMembers: TeamMemberRow[] = liveMembers.data
+    ? adaptMembers(liveMembers.data)
+    : teamMembers;
 
   const handleProfileSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -75,7 +116,7 @@ export default function SettingsView({
     setTimeout(() => setSaveSuccess(false), 3000);
   };
 
-  const handleDeleteMember = (id: number) => {
+  const handleDeleteMember = (id: number | string) => {
     if (window.confirm('Are you sure you want to revoke workspace access for this member?')) {
       setTeamMembers(prev => prev.filter(m => m.id !== id));
     }
@@ -190,6 +231,9 @@ export default function SettingsView({
           )}
 
           {/* TAB 2: Workspace Config */}
+          {/* TODO(live): GET /v1/workspaces → achar id=wid e semear name/slug/timezone/currency.
+              Mantido no mock: inputs são controlados por props do parent (workspace/setWorkspace);
+              semear defaults exigiria effect com guarda p/ não sobrescrever edições. */}
           {activeTab === 'workspace' && (
             <form onSubmit={handleWorkspaceSubmit} className="space-y-4">
               <div>
@@ -286,7 +330,7 @@ export default function SettingsView({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-xs">
-                    {teamMembers.map((member) => (
+                    {displayMembers.map((member) => (
                       <tr key={member.id} className="hover:bg-slate-50/50 transition-colors">
                         <td className="py-3 px-3">
                           <span className="font-bold text-slate-800 block">{member.name}</span>

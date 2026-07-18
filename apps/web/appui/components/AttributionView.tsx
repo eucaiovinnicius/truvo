@@ -32,6 +32,7 @@ import {
   Tooltip 
 } from 'recharts';
 import { CampaignRow } from '../types';
+import { useLive } from '@/lib/live';
 
 interface AttributionViewProps {
   campaigns: CampaignRow[];
@@ -75,6 +76,58 @@ export default function AttributionView({
     }
     return () => clearInterval(interval);
   }, [isPlaying]);
+
+  // --- Live wiring (M7): nível TOP de canais via GET /v1/attribution/report ---
+  // Padrão fallback demo: em modo demo useLive retorna null → usamos getChannelData
+  // (o mock existente) intacto. Só quando 'live' mostramos o real.
+  interface AttributionApiChannel {
+    channel: string;
+    attributed_conversions: number;
+    attributed_revenue: number;
+    last_touch_conversions: number;
+    assisted_conversions: number;
+    revenue_share: number;
+  }
+  interface AttributionApiReport {
+    totals: { conversions: number; revenue: number };
+    channels: AttributionApiChannel[];
+  }
+
+  // selectedModel → model da API (allowlist do endpoint).
+  const apiModel =
+    selectedModel === 'first' ? 'first_click' :
+    selectedModel === 'last' ? 'last_click' :
+    selectedModel === 'linear' ? 'linear' :
+    selectedModel === 'position' ? 'position_based' :
+    'time_decay'; // truvo_ai
+  // lookbackWindow (1|7|30|90) → window allowlist (1|7|14|30): 90→30, resto igual.
+  const apiWindow = lookbackWindow === 90 ? 30 : lookbackWindow;
+
+  const attributionLive = useLive<AttributionApiReport>(
+    `/v1/attribution/report?model=${apiModel}&window=${apiWindow}`,
+    [selectedModel, lookbackWindow],
+  );
+
+  // Mapeia o JSON da API para a MESMA forma que o JSX já consome
+  // (FunnelChannelPerformance). spend/visitors/convRate/cpa/ROAS ainda não
+  // existem na API → 0 (as colunas correspondentes já renderizam '-').
+  function adaptChannels(report: AttributionApiReport): FunnelChannelPerformance[] {
+    return (report?.channels ?? []).map((c) => ({
+      channel: c?.channel ?? '',
+      spend: 0,
+      visitors: 0,
+      conversions: c?.attributed_conversions ?? 0,
+      convRate: 0,
+      cpa: 0,
+      reportedRoas: 0,
+      modelRoas: 0,
+    }));
+  }
+
+  // Real quando 'live'; senão o mock existente (fallback demo).
+  const channelData: FunnelChannelPerformance[] = attributionLive.data
+    ? adaptChannels(attributionLive.data)
+    : getChannelData(selectedModel);
 
   interface FunnelChannelPerformance {
     channel: string;
@@ -609,8 +662,8 @@ export default function AttributionView({
             </thead>
             <tbody className="divide-y divide-slate-50 text-xs">
               {!selectedChannel ? (
-                // Top-Level Channels View
-                getChannelData(selectedModel).map((ch) => {
+                // Top-Level Channels View (live quando 'live', senão mock)
+                channelData.map((ch) => {
                   const hasSpend = ch.spend > 0;
                   const hasRoas = ch.reportedRoas > 0;
                   
@@ -712,9 +765,12 @@ export default function AttributionView({
               ) : (
                 // Drilled-down view for selected channel (showing Campaigns -> Ad Sets -> Creatives)
                 (() => {
+                  // TODO(live): drilldown de campanha via /v1/attribution/campaign-breakdown.
+                  // Mantido no mock (getChannelData/getCampaignData) porque a API do M7 só
+                  // fornece o nível de canal; o breakdown campanha→adset→criativo ainda não existe.
                   const chData = getChannelData(selectedModel).find(c => c.channel === selectedChannel);
                   if (!chData) return null;
-                  
+
                   const filteredCampaigns = getCampaignData(selectedChannel, chData);
 
                   return filteredCampaigns.map((camp) => {

@@ -18,6 +18,8 @@ import {
   Sparkles
 } from 'lucide-react';
 import { Integration, ApiKey } from '../types';
+import { useSession } from '@/lib/session';
+import { useLive } from '@/lib/live';
 
 interface TrackingViewProps {
   integrations: Integration[];
@@ -26,15 +28,159 @@ interface TrackingViewProps {
   setApiKeys: React.Dispatch<React.SetStateAction<ApiKey[]>>;
 }
 
-export default function TrackingView({ 
-  integrations, 
-  setIntegrations, 
-  apiKeys, 
-  setApiKeys 
+// ── Live wiring: API real → MESMA forma que o JSX já consome ────────────────
+
+/** GET /v1/api-keys → { apiKeys: [...] } (sem hash; só prefix público). */
+interface ApiKeyRow {
+  id: string;
+  name: string;
+  prefix: string;
+  status: string; // 'active' | 'revoked'
+  lastUsedAt?: string | null;
+  createdAt?: string | null;
+  revokedAt?: string | null;
+}
+interface ApiKeysResponse {
+  apiKeys: ApiKeyRow[];
+}
+
+/** GET /v1/integrations (entrada / webhooks) → array de integrações. */
+interface IntegrationInRow {
+  id: string;
+  type: string; // 'shopify' | 'stripe' | 'hotmart' | 'kiwify'
+  name: string;
+  status: string; // 'pending' | 'active' | 'inactive' | 'error'
+  lastError?: string | null;
+  lastEventAt?: string | null;
+  hasCredentials?: boolean;
+}
+
+/** GET /v1/integrations-out/status → { platforms: [...] } (saída / CAPI). */
+interface IntegrationOutPlatformRow {
+  platform: string; // 'meta_capi' | 'google_enhanced' | 'tiktok_events'
+  configured?: boolean;
+  enabled?: boolean;
+  status?: string; // 'not_configured' | 'pending' | 'active' | 'inactive' | 'error'
+  last_error?: string | null;
+  last_forward_at?: string | null;
+}
+interface IntegrationsOutStatusResponse {
+  platforms: IntegrationOutPlatformRow[];
+}
+
+function cap(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+function fmtWhen(iso?: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString();
+}
+
+/** status da API → os 3 estados que o JSX estiliza. active→connected, error→auth_error, resto→syncing. */
+function mapIntegrationStatus(status?: string | null): Integration['status'] {
+  if (status === 'active') return 'connected';
+  if (status === 'error') return 'auth_error';
+  return 'syncing';
+}
+
+function iconForPlatform(platform: string): string {
+  if (platform.startsWith('meta')) return 'Meta';
+  if (platform.startsWith('google')) return 'Google';
+  if (platform.startsWith('tiktok')) return 'TikTok';
+  return cap(platform) || '—';
+}
+
+function platformName(platform: string): string {
+  switch (platform) {
+    case 'meta_capi':
+      return 'Meta Conversions API';
+    case 'google_enhanced':
+      return 'Google Enhanced';
+    case 'tiktok_events':
+      return 'TikTok Events';
+    default:
+      return cap(platform) || '—';
+  }
+}
+
+/** { apiKeys } da API → ApiKey[] (mock shape). key = prefix + máscara. */
+function adaptApiKeys(res: ApiKeysResponse): ApiKey[] {
+  return (res.apiKeys ?? []).map((k) => ({
+    id: k.id,
+    name: k.name,
+    key: `${k.prefix ?? ''}••••••`,
+    status: k.status === 'active' ? 'active' : 'inactive',
+  }));
+}
+
+/**
+ * Junta entrada (/v1/integrations) + saída (/v1/integrations-out/status) num
+ * Integration[] único. Retorna null quando NENHUMA fonte carregou → o chamador
+ * cai no mock/props. `icon` nunca é vazio (o JSX usa `icon[0]`).
+ */
+function adaptIntegrations(
+  inRows: IntegrationInRow[] | null,
+  outStatus: IntegrationsOutStatusResponse | null,
+): Integration[] | null {
+  if (!inRows && !outStatus) return null;
+  const list: Integration[] = [];
+  for (const r of inRows ?? []) {
+    list.push({
+      id: r.id,
+      name: r.name,
+      icon: cap(r.type ?? '') || '—',
+      status: mapIntegrationStatus(r.status),
+      details:
+        r.lastError ??
+        `Webhook de entrada • ${cap(r.type ?? '') || '—'}${
+          r.hasCredentials ? ' • credenciais salvas' : ''
+        }`,
+      lastSync: fmtWhen(r.lastEventAt),
+    });
+  }
+  for (const p of outStatus?.platforms ?? []) {
+    list.push({
+      id: `out_${p.platform}`,
+      name: platformName(p.platform),
+      icon: iconForPlatform(p.platform),
+      status: mapIntegrationStatus(p.status),
+      details:
+        p.last_error ??
+        `${p.configured ? 'Configurada' : 'Não configurada'}${
+          p.enabled ? ' • ativa' : ' • inativa'
+        }`,
+      lastSync: fmtWhen(p.last_forward_at),
+    });
+  }
+  return list;
+}
+
+export default function TrackingView({
+  integrations: propIntegrations,
+  setIntegrations,
+  apiKeys: propApiKeys,
+  setApiKeys
 }: TrackingViewProps) {
   const [copied, setCopied] = useState(false);
   const [newKeyLabel, setNewKeyLabel] = useState('');
   const [showAddKey, setShowAddKey] = useState(false);
+
+  // Fonte de dados: prefere API real; em demo (ou sem workspace) useLive
+  // retorna null → cai nas props/mock, intactos. Endpoints são escopados por
+  // workspace via header x-workspace-id; gate no wid p/ evitar 401 prematuro.
+  const wid = useSession().workspace?.id;
+  const keysLive = useLive<ApiKeysResponse>(wid ? '/v1/api-keys' : null, [wid]);
+  const intInLive = useLive<IntegrationInRow[]>(wid ? '/v1/integrations' : null, [wid]);
+  const intOutLive = useLive<IntegrationsOutStatusResponse>(
+    wid ? '/v1/integrations-out/status' : null,
+    [wid],
+  );
+
+  const apiKeys: ApiKey[] = keysLive.data ? adaptApiKeys(keysLive.data) : propApiKeys;
+  const liveIntegrations = adaptIntegrations(intInLive.data, intOutLive.data);
+  const integrations: Integration[] = liveIntegrations ?? propIntegrations;
 
   // Copied Animation
   const handleCopy = () => {

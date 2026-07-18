@@ -32,6 +32,8 @@ import {
   X
 } from 'lucide-react';
 import { Funnel } from '../types';
+import { useLive } from '@/lib/live';
+import { useSession } from '@/lib/session';
 
 interface FunnelChannelPerformance {
   channel: string;
@@ -44,8 +46,10 @@ interface FunnelChannelPerformance {
   modelRoas: number;
 }
 
+// TODO(live): getChannelData/getCampaignData (Attribution Analyzer drilldown)
+// seguem no mock — ligar via /v1/attribution.
 function getChannelData(
-  funnelId: string, 
+  funnelId: string,
   reachStart: number, 
   reachEnd: number, 
   selectedModel: 'truvo_ml' | 'first_click' | 'last_click' | 'linear'
@@ -415,6 +419,84 @@ function getCampaignData(
   });
 }
 
+// ---- API (M5) → forma que o JSX já consome. adapt() local + fallback demo. ----
+
+interface FunnelStepApi {
+  step_id: string;
+  name: string;
+  event: string;
+  conditions?: unknown[];
+}
+
+interface FunnelViewApi {
+  id: string;
+  name: string;
+  status: 'active' | 'archived' | 'draft';
+  attribution_window_days?: number;
+  steps?: FunnelStepApi[] | null;
+  alert?: unknown;
+  sparkline?: number[] | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+interface FunnelStatsStepApi {
+  step_id: string;
+  name: string;
+  event: string;
+  users_entered: number | null;
+  conversion_rate: number | null;
+}
+
+interface FunnelStatsApi {
+  overall_conversion_rate: number | null;
+  total_visitors: number | null;
+  total_revenue: number | null;
+  steps?: FunnelStatsStepApi[] | null;
+  best_traffic_source?: string | null;
+}
+
+/** GET /v1/funnels → mesma forma Funnel que o grid já renderiza. */
+function adaptFunnels(rows: FunnelViewApi[]): Funnel[] {
+  return (rows ?? []).map((f) => {
+    const steps = f.steps ?? [];
+    return {
+      id: f.id,
+      name: f.name,
+      status: f.status === 'archived' ? 'inactive' : f.status,
+      conversionRate: 0,
+      totalSteps: steps.length,
+      steps: steps.map((s, i) => ({
+        id: s.step_id || `s${i}`,
+        stepNumber: i + 1,
+        name: s.name,
+        eventType: s.event,
+        conditions: [],
+        reach: 0,
+      })),
+      updatedTime: '',
+      sparklineData: f.sparkline ?? [],
+    };
+  });
+}
+
+/** GET /v1/funnels/{id}/stats → preenche reach (users_entered) e conversão do funil aberto. */
+function applyFunnelStats(f: Funnel, stats: FunnelStatsApi): Funnel {
+  const statSteps = stats.steps ?? [];
+  const byId = new Map<string, FunnelStatsStepApi>();
+  statSteps.forEach((s) => {
+    if (s.step_id) byId.set(s.step_id, s);
+  });
+  return {
+    ...f,
+    conversionRate: stats.overall_conversion_rate ?? f.conversionRate,
+    steps: f.steps.map((step, i) => {
+      const st = byId.get(step.id) ?? statSteps[i];
+      return { ...step, reach: st?.users_entered ?? step.reach };
+    }),
+  };
+}
+
 interface FunnelsViewProps {
   funnels: Funnel[];
   setFunnels: React.Dispatch<React.SetStateAction<Funnel[]>>;
@@ -439,6 +521,25 @@ export default function FunnelsView({
   const [selectedCreative, setSelectedCreative] = useState<CreativePerformance | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [videoProgress, setVideoProgress] = useState(0);
+
+  // ---- Live (API real). Em modo demo useLive retorna null → cai nas props/mock. ----
+  const workspaceId = useSession().workspace?.id;
+
+  // GRID: GET /v1/funnels. Quando 'live' chega, semeia o estado do pai — assim o
+  // grid e as mutações locais (toggle/delete/create) seguem lendo `funnels` intactos.
+  const funnelsLive = useLive<FunnelViewApi[]>('/v1/funnels', [workspaceId]);
+  useEffect(() => {
+    if (funnelsLive.data) {
+      setFunnels(adaptFunnels(funnelsLive.data));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [funnelsLive.data]);
+
+  // Stats do funil aberto: GET /v1/funnels/{id}/stats → reach/conversão reais.
+  const statsPath = selectedPerformanceFunnelId
+    ? `/v1/funnels/${selectedPerformanceFunnelId}/stats`
+    : null;
+  const statsLive = useLive<FunnelStatsApi>(statsPath, [selectedPerformanceFunnelId, workspaceId]);
 
   // Reset drilldown states when active performance funnel changes
   useEffect(() => {
@@ -509,8 +610,11 @@ export default function FunnelsView({
     ? (funnels.filter(f => f.status === 'active').reduce((acc, curr) => acc + curr.conversionRate, 0) / activeFunnels).toFixed(1)
     : '0.0';
 
-  // Find currently selected performance funnel
-  const performanceFunnel = funnels.find(f => f.id === selectedPerformanceFunnelId);
+  // Find currently selected performance funnel (com reach/conversão reais quando 'live').
+  const baseFunnel = funnels.find(f => f.id === selectedPerformanceFunnelId);
+  const performanceFunnel = baseFunnel && statsLive.data
+    ? applyFunnelStats(baseFunnel, statsLive.data)
+    : baseFunnel;
 
   // If a performance funnel is selected, render the detailed drilldown
   if (performanceFunnel) {
@@ -1354,6 +1458,7 @@ export default function FunnelsView({
         </div>
 
         {/* Creative Performance Modal */}
+        {/* TODO(live): modal de criativo segue no mock — via /v1/attribution */}
         {selectedCreative && (() => {
           const crType = (() => {
             const n = selectedCreative.content.toLowerCase();
