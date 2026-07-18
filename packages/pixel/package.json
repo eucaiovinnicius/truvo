@@ -1,0 +1,29 @@
+{
+  "name": "@truvo/pixel",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Truvo Pixel JS — tracking client (<5kb) para window.truvo.track/identify",
+  "main": "./dist/pixel.mjs",
+  "module": "./dist/pixel.mjs",
+  "types": "./dist/pixel.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/pixel.d.ts",
+      "import": "./dist/pixel.mjs"
+    },
+    "./pixel.js": "./dist/pixel.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "size": "tsup && gzip -c dist/pixel.js | wc -c"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsup": "^8.1.0",
+    "typescript": "^5.4.5"
+  }
+}

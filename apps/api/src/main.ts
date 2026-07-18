@@ -4,7 +4,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { rawBody: true });
   app.enableCors();
   app.setGlobalPrefix('', { exclude: ['health', 'health/ready'] });
   const port = Number(process.env.API_PORT ?? 3333);

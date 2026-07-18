@@ -1,0 +1,16 @@
+-- ============================================================================
+-- M4 — WEBHOOK RECEIVERS · ClickHouse DDL
+-- ============================================================================
+-- O módulo de webhooks NÃO cria tabelas próprias no ClickHouse.
+--
+-- Cada webhook (Shopify/Stripe/Hotmart/Kiwify) é verificado (HMAC-SHA256),
+-- normalizado para o EventSchema padrao (@truvo/event-schema) e PUBLICADO no
+-- MESMO tópico Kafka do M2: `truvo.events`. O consumer do M2 desduplica,
+-- enriquece e persiste na tabela `events` (ReplacingMergeTree) — reaproveitando
+-- toda a infra de ingestão. A auditoria de webhooks (logs + retry) vive no
+-- Postgres (ver packages/db/src/schema/integrations.ts → webhook_logs).
+--
+-- Portanto, a tabela ClickHouse relevante para M4 é a `events` do M2, cuja DDL
+-- é de propriedade do M2 (packages/db/src/clickhouse/ddl/02-events.sql).
+-- Nenhuma DDL adicional é necessária aqui.
+-- ============================================================================
