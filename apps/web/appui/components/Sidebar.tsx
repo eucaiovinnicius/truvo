@@ -1,19 +1,27 @@
 'use client';
 
 import React, { useState } from 'react';
-import { 
-  Activity, 
-  Layers, 
-  Compass, 
-  TrendingUp, 
-  Code2, 
-  Settings, 
-  ChevronDown, 
-  Check, 
+import {
+  Activity,
+  Layers,
+  Compass,
+  TrendingUp,
+  Code2,
+  Settings,
+  ChevronDown,
+  Check,
   Sparkles,
   HelpCircle,
   GraduationCap,
-  LogOut
+  LogOut,
+  Image,
+  Search,
+  Brain,
+  Users,
+  ShieldCheck,
+  FileText,
+  Blocks,
+  CreditCard
 } from 'lucide-react';
 import { ViewState, ProfileConfig } from '../types';
 
@@ -44,7 +52,15 @@ export default function Sidebar({
     { id: 'funnels', name: 'Marketing Funnels', icon: Layers, badge: null },
     { id: 'funnel-builder', name: 'Funnel Builder', icon: Compass, badge: null },
     { id: 'attribution', name: 'Attribution Analyzer', icon: TrendingUp, badge: null },
-    { id: 'tracking', name: 'SDK & Integrations', icon: Code2, badge: null },
+    { id: 'creatives', name: 'Creative Analytics', icon: Image, badge: null },
+    { id: 'explorer', name: 'Data Explorer', icon: Search, badge: null },
+    { id: 'ai', name: 'AI Journeys', icon: Brain, badge: 'IA' },
+    { id: 'profiles', name: 'Customer 360', icon: Users, badge: null },
+    { id: 'data-quality', name: 'Data Quality', icon: ShieldCheck, badge: null },
+    { id: 'reports', name: 'Reports', icon: FileText, badge: null },
+    { id: 'tracking', name: 'SDK & Pixel', icon: Code2, badge: null },
+    { id: 'integrations', name: 'Integrations Hub', icon: Blocks, badge: null },
+    { id: 'billing', name: 'Billing & Plans', icon: CreditCard, badge: null },
     { id: 'settings', name: 'Workspace Settings', icon: Settings, badge: null }
   ];
 

@@ -11,6 +11,14 @@ import TrackingView from './components/TrackingView';
 import SettingsView from './components/SettingsView';
 import OnboardingFlow from './components/OnboardingFlow';
 import LoginView from './components/LoginView';
+import CreativesView from './components/CreativesView';
+import ExplorerView from './components/ExplorerView';
+import AiView from './components/AiView';
+import ProfilesView from './components/ProfilesView';
+import DataQualityView from './components/DataQualityView';
+import ReportsView from './components/ReportsView';
+import IntegrationsView from './components/IntegrationsView';
+import BillingView from './components/BillingView';
 import { ViewState, Funnel, CampaignRow, Integration, ApiKey, WorkspaceConfig, ProfileConfig } from './types';
 import { initialFunnels, initialCampaigns, initialIntegrations, initialApiKeys } from './data';
 import { useSession } from '@/lib/session';
@@ -217,13 +225,22 @@ export default function App() {
             )}
 
             {currentView === 'settings' && (
-              <SettingsView 
+              <SettingsView
                 profile={profile}
                 setProfile={setProfile}
                 workspace={workspace}
                 setWorkspace={setWorkspace}
               />
             )}
+
+            {currentView === 'creatives' && <CreativesView />}
+            {currentView === 'explorer' && <ExplorerView />}
+            {currentView === 'ai' && <AiView />}
+            {currentView === 'profiles' && <ProfilesView />}
+            {currentView === 'data-quality' && <DataQualityView />}
+            {currentView === 'reports' && <ReportsView />}
+            {currentView === 'integrations' && <IntegrationsView />}
+            {currentView === 'billing' && <BillingView />}
 
           </div>
         </main>

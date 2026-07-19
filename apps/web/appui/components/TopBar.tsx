@@ -37,7 +37,15 @@ export default function TopBar({
     funnels: 'Conversion Funnel Health',
     'funnel-builder': 'Multi-Stage Funnel Architect',
     attribution: 'Advanced Attribution Center',
-    tracking: 'SDK & API Integrations',
+    creatives: 'Creative Analytics — Reportado × Real',
+    explorer: 'Data Explorer',
+    ai: 'AI Journeys — Inteligência de Jornadas',
+    profiles: 'Customer 360',
+    'data-quality': 'Data Quality & Reconciliação',
+    reports: 'Relatórios Agendados',
+    tracking: 'SDK & Pixel',
+    integrations: 'Central de Integrações',
+    billing: 'Planos & Faturamento',
     settings: 'Workspace Settings'
   };
 

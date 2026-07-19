@@ -1,10 +1,18 @@
-export type ViewState = 
-  | 'onboarding' 
-  | 'dashboard' 
-  | 'funnels' 
-  | 'funnel-builder' 
-  | 'attribution' 
-  | 'tracking' 
+export type ViewState =
+  | 'onboarding'
+  | 'dashboard'
+  | 'funnels'
+  | 'funnel-builder'
+  | 'attribution'
+  | 'creatives'
+  | 'explorer'
+  | 'ai'
+  | 'profiles'
+  | 'data-quality'
+  | 'reports'
+  | 'tracking'
+  | 'integrations'
+  | 'billing'
   | 'settings';
 
 export interface Condition {
