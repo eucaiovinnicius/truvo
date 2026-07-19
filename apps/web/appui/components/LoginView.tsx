@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { ProfileConfig } from '../types';
 import { useSession } from '@/lib/session';
+import Logo from './Logo';
 
 interface LoginViewProps {
   onLoginSuccess: (profile: ProfileConfig) => void;
@@ -138,14 +139,9 @@ export default function LoginView({ onLoginSuccess }: LoginViewProps) {
           <div className="absolute top-0 right-0 w-[80%] h-[80%] rounded-full bg-teal-500/5 blur-[80px] pointer-events-none" />
           
           {/* Logo Brand */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-tr from-emerald-500 to-teal-600 rounded-xl flex items-center justify-center shadow-lg shadow-teal-500/20">
-              <TrendingUp className="w-5.5 h-5.5 text-white" />
-            </div>
-            <div>
-              <span className="font-bold text-white tracking-tight text-xl block leading-none">TRUVO</span>
-              <span className="text-[10px] font-mono text-emerald-500 tracking-widest uppercase font-semibold mt-1 block">ANALYTICS</span>
-            </div>
+          <div className="flex flex-col gap-1.5">
+            <Logo className="h-9 w-auto" />
+            <span className="text-[10px] font-mono text-[#C0C1FF]/70 tracking-[0.3em] uppercase font-semibold pl-0.5">Analytics</span>
           </div>
 
           {/* Aesthetic Centerpiece */}

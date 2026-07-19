@@ -24,6 +24,7 @@ import {
   CreditCard
 } from 'lucide-react';
 import { ViewState, ProfileConfig } from '../types';
+import Logo from './Logo';
 
 interface SidebarProps {
   currentView: ViewState;
@@ -68,14 +69,9 @@ export default function Sidebar({
     <aside id="sidebar-container" className="w-64 bg-white border-r border-slate-100 flex flex-col h-screen fixed top-0 left-0 z-20">
       {/* Brand Header */}
       <div className="p-6 border-b border-slate-50 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 bg-linear-to-tr from-emerald-500 to-teal-600 rounded-xl flex items-center justify-center shadow-xs shadow-teal-500/20">
-            <TrendingUp className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <span className="font-sans font-bold text-slate-800 tracking-tight text-lg block leading-none">TRUVO</span>
-            <span className="text-[10px] font-mono text-emerald-600 tracking-widest uppercase font-semibold mt-1 block">ANALYTICS</span>
-          </div>
+        <div className="flex flex-col gap-1">
+          <Logo mark="#6366f1" word="#0f172a" className="h-7 w-auto" />
+          <span className="text-[10px] font-mono text-indigo-500 tracking-[0.3em] uppercase font-semibold pl-0.5">Analytics</span>
         </div>
       </div>
 
