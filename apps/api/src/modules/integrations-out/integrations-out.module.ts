@@ -6,6 +6,7 @@ import { databaseProvider } from './integrations-out.providers';
 import {
   conversionClientsProvider,
   GoogleEnhancedClient,
+  HubspotClient,
   MetaCapiClient,
   TikTokEventsClient,
 } from './clients';
@@ -41,6 +42,7 @@ import {
     MetaCapiClient,
     GoogleEnhancedClient,
     TikTokEventsClient,
+    HubspotClient,
     conversionClientsProvider,
   ],
   exports: [ConversionForwarderService, IntegrationOutConfigService],

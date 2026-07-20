@@ -65,6 +65,18 @@ export const TIKTOK_EVENT_NAMES: Record<CanonicalConversion, string> = {
   complete_registration: 'CompleteRegistration',
 };
 
+/**
+ * Nome-base do Custom Behavioral Event no HubSpot por conversão canônica.
+ * O client prefixa com `pe<portalId>_` quando `config.portal_id` está presente.
+ * `config.hubspot_events` sobrescreve por conversão.
+ */
+export const HUBSPOT_EVENT_NAMES: Record<CanonicalConversion, string> = {
+  purchase: 'truvo_purchase',
+  lead: 'truvo_lead',
+  initiate_checkout: 'truvo_initiate_checkout',
+  complete_registration: 'truvo_complete_registration',
+};
+
 /** Versão default da Graph API da Meta (sobrescrevível por config.graph_version). */
 export const META_GRAPH_VERSION = process.env.META_GRAPH_VERSION ?? 'v19.0';
 

@@ -40,4 +40,10 @@ export class WebhooksController {
   kiwify(@Req() req: RawBodyRequest<Request>): Promise<WebhookResult> {
     return this.webhooks.handleIncoming('kiwify', req);
   }
+
+  @Post('hubspot')
+  @HttpCode(200)
+  hubspot(@Req() req: RawBodyRequest<Request>): Promise<WebhookResult> {
+    return this.webhooks.handleIncoming('hubspot', req);
+  }
 }

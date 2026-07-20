@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { WebhookProvider } from '../constants';
 
 /**
@@ -14,6 +14,10 @@ export interface VerifyInput {
   query: Record<string, unknown>;
   /** Segredo do provedor (descriptografado das credenciais da integração). */
   secret: string;
+  /** URL completa da requisição — necessária para o esquema v3 do HubSpot. */
+  url?: string;
+  /** Método HTTP — necessário para o esquema v3 do HubSpot. */
+  method?: string;
 }
 
 export function hmac(
@@ -90,11 +94,43 @@ export function verifyKiwify({ raw, headers, query, secret }: VerifyInput): bool
   );
 }
 
+/**
+ * HubSpot:
+ *   · v3 (recomendado): `X-HubSpot-Signature-V3` =
+ *       base64(HMAC-SHA256(clientSecret, `${METHOD}${URL}${rawBody}${timestamp}`)),
+ *       com `X-HubSpot-Request-Timestamp`. Rejeita timestamps > 5 min (anti-replay).
+ *   · v1 (fallback): `X-HubSpot-Signature` = hex(SHA256(clientSecret + rawBody)).
+ * O segredo é o Client Secret do app HubSpot (guardado em `client_secret`).
+ * // TODO(live): a URL v3 deve ser EXATAMENTE a registrada no app (cuidado com
+ * // proxy/porta); em produção reconstruir a partir de X-Forwarded-* corretos.
+ */
+export function verifyHubspot({ raw, headers, secret, url, method }: VerifyInput): boolean {
+  const v3 = headers['x-hubspot-signature-v3'];
+  const timestamp = headers['x-hubspot-request-timestamp'];
+  if (v3 && timestamp && url) {
+    const ts = Number(timestamp);
+    const fresh = Number.isFinite(ts) && Math.abs(Date.now() - ts) <= 5 * 60_000;
+    if (fresh) {
+      const base = `${(method ?? 'POST').toUpperCase()}${url}${raw.toString('utf8')}${timestamp}`;
+      if (safeEqual(hmac(base, secret, 'base64'), v3)) return true;
+    }
+  }
+  const v1 = headers['x-hubspot-signature'];
+  if (v1) {
+    const digest = createHash('sha256')
+      .update(secret + raw.toString('utf8'), 'utf8')
+      .digest('hex');
+    if (safeEqual(digest, v1)) return true;
+  }
+  return false;
+}
+
 const VERIFIERS: Record<WebhookProvider, (input: VerifyInput) => boolean> = {
   shopify: verifyShopify,
   stripe: verifyStripe,
   hotmart: verifyHotmart,
   kiwify: verifyKiwify,
+  hubspot: verifyHubspot,
 };
 
 /** Dispatcher: verifica a assinatura conforme o provedor. */

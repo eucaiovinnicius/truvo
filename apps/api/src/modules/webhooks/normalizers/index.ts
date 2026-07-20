@@ -1,5 +1,6 @@
 import type { WebhookProvider } from '../constants';
 import { normalizeHotmart, hotmartEventType } from './hotmart';
+import { normalizeHubspot, hubspotEventType } from './hubspot';
 import { normalizeKiwify, kiwifyEventType } from './kiwify';
 import { normalizeShopify, shopifyEventType } from './shopify';
 import { normalizeStripe, stripeEventType } from './stripe';
@@ -26,6 +27,8 @@ export function normalize(
       return normalizeHotmart(payload);
     case 'kiwify':
       return normalizeKiwify(payload);
+    case 'hubspot':
+      return normalizeHubspot(payload, headers);
     default:
       return null;
   }
@@ -46,6 +49,8 @@ export function providerEventType(
       return hotmartEventType(payload);
     case 'kiwify':
       return kiwifyEventType(payload);
+    case 'hubspot':
+      return hubspotEventType(payload);
     default:
       return 'unknown';
   }

@@ -38,6 +38,7 @@ export const integrationTypeEnum = pgEnum('integration_type', [
   'stripe',
   'hotmart',
   'kiwify',
+  'hubspot',
 ]);
 
 /** Ciclo de vida de uma integração. */

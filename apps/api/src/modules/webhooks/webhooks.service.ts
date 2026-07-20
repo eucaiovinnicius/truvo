@@ -31,6 +31,10 @@ export interface RawWebhookRequest {
   query: Record<string, unknown>;
   body?: unknown;
   rawBody?: Buffer;
+  /** método/URL — usados na verificação de assinatura v3 do HubSpot. */
+  method?: string;
+  originalUrl?: string;
+  protocol?: string;
 }
 
 export interface WebhookResult {
@@ -78,6 +82,12 @@ export class WebhooksService {
     const query = req.query ?? {};
     const raw = extractRawBody(req);
 
+    // método + URL completa (verificação de assinatura v3 do HubSpot).
+    const method = req.method ?? 'POST';
+    const host = headers['host'];
+    const proto = headers['x-forwarded-proto'] ?? req.protocol ?? 'https';
+    const requestUrl = host && req.originalUrl ? `${proto}://${host}${req.originalUrl}` : undefined;
+
     // 1. resolver integração (não há auth de workspace aqui — origem externa).
     const integration = await this.resolveIntegration(provider, headers, query);
     if (!integration) {
@@ -123,7 +133,14 @@ export class WebhooksService {
       throw new UnauthorizedException('segredo de assinatura não configurado');
     }
 
-    const signatureValid = verifySignature(provider, { raw, headers, query, secret });
+    const signatureValid = verifySignature(provider, {
+      raw,
+      headers,
+      query,
+      secret,
+      url: requestUrl,
+      method,
+    });
     if (!signatureValid) {
       await this.log({
         provider,
@@ -215,7 +232,13 @@ export class WebhooksService {
   private extractSecret(integration: Integration): string | undefined {
     try {
       const creds = decryptJson<Record<string, string>>(integration.credentialsEncrypted);
-      return creds.hmac_secret ?? creds.signing_secret ?? creds.secret ?? creds.hottok;
+      return (
+        creds.hmac_secret ??
+        creds.signing_secret ??
+        creds.secret ??
+        creds.hottok ??
+        creds.client_secret
+      );
     } catch (err) {
       this.logger.error(`falha ao descriptografar credenciais: ${String(err)}`);
       throw new InternalServerErrorException('credenciais da integração inválidas');

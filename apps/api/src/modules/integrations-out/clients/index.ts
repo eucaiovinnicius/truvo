@@ -2,6 +2,7 @@ import type { Provider } from '@nestjs/common';
 import type { IntegrationOutPlatform } from '@truvo/db';
 import { CONVERSION_CLIENTS } from '../integrations-out.constants';
 import { GoogleEnhancedClient } from './google-enhanced.client';
+import { HubspotClient } from './hubspot.client';
 import { MetaCapiClient } from './meta-capi.client';
 import { TikTokEventsClient } from './tiktok-events.client';
 import type { ConversionClient } from './types';
@@ -18,14 +19,16 @@ export const conversionClientsProvider: Provider = {
     meta: MetaCapiClient,
     google: GoogleEnhancedClient,
     tiktok: TikTokEventsClient,
+    hubspot: HubspotClient,
   ): ConversionClientRegistry =>
     new Map<IntegrationOutPlatform, ConversionClient>([
       [meta.platform, meta],
       [google.platform, google],
       [tiktok.platform, tiktok],
+      [hubspot.platform, hubspot],
     ]),
-  inject: [MetaCapiClient, GoogleEnhancedClient, TikTokEventsClient],
+  inject: [MetaCapiClient, GoogleEnhancedClient, TikTokEventsClient, HubspotClient],
 };
 
-export { MetaCapiClient, GoogleEnhancedClient, TikTokEventsClient };
+export { MetaCapiClient, GoogleEnhancedClient, TikTokEventsClient, HubspotClient };
 export type { ConversionClient } from './types';

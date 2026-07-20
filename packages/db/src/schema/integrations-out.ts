@@ -56,6 +56,7 @@ export const INTEGRATION_OUT_PLATFORMS = [
   'meta_capi', // Meta Conversions API
   'google_enhanced', // Google Enhanced Conversions (Google Ads API)
   'tiktok_events', // TikTok Events API
+  'hubspot', // HubSpot Custom Behavioral Events (CRM)
 ] as const;
 export type IntegrationOutPlatform = (typeof INTEGRATION_OUT_PLATFORMS)[number];
 export const integrationOutPlatformEnum = pgEnum(
@@ -130,6 +131,10 @@ export interface IntegrationOutConfigJson {
   graph_version?: string;
   /** Sobrescreve evento Truvo → conversão canônica ('ignore' descarta). */
   event_map?: Record<string, string>;
+  /** HubSpot: portal id (prefixo `pe<portalId>_` dos eventos comportamentais). */
+  portal_id?: string;
+  /** HubSpot: canonical (purchase/lead/...) → nome do evento comportamental. */
+  hubspot_events?: Record<string, string>;
   [key: string]: unknown;
 }
 

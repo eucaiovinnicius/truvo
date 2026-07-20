@@ -19,13 +19,14 @@ export const credentialsSchema = z
     signing_secret: z.string().min(1).optional(),
     secret: z.string().min(1).optional(),
     hottok: z.string().min(1).optional(),
+    client_secret: z.string().min(1).optional(), // HubSpot (app client secret)
     api_key: z.string().min(1).optional(),
     api_secret: z.string().min(1).optional(),
   })
   .passthrough()
   .refine(
-    (c) => Boolean(c.hmac_secret ?? c.signing_secret ?? c.secret ?? c.hottok),
-    { message: 'credenciais devem conter um segredo de assinatura (hmac_secret/signing_secret/secret/hottok)' },
+    (c) => Boolean(c.hmac_secret ?? c.signing_secret ?? c.secret ?? c.hottok ?? c.client_secret),
+    { message: 'credenciais devem conter um segredo de assinatura (hmac_secret/signing_secret/secret/hottok/client_secret)' },
   );
 
 export const createIntegrationSchema = z.object({

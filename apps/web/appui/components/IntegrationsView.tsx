@@ -16,6 +16,7 @@ import {
   AlertTriangle,
   Activity,
   ChevronRight,
+  Users,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -119,6 +120,18 @@ const INBOUND: InboundIntegration[] = [
     eventsToday: 0,
     revenueToday: 0,
   },
+  {
+    id: 'hubspot',
+    name: 'HubSpot',
+    category: 'CRM & Marketing',
+    icon: Users,
+    brand: '#FF7A59',
+    initials: 'Hs',
+    status: 'connected',
+    lastSync: 'há 1 min',
+    eventsToday: 4260,
+    revenueToday: 0,
+  },
 ];
 
 const OUTBOUND_SEED: OutboundIntegration[] = [
@@ -153,6 +166,17 @@ const OUTBOUND_SEED: OutboundIntegration[] = [
     matchQuality: 6.2,
     sent: 2908,
     failed: 214,
+    enabled: true,
+  },
+  {
+    id: 'hubspot',
+    name: 'HubSpot',
+    subtitle: 'Custom Behavioral Events',
+    brand: '#FF7A59',
+    initials: 'Hs',
+    matchQuality: 7.4,
+    sent: 5120,
+    failed: 38,
     enabled: true,
   },
 ];

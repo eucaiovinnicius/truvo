@@ -5,7 +5,7 @@ export const TOPIC_EVENTS = 'truvo.events';
 export const WEBHOOKS_DB = 'WEBHOOKS_DB';
 
 /** Provedores de webhook suportados (espelha o pgEnum integration_type). */
-export const WEBHOOK_PROVIDERS = ['shopify', 'stripe', 'hotmart', 'kiwify'] as const;
+export const WEBHOOK_PROVIDERS = ['shopify', 'stripe', 'hotmart', 'kiwify', 'hubspot'] as const;
 export type WebhookProvider = (typeof WEBHOOK_PROVIDERS)[number];
 
 /**
