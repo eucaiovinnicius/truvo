@@ -9,22 +9,26 @@ import { createClickHouse } from '../clickhouse';
  * arquivos packages/db/src/clickhouse/ddl/NN-*.sql. Requer ClickHouse no ar
  * (`pnpm infra:up`). Rodar via `pnpm --filter @truvo/db ch:migrate`.
  *
- * Best-effort: separa statements por ';' em fim de linha e ignora linhas '--'.
- * Mantenha 1 statement por bloco terminado com ';'.
+ * Best-effort: remove comentários '--' (inline e de linha) e separa statements
+ * por ';'. Mantenha 1 statement por bloco terminado com ';'.
  */
 const here = dirname(fileURLToPath(import.meta.url));
 const ddlDir = join(here, 'ddl');
 
 function splitStatements(sql: string): string[] {
-  return sql
-    .split(/;\s*(?:\r?\n|$)/)
-    .map((chunk) =>
-      chunk
-        .split(/\r?\n/)
-        .filter((line) => !line.trim().startsWith('--'))
-        .join('\n')
-        .trim(),
-    )
+  // 1. Remove comentários de linha (-- até o fim da linha), inline ou não —
+  //    assim um `; -- comentário` corta corretamente no `;`.
+  const withoutComments = sql
+    .split(/\r?\n/)
+    .map((line) => {
+      const idx = line.indexOf('--');
+      return idx >= 0 ? line.slice(0, idx) : line;
+    })
+    .join('\n');
+  // 2. Separa por ';' e descarta blocos vazios.
+  return withoutComments
+    .split(';')
+    .map((stmt) => stmt.trim())
     .filter((stmt) => stmt.length > 0);
 }
 
