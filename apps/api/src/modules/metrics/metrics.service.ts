@@ -1,5 +1,6 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import type { KpiFormula, KpiTerm } from '@truvo/db';
+import { AD_SPEND_PROVIDER, type AdSpendProvider } from '../attribution/ad-spend.provider';
 import { getClickHouse } from './infra';
 import {
   buildSegmentFilters,
@@ -45,15 +46,24 @@ const num = (v: number | string | null | undefined): number => {
 
 @Injectable()
 export class MetricsService {
+  constructor(
+    // M10 → M6. Fonte REAL de spend (ClickHouse `creative_daily`), mesmo token de DI
+    // que o M7 consome. Sem plataforma sincronizada, `creative_daily` fica vazio e o
+    // spend soma 0 → ROAS/CAC/CPL null (regra 12: não inventamos spend).
+    @Inject(AD_SPEND_PROVIDER) private readonly adSpendProvider: AdSpendProvider,
+  ) {}
+
   // ───────────────────────── KPIs nativos ─────────────────────────
 
   /**
    * KPIs nativos (PRD §7 M6) para uma janela + segmento. Um único scan agrega os
    * contadores base; os KPIs derivados são calculados em JS com divisão segura.
    *
-   * `ad_spend` vem do M10 (Ads) — não existe na tabela `events`. Enquanto o M10
-   * não alimenta uma fonte de spend, os KPIs dependentes (ROAS/CAC/CPL) retornam
-   * null e `spend_available=false`. // TODO(live): ler spend agregado do M10.
+   * `ad_spend` vem do M10 (Ads) — não existe na tabela `events`. É lido agregado da
+   * janela via AD_SPEND_PROVIDER (creative_daily). Só para a janela SEM segmento:
+   * ainda não repartimos spend por utm/segmento (isso é o campaign-breakdown do M7),
+   * então com segmento ativo mantemos ROAS/CAC/CPL null — honesto, sem cruzar receita
+   * segmentada com spend total. Sem spend na janela → `spend_available=false`.
    */
   async nativeKpis(workspaceId: string, scope: MetricScope) {
     const { start, end } = resolveWindow({ ...scope, defaultDays: 30 });
@@ -100,9 +110,17 @@ export class MetricsService {
     const leads = num(r?.leads);
     const subscriptionValue = num(r?.subscription_value);
 
-    // ad_spend indisponível até o M10 alimentar uma fonte de spend.
-    const adSpend = 0;
-    const spendAvailable = false;
+    // ad_spend real do M10, só para a janela sem segmento (ver docstring). O provider
+    // lê `creative_daily` e nunca lança (getSpend devolve [] em erro) — fail-safe.
+    const segmented =
+      !!scope.segment &&
+      Object.values(scope.segment).some((v) => typeof v === 'string' && v.trim() !== '');
+    let adSpend = 0;
+    if (!segmented) {
+      const spendRows = await this.adSpendProvider.getSpend(workspaceId, start, end);
+      adSpend = spendRows.reduce((acc, row) => acc + (Number.isFinite(row.spend) ? row.spend : 0), 0);
+    }
+    const spendAvailable = adSpend > 0;
 
     const aov = safeDiv(revenue, orders);
     const avgOrdersPerUser = safeDiv(orders, purchasers);
@@ -115,7 +133,7 @@ export class MetricsService {
       spend_available: spendAvailable,
       totals: {
         revenue: round4(revenue),
-        ad_spend: adSpend,
+        ad_spend: round4(adSpend),
         orders,
         purchases,
         conversions,

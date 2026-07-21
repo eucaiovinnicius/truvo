@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { CreativesModule } from '../creatives/creatives.module';
 import { MetricsController } from './metrics.controller';
 import { KpisController } from './kpis.controller';
 import { DashboardsController } from './dashboards.controller';
@@ -20,6 +21,10 @@ import { WorkspaceScopeGuard } from './guards/workspace-scope.guard';
  * registrado antes das rotas com `:id` (Express casa por ordem de registro).
  */
 @Module({
+  // CreativesModule (M10) exporta AD_SPEND_PROVIDER (creative_daily) — o MetricsService
+  // injeta o token p/ ROAS/CAC/CPL nativos. Sem ciclo: CreativesModule é folha (não
+  // importa MetricsModule). Mesmo padrão do AttributionModule (M7).
+  imports: [CreativesModule],
   controllers: [
     PublicDashboardsController,
     MetricsController,
