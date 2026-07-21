@@ -26,6 +26,7 @@ import {
   CartesianGrid,
   Tooltip,
 } from 'recharts';
+import { useLive } from '@/lib/live';
 
 // ---- Domínio ----
 type Platform = 'Meta' | 'Google' | 'TikTok';
@@ -217,17 +218,131 @@ const PLATFORM_FILTERS: Array<'Todas' | Platform> = ['Todas', 'Meta', 'Google', 
 const PERIODS = ['7 dias', '30 dias', '90 dias'] as const;
 type Period = (typeof PERIODS)[number];
 
+// ---- API real (GET /v1/creatives) — item FLAT do contrato ----
+interface CreativesApiItem {
+  platform: string;
+  ad_id: string;
+  ad_name: string;
+  campaign_name: string;
+  creative_type: string;
+  phase: string;
+  reported: { spend: number; revenue: number; roas: number; ctr: number; impressions: number; clicks: number } | null;
+  real: { revenue: number; conversions: number; roas: number; cvr: number } | null;
+  delta: { roas: number; percent: number; verdict: string } | null;
+  thumbnail_url: string | null;
+}
+interface CreativesApiResponse {
+  range: unknown;
+  reported_available: boolean;
+  totals: {
+    creatives: number;
+    spend: number;
+    reported_revenue: number;
+    real_revenue: number;
+    real_conversions: number;
+  } | null;
+  count: number;
+  items: CreativesApiItem[] | null;
+}
+
+// Filtro de plataforma (UI) → param da API (Meta→meta, Google→google, TikTok→tiktok).
+const PLATFORM_PARAM: Record<Platform, string> = { Meta: 'meta', Google: 'google', TikTok: 'tiktok' };
+// Prefixo de código curto por plataforma (badge + eixo X do gráfico).
+const PLATFORM_CODE: Record<Platform, string> = { Meta: 'MET', Google: 'GGL', TikTok: 'TTK' };
+// Placeholders de gradiente (mantêm o MESMO visual do thumb; a API traz URL real, não classes).
+const THUMBS = [
+  'from-teal-400 to-emerald-500',
+  'from-sky-400 to-indigo-500',
+  'from-amber-400 to-orange-500',
+  'from-rose-400 to-pink-500',
+  'from-violet-400 to-purple-500',
+  'from-fuchsia-400 to-pink-500',
+  'from-cyan-400 to-sky-500',
+  'from-lime-400 to-emerald-500',
+];
+
+// platform da API → domínio da UI (fallback seguro: Meta).
+function mapApiPlatform(p: string | undefined): Platform {
+  const v = (p ?? '').toLowerCase();
+  if (v === 'google') return 'Google';
+  if (v === 'tiktok') return 'TikTok';
+  return 'Meta';
+}
+// creative_type da API → domínio da UI (fallback seguro: image).
+function mapApiType(t: string | undefined): CreativeType {
+  const v = (t ?? '').toLowerCase();
+  if (v.includes('video') || v.includes('vídeo')) return 'video';
+  if (v.includes('carousel') || v.includes('carrossel')) return 'carousel';
+  return 'image';
+}
+
+// period (UI) → janela start/end (YYYY-MM-DD) para a query.
+function rangeFromPeriod(period: Period): { start: string; end: string } {
+  const days = period === '7 dias' ? 7 : period === '90 dias' ? 90 : 30;
+  const endD = new Date();
+  const startD = new Date();
+  startD.setDate(endD.getDate() - days);
+  const iso = (d: Date): string => d.toISOString().slice(0, 10);
+  return { start: iso(startD), end: iso(endD) };
+}
+
+// adapt(): itens FLAT da API → a MESMA forma (Creative) que o JSX já consome.
+function adaptCreatives(items: CreativesApiItem[] | null): Creative[] {
+  return (items ?? []).map((it, idx) => {
+    const plat = mapApiPlatform(it?.platform);
+    return {
+      id: it?.ad_id ?? `live-${idx}`,
+      code: `${PLATFORM_CODE[plat]}-${String(idx + 1).padStart(2, '0')}`,
+      name: it?.ad_name ?? '—',
+      campaign: it?.campaign_name ?? '',
+      type: mapApiType(it?.creative_type),
+      platform: plat,
+      spend: it?.reported?.spend ?? 0,
+      roasReported: it?.reported?.roas ?? 0,
+      roasReal: it?.real?.roas ?? 0,
+      thumb: THUMBS[idx % THUMBS.length],
+    };
+  });
+}
+
 export default function CreativesView(): React.ReactElement {
   const [platform, setPlatform] = useState<'Todas' | Platform>('Todas');
   const [period, setPeriod] = useState<Period>('30 dias');
 
-  const filtered = useMemo<Creative[]>(
-    () => (platform === 'Todas' ? CREATIVES : CREATIVES.filter((c) => c.platform === platform)),
-    [platform],
-  );
+  // --- Live wiring: em demo useLive retorna null → mantém os mocks intactos.
+  // A API já filtra por platform (param) e período (start/end); só em 'live' mostra real.
+  const range = useMemo(() => rangeFromPeriod(period), [period]);
+  const platformParam = platform === 'Todas' ? '' : PLATFORM_PARAM[platform];
+  const livePath = `/v1/creatives?order_by=roas_real&limit=100&start=${range.start}&end=${range.end}${
+    platformParam ? `&platform=${platformParam}` : ''
+  }`;
+  const live = useLive<CreativesApiResponse>(livePath, [platform, period]);
 
-  // ---- KPIs agregados (reativos ao filtro) ----
+  const filtered = useMemo<Creative[]>(() => {
+    if (live.data) return adaptCreatives(live.data.items); // já filtrado pela API
+    return platform === 'Todas' ? CREATIVES : CREATIVES.filter((c) => c.platform === platform);
+  }, [live.data, platform]);
+
+  // ---- KPIs agregados ----
+  // Em 'live': direto de totals (ROAS = receita/investimento ponderado).
+  // Em demo: agregação ponderada dos mocks (inalterada).
   const kpis = useMemo(() => {
+    if (live.data) {
+      const t = live.data.totals;
+      const totalSpend = t?.spend ?? 0;
+      const reportedRevenue = t?.reported_revenue ?? 0;
+      const realRevenue = t?.real_revenue ?? 0;
+      const roasReported = live.data.reported_available && totalSpend > 0 ? reportedRevenue / totalSpend : 0;
+      const roasReal = totalSpend > 0 ? realRevenue / totalSpend : 0;
+      const gapPct = roasReported > 0 ? ((roasReal - roasReported) / roasReported) * 100 : 0;
+      return {
+        count: t?.creatives ?? filtered.length,
+        totalSpend,
+        roasReported,
+        roasReal,
+        gapPct,
+      };
+    }
     const totalSpend = filtered.reduce((acc, c) => acc + c.spend, 0);
     const wReported = filtered.reduce((acc, c) => acc + c.spend * c.roasReported, 0);
     const wReal = filtered.reduce((acc, c) => acc + c.spend * c.roasReal, 0);
@@ -241,7 +356,7 @@ export default function CreativesView(): React.ReactElement {
       roasReal,
       gapPct,
     };
-  }, [filtered]);
+  }, [live.data, filtered]);
 
   const maxRoas = useMemo(
     () => Math.max(...filtered.flatMap((c) => [c.roasReported, c.roasReal]), 1),

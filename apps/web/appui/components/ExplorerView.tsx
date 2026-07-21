@@ -36,6 +36,9 @@ import {
   Tooltip,
   Cell,
 } from 'recharts';
+import { useLive } from '@/lib/live';
+import { useSession } from '@/lib/session';
+import { api } from '@/lib/api';
 
 /* ------------------------------------------------------------------ */
 /* Tipos do construtor de consultas                                    */
@@ -344,6 +347,173 @@ const INITIAL_SAVED: SavedInsight[] = [
 ];
 
 /* ------------------------------------------------------------------ */
+/* Ligação API real (M16) — fallback demo nos dois lados               */
+/* ------------------------------------------------------------------ */
+
+/** GET /v1/insights → ARRAY BARE. */
+interface ApiInsight {
+  id: string;
+  name: string;
+  description?: string | null;
+  kind?: 'visual' | 'sql';
+  insight_type?: string;
+  spec?: unknown;
+  current_version?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** Forma (parcial) do ExplorerQuerySpec guardado no insight. */
+interface ApiSpecShape {
+  source?: string;
+  insight_type?: string;
+  measures?: Array<{ id?: string; metric?: string; property?: string; on?: string }>;
+  dimensions?: string[];
+  date_range?: { preset?: string } | { from?: string; to?: string };
+}
+
+/** Corpo do POST /v1/explorer/query (spec visual). */
+interface ApiMeasureSpec {
+  id: string;
+  metric: string;
+  property?: string;
+  on?: string;
+}
+interface ExplorerQueryBody {
+  insight_type: 'breakdown' | 'trends';
+  source: Source;
+  measures: ApiMeasureSpec[];
+  dimensions: string[];
+  date_range: { preset: string };
+  limit: number;
+}
+
+/** Resposta do POST /v1/explorer/query. */
+interface ExplorerQueryResponse {
+  status?: string;
+  columns?: string[];
+  rows?: Array<Record<string, unknown>>;
+  cost?: { result_rows?: number; duration_ms?: number };
+  query_id?: string;
+}
+
+/** dim local (chip) → campo do catálogo da API. */
+const DIM_TO_API_FIELD: Record<string, string> = {
+  utm_source: 'context.utm_source',
+  utm_medium: 'context.utm_medium',
+  utm_campaign: 'context.utm_campaign',
+  device_type: 'context.device_type',
+  ip_country: 'context.ip_country',
+  page_path: 'context.page_url',
+  referrer_domain: 'context.referrer',
+};
+/** caminho inverso (campo da API → dim local do chip). */
+const API_FIELD_TO_DIM: Record<string, string> = {
+  'context.utm_source': 'utm_source',
+  'context.utm_medium': 'utm_medium',
+  'context.utm_campaign': 'utm_campaign',
+  'context.device_type': 'device_type',
+  'context.ip_country': 'ip_country',
+  'context.page_url': 'page_path',
+  'context.referrer': 'referrer_domain',
+};
+
+/** medida local → measure da API (metric do vocabulário fechado). */
+function measureToApi(measure: Measure): ApiMeasureSpec {
+  switch (measure) {
+    case 'revenue':
+      return { id: 'revenue', metric: 'sum', property: 'value' };
+    case 'aov':
+      return { id: 'aov', metric: 'avg', property: 'value' };
+    case 'sessions':
+      return { id: 'sessions', metric: 'unique', on: 'session_id' };
+    case 'cvr':
+      return { id: 'cvr', metric: 'rate' };
+    case 'conversions':
+      return { id: 'conversions', metric: 'count' };
+    case 'events':
+    default:
+      return { id: 'events', metric: 'count' };
+  }
+}
+
+/** Monta o ExplorerQuerySpec (breakdown) a partir do estado do construtor. */
+function buildExplorerBody(spec: QuerySpec): ExplorerQueryBody {
+  return {
+    insight_type: 'breakdown',
+    source: spec.source,
+    measures: [measureToApi(spec.measure)],
+    dimensions: (spec.dimensions ?? []).map((d) => DIM_TO_API_FIELD[d] ?? d),
+    date_range: { preset: spec.dateRange },
+    limit: 100,
+  };
+}
+
+/** columns/rows da API → ResultRow[] (mesma forma que o JSX já consome). */
+function adaptResults(res: ExplorerQueryResponse): ResultRow[] {
+  const columns = res?.columns ?? [];
+  const rows = res?.rows ?? [];
+  const valCol = columns.find((c) => /^m\d+$/.test(c)) ?? columns[columns.length - 1];
+  const dimCol = columns.find((c) => /^d\d+$/.test(c)) ?? columns.find((c) => c !== valCol);
+  const mapped: ResultRow[] = rows.map((row, i) => {
+    const rawVal = valCol != null ? row[valCol] : undefined;
+    const value = typeof rawVal === 'number' ? rawVal : Number(rawVal ?? 0) || 0;
+    const rawLabel = dimCol != null ? row[dimCol] : undefined;
+    const label =
+      rawLabel === null || rawLabel === undefined || rawLabel === ''
+        ? 'Todos os registros'
+        : String(rawLabel);
+    return { key: `${label}-${i}`, label, value, share: 0, delta: 0 };
+  });
+  const total = mapped.reduce((acc, r) => acc + r.value, 0);
+  const withShare = mapped.map((r) => ({ ...r, share: total > 0 ? (r.value / total) * 100 : 0 }));
+  withShare.sort((a, b) => b.value - a.value);
+  return withShare;
+}
+
+/** metric da API → medida local (sempre uma chave VÁLIDA de MEASURES). */
+function apiMetricToMeasure(spec: ApiSpecShape | null): Measure {
+  const m = spec?.measures?.[0];
+  const metric = m?.metric;
+  if (metric === 'avg') return 'aov';
+  if (metric === 'rate') return 'cvr';
+  if (metric === 'unique') return 'sessions';
+  if (metric === 'count') return 'conversions';
+  return 'revenue'; // sum e desconhecidos → revenue
+}
+
+/** updated_at ISO → texto curto p/ a coluna "Atualizado". */
+function fmtUpdated(iso: string | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+/** insight da API → SavedInsight (mesma forma que a tabela/loadInsight consomem). */
+function adaptInsight(ins: ApiInsight): SavedInsight {
+  const spec = (ins?.spec ?? null) as ApiSpecShape | null;
+  const source: Source = spec?.source === 'touchpoints' ? 'touchpoints' : 'events';
+  const dims = (spec?.dimensions ?? []).map((f) => API_FIELD_TO_DIM[f] ?? f.replace(/^context\./, ''));
+  const dr = spec?.date_range as { preset?: string } | undefined;
+  const localSpec: QuerySpec = {
+    source,
+    measure: apiMetricToMeasure(spec),
+    dimensions: dims,
+    filters: [], // TODO(live): converter árvore de filtros da API p/ FilterRow[]
+    dateRange: dr?.preset ?? 'last_30_days',
+  };
+  const type = spec?.insight_type ?? ins?.insight_type;
+  return {
+    id: ins?.id ?? `live-${Math.random().toString(36).slice(2)}`,
+    name: ins?.name ?? 'Insight',
+    spec: localSpec,
+    chart: type === 'trends' ? 'line' : 'bar',
+    updated: fmtUpdated(ins?.updated_at),
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /* Componente                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -360,6 +530,16 @@ export default function ExplorerView(): React.ReactElement {
   const [insightName, setInsightName] = useState<string>('');
   const [copied, setCopied] = useState<boolean>(false);
 
+  // ---- Ligação API real (M16) ----
+  const { isLive } = useSession();
+  // (1) Insights salvos: GET /v1/insights (só busca em 'live'; demo → null → mock).
+  const insightsLive = useLive<ApiInsight[]>('/v1/insights', []);
+  const savedRows: SavedInsight[] = Array.isArray(insightsLive.data)
+    ? insightsLive.data.map(adaptInsight)
+    : saved;
+  // (2) Resultado da execução ao vivo (null → cai no mock runQuery abaixo).
+  const [liveResults, setLiveResults] = useState<ResultRow[] | null>(null);
+
   const draftSpec: QuerySpec = useMemo(
     () => ({ source, measure, dimensions, filters, dateRange }),
     [source, measure, dimensions, filters, dateRange],
@@ -370,7 +550,8 @@ export default function ExplorerView(): React.ReactElement {
     [draftSpec, runSpec],
   );
 
-  const results = useMemo(() => runQuery(runSpec), [runSpec]);
+  // Live quando a execução real preencheu liveResults; senão o mock (fallback demo).
+  const results = useMemo(() => liveResults ?? runQuery(runSpec), [liveResults, runSpec]);
 
   const chartData: ChartDatum[] = useMemo(
     () =>
@@ -418,7 +599,25 @@ export default function ExplorerView(): React.ReactElement {
   };
 
   const executeQuery = (): void => {
-    setRunSpec(JSON.parse(JSON.stringify(draftSpec)) as QuerySpec);
+    const spec = JSON.parse(JSON.stringify(draftSpec)) as QuerySpec;
+    setRunSpec(spec);
+    // Demo → não busca; a tabela usa o mock runQuery (fallback).
+    if (!isLive) {
+      setLiveResults(null);
+      return;
+    }
+    // Live → POST /v1/explorer/query com o spec do construtor. useLive só faz GET,
+    // então usamos api() direto. Erro/aborted/503 → volta ao mock (gracioso).
+    void api<ExplorerQueryResponse>('/v1/explorer/query', {
+      method: 'POST',
+      body: JSON.stringify(buildExplorerBody(spec)),
+    })
+      .then((res) => {
+        setLiveResults(res?.status === 'ok' ? adaptResults(res) : null);
+      })
+      .catch(() => {
+        setLiveResults(null);
+      });
   };
 
   const resetBuilder = (): void => {
@@ -913,7 +1112,7 @@ export default function ExplorerView(): React.ReactElement {
             <p className="text-xs text-slate-500 mt-1 font-sans">Consultas guardadas — clique para recarregar no construtor.</p>
           </div>
           <span className="text-[10px] font-mono bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-semibold">
-            {saved.length} salvos
+            {savedRows.length} salvos
           </span>
         </div>
 
@@ -930,14 +1129,14 @@ export default function ExplorerView(): React.ReactElement {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {saved.length === 0 ? (
+              {savedRows.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="py-8 text-center text-xs text-slate-400 font-sans italic">
                     Nenhum insight salvo ainda — monte uma consulta e clique em “Salvar”.
                   </td>
                 </tr>
               ) : (
-                saved.map((ins) => (
+                savedRows.map((ins) => (
                   <tr
                     key={ins.id}
                     onClick={() => loadInsight(ins)}

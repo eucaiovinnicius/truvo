@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Plus,
   Send,
@@ -23,6 +23,7 @@ import {
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { useLive } from '@/lib/live';
 
 // ---------------------------------------------------------------------------
 // Tipos locais (self-contained — mock puro nesta fase)
@@ -241,6 +242,89 @@ const nextSendFromFrequency: Record<Frequency, string> = {
 };
 
 // ---------------------------------------------------------------------------
+// Live wiring (GET /v1/reports) — fallback demo.
+// Em modo demo useLive retorna null → a tela usa INITIAL_REPORTS (mock) intacto.
+// Só em 'live' o adapt() abaixo mapeia o JSON real para ScheduledReport.
+// Contrato (ARRAY BARE): o flag é "enabled" (booleano, NÃO "status"); datas são
+// "next_run_at"/"last_run_at"; "format" NÃO vem no item da lista → default 'PDF'.
+// ---------------------------------------------------------------------------
+interface ReportApiItem {
+  id: string;
+  name: string;
+  dashboard_id?: string | null;
+  template?: string | null;
+  period?: string | null;
+  frequency?: string | null;
+  schedule?: string | null;
+  recipients?: string[] | null;
+  branding?: unknown;
+  enabled?: boolean;
+  is_public?: boolean;
+  public_url?: string | null;
+  next_run_at?: string | null;
+  last_run_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+/** template (API) → ReportType (badge/ícone). Best-effort; default Performance. */
+function mapReportType(template?: string | null): ReportType {
+  const t = (template ?? '').toLowerCase();
+  if (t.includes('attrib') || t.includes('atrib')) return 'Attribution';
+  if (t.includes('creativ') || t.includes('criativ')) return 'Criativos';
+  if (t.includes('exec')) return 'Executivo';
+  return 'Performance';
+}
+
+/** frequency (API) → Frequency (pt-BR). Default Semanal. */
+function mapFrequency(frequency?: string | null): Frequency {
+  const f = (frequency ?? '').toLowerCase();
+  if (f.includes('dia') || f.includes('dai')) return 'Diário';
+  if (f.includes('mes') || f.includes('month')) return 'Mensal';
+  return 'Semanal';
+}
+
+/** recipients:string[] (e-mails) → Recipient[] (nome derivado do local-part). */
+function mapRecipients(emails?: string[] | null): Recipient[] {
+  return (emails ?? []).map((email) => {
+    const safe = email ?? '';
+    const local = safe.split('@')[0] ?? '';
+    return { name: local || safe, email: safe };
+  });
+}
+
+/** ISO → data curta pt-BR ("14 de jul., 08:00"); vazio/ inválido → '—'. */
+function fmtDateTime(iso?: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+/** Mapeia o ARRAY BARE da API para a MESMA forma que o JSX já consome. */
+function adaptReports(items: ReportApiItem[]): ScheduledReport[] {
+  return (items ?? []).map((r) => {
+    const enabled = r?.enabled === true;
+    return {
+      id: r?.id ?? '',
+      name: r?.name ?? 'Relatório sem título',
+      type: mapReportType(r?.template),
+      frequency: mapFrequency(r?.frequency),
+      format: 'PDF', // TODO(live): "format" não vem no item da lista de /v1/reports.
+      recipients: mapRecipients(r?.recipients),
+      lastSent: fmtDateTime(r?.last_run_at),
+      nextSend: enabled ? fmtDateTime(r?.next_run_at) : 'Pausado',
+      status: enabled ? 'ativo' : 'pausado',
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Subcomponentes
 // ---------------------------------------------------------------------------
 function RecipientAvatars({ recipients }: { recipients: Recipient[] }) {
@@ -282,6 +366,14 @@ export default function ReportsView() {
   const [filter, setFilter] = useState<StatusFilter>('todos');
   const [toast, setToast] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
+
+  // Live (API real) — em modo demo useLive retorna null → mantém INITIAL_REPORTS.
+  // Quando 'live', a resposta (array bare) substitui o mock via adapt(). As ações
+  // locais (enviar/pausar/editar) continuam operando sobre esse estado.
+  const reportsLive = useLive<ReportApiItem[]>('/v1/reports');
+  useEffect(() => {
+    if (reportsLive.data) setReports(adaptReports(reportsLive.data));
+  }, [reportsLive.data]);
 
   const notify = (message: string, reportId?: string): void => {
     setToast(message);

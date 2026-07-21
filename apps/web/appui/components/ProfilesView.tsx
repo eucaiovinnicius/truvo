@@ -39,6 +39,8 @@ import {
   Tooltip,
   Cell,
 } from 'recharts';
+import { useLive } from '@/lib/live';
+import { useSession } from '@/lib/session';
 
 // ----------------------------------------------------------------------------
 // Tipos
@@ -380,6 +382,88 @@ const EXAMPLE_QUERIES: { type: SearchType; value: string }[] = [
 ];
 
 // ----------------------------------------------------------------------------
+// Ligação com a API real (M-profiles) — fallback demo via useLive
+// GET /v1/profiles/search?q=<q>&type=<t>  → { query:{type}, results:[Candidate] }
+// ----------------------------------------------------------------------------
+
+/** searchType (UI) → type (API). email/telefone já hasheados no back. */
+const API_SEARCH_TYPE: Record<SearchType, string> = {
+  email: 'email_hash',
+  telefone: 'phone_hash',
+  user_id: 'user_id',
+  order_id: 'order_id',
+};
+
+interface ApiProfileMetrics {
+  ltv: number | null;
+  orders_count: number | null;
+  aov: number | null;
+  sessions_count: number | null;
+  events_count: number | null;
+  days_since_first_touch: number | null;
+  currency: string | null;
+}
+
+interface ApiProfileCandidate {
+  canonical_id: string;
+  status: 'anonymous' | 'identified';
+  email_hash: string | null;
+  phone_hash: string | null;
+  anonymous_ids_count: number | null;
+  metrics: ApiProfileMetrics | null;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+}
+
+interface ApiProfileSearchResponse {
+  query: { type: string };
+  results: ApiProfileCandidate[];
+}
+
+/** Encurta um hash para exibição (font-mono) sem quebrar em null. */
+const shortHash = (h: string | null | undefined): string =>
+  h ? `${h.slice(0, 12)}…` : '—';
+
+/**
+ * Mapeia um ProfileCandidate da API para a MESMA forma (CustomerProfile) que o
+ * JSX já consome. Só o cabeçalho de identidade e a KPI row vêm do real; canais,
+ * dispositivos, atividade e timeline seguem no mock. // TODO(live)
+ */
+function adaptCandidate(c: ApiProfileCandidate): CustomerProfile {
+  const m = c.metrics;
+  const identified = c.status === 'identified';
+
+  const tags: string[] = [];
+  if (identified) tags.push('Identificado');
+  else tags.push('Anônimo');
+  if ((m?.orders_count ?? 0) > 0) tags.push('Comprador');
+
+  return {
+    name: identified ? 'Perfil Identificado' : 'Visitante Anônimo',
+    initials: identified ? 'ID' : 'AN',
+    canonicalId: c.canonical_id ?? '—',
+    emailMasked: shortHash(c.email_hash),
+    phoneMasked: shortHash(c.phone_hash),
+    devices: c.anonymous_ids_count ?? 0,
+    firstTouch: c.first_seen_at ?? MOCK_PROFILE.firstTouch,
+    lastTouch: c.last_seen_at ?? MOCK_PROFILE.lastTouch,
+    status: identified ? 'ativo' : 'novo',
+    ltv: m?.ltv ?? 0,
+    orders: m?.orders_count ?? 0,
+    avgTicket: m?.aov ?? 0,
+    sessions: m?.sessions_count ?? 0,
+    events: m?.events_count ?? 0,
+    daysSinceFirstTouch: m?.days_since_first_touch ?? 0,
+    tags,
+    // Rail lateral + timeline ainda sem endpoint neste contrato → mock. // TODO(live)
+    channels: MOCK_PROFILE.channels,
+    deviceList: MOCK_PROFILE.deviceList,
+    weekly: MOCK_PROFILE.weekly,
+    timeline: MOCK_PROFILE.timeline,
+  };
+}
+
+// ----------------------------------------------------------------------------
 // UI atoms
 // ----------------------------------------------------------------------------
 
@@ -422,10 +506,15 @@ function UtmChip({ prefix, value }: { prefix: string; value: string }) {
 export default function ProfilesView() {
   const [query, setQuery] = useState<string>('');
   const [searchType, setSearchType] = useState<SearchType>('email');
-  const [loading, setLoading] = useState<boolean>(false);
-  const [hasResult, setHasResult] = useState<boolean>(false);
+  // Estado da simulação demo (loading/resultado). Em 'live' o gating vem do fetch.
+  const [demoLoading, setDemoLoading] = useState<boolean>(false);
+  const [demoHasResult, setDemoHasResult] = useState<boolean>(false);
   const [order, setOrder] = useState<'recent' | 'chrono'>('recent');
   const [copied, setCopied] = useState<boolean>(false);
+  // Busca submetida (dispara o useLive). null até o primeiro "Buscar".
+  const [submitted, setSubmitted] = useState<{ q: string; type: SearchType } | null>(null);
+
+  const { isLive } = useSession();
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -437,17 +526,34 @@ export default function ProfilesView() {
     };
   }, []);
 
-  const profile = MOCK_PROFILE;
+  // Live (API real). Em demo (ou antes de submeter) useLive retorna null → mock.
+  const livePath = submitted
+    ? `/v1/profiles/search?q=${encodeURIComponent(submitted.q)}&type=${API_SEARCH_TYPE[submitted.type]}`
+    : null;
+  const search = useLive<ApiProfileSearchResponse>(livePath, [submitted?.q, submitted?.type]);
+
+  const candidate = isLive ? (search.data?.results?.[0] ?? null) : null;
+  const profile = candidate ? adaptCandidate(candidate) : MOCK_PROFILE;
+
+  // Gating do render: em 'live' derivado do fetch; em demo, da simulação.
+  const liveLoading = !!submitted && (search.loading || (!search.data && !search.error));
+  const liveHasResult = !!(search.data?.results && search.data.results.length > 0);
+  const loading = isLive ? liveLoading : demoLoading;
+  const hasResult = isLive ? liveHasResult && !liveLoading : demoHasResult;
 
   const runSearch = (): void => {
-    if (!query.trim()) return;
+    const q = query.trim();
+    if (!q) return;
     if (timerRef.current) clearTimeout(timerRef.current);
-    setLoading(true);
-    setHasResult(false);
-    timerRef.current = setTimeout(() => {
-      setLoading(false);
-      setHasResult(true);
-    }, 480);
+    setSubmitted({ q, type: searchType });
+    if (!isLive) {
+      setDemoLoading(true);
+      setDemoHasResult(false);
+      timerRef.current = setTimeout(() => {
+        setDemoLoading(false);
+        setDemoHasResult(true);
+      }, 480);
+    }
   };
 
   const handleSubmit = (e: React.FormEvent): void => {
@@ -459,12 +565,15 @@ export default function ProfilesView() {
     setSearchType(type);
     setQuery(value);
     if (timerRef.current) clearTimeout(timerRef.current);
-    setLoading(true);
-    setHasResult(false);
-    timerRef.current = setTimeout(() => {
-      setLoading(false);
-      setHasResult(true);
-    }, 480);
+    setSubmitted({ q: value.trim(), type });
+    if (!isLive) {
+      setDemoLoading(true);
+      setDemoHasResult(false);
+      timerRef.current = setTimeout(() => {
+        setDemoLoading(false);
+        setDemoHasResult(true);
+      }, 480);
+    }
   };
 
   const handleCopyId = (): void => {

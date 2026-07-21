@@ -27,6 +27,7 @@ import {
   Tooltip,
   Legend,
 } from 'recharts';
+import { useLive } from '@/lib/live';
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -119,11 +120,11 @@ function classify(input: ReconInput): ReconRow {
 // Mock — filtro de bots
 // ---------------------------------------------------------------------------
 
-const TOTAL_EVENTS = 1_284_503;
-const BOT_EVENTS = 150_287;
-const HUMAN_EVENTS = TOTAL_EVENTS - BOT_EVENTS;
+const MOCK_TOTAL_EVENTS = 1_284_503;
+const MOCK_BOT_EVENTS = 150_287;
+const MOCK_HUMAN_EVENTS = MOCK_TOTAL_EVENTS - MOCK_BOT_EVENTS;
 
-const BOT_REASONS: BotReason[] = [
+const MOCK_BOT_REASONS: BotReason[] = [
   { rule: 'User-agent de crawler conhecido', category: 'user-agent', count: 41230, trend: 6.4 },
   { rule: 'IP em datacenter (AWS / GCP / Azure)', category: 'datacenter-ip', count: 38610, trend: 12.1 },
   { rule: 'Rate anômalo por sessão (> 40 ev/min)', category: 'rate', count: 27980, trend: -3.2 },
@@ -158,6 +159,80 @@ const STATUS_META: Record<ReconStatus, { label: string; badge: string }> = {
   incerto: { label: 'Incerto', badge: 'bg-amber-100 text-amber-800' },
   sem_ground_truth: { label: 'Sem Ground Truth', badge: 'bg-slate-100 text-slate-600' },
 };
+
+// ---------------------------------------------------------------------------
+// Formas da API real (M14) + adaptadores para o formato que o JSX já consome.
+// Pegadinha: `gap`/`period_gap`/`bot_rate` vêm como RAZÃO (0..1); a UI usa %.
+// `gateway_revenue` vem 0 (não null); mapeamos 'no_ground_truth' → gateway null.
+// ---------------------------------------------------------------------------
+
+type ApiReconStatus = 'reconciled' | 'uncertain' | 'no_ground_truth';
+
+interface ReconApiDay {
+  day: string;
+  truvo_revenue: number;
+  truvo_orders: number;
+  gateway_revenue: number;
+  gateway_orders: number;
+  gap: number | null;
+  status: ApiReconStatus;
+}
+
+interface ReconApiSummary {
+  period_truvo_revenue: number;
+  period_gateway_revenue: number;
+  period_gap: number | null;
+  days_uncertain: number;
+  reconciliation: ApiReconStatus;
+  threshold: number;
+}
+
+interface ReconciliationApi {
+  range: { start: string; end: string };
+  summary: ReconApiSummary;
+  days: ReconApiDay[];
+}
+
+interface BotReportApi {
+  totals: { events: number; bots: number; humans: number; bot_rate: number };
+  by_source: { source: string; total: number; bots: number; humans: number; bot_rate: number }[];
+  top_bot_user_agents: { user_agent: string; events: number }[];
+}
+
+const API_STATUS_MAP: Record<ApiReconStatus, ReconStatus> = {
+  reconciled: 'reconciliado',
+  uncertain: 'incerto',
+  no_ground_truth: 'sem_ground_truth',
+};
+
+/** days[] da API → ReconRow[] (mesma forma do mock). gap razão → %. */
+function adaptReconRows(api: ReconciliationApi): ReconRow[] {
+  return (api?.days ?? []).map((d) => {
+    const status: ReconStatus = API_STATUS_MAP[d?.status] ?? 'sem_ground_truth';
+    const gateway = status === 'sem_ground_truth' ? null : (d?.gateway_revenue ?? 0);
+    return {
+      date: d?.day ?? '',
+      truvo: d?.truvo_revenue ?? 0,
+      gateway,
+      gapPct: (d?.gap ?? 0) * 100,
+      status,
+    };
+  });
+}
+
+/**
+ * A tabela de "motivos" usa top_bot_user_agents (o contrato NÃO tem by_reason):
+ * cada user-agent de bot vira uma regra da categoria 'user-agent'.
+ */
+function adaptBotReasons(api: BotReportApi): BotReason[] {
+  return (api?.top_bot_user_agents ?? []).map((u) => ({
+    rule: u?.user_agent ?? '(desconhecido)',
+    category: 'user-agent' as const,
+    count: u?.events ?? 0,
+    // TODO(live): o contrato não expõe tendência por regra → 0 (sem histórico).
+    trend: 0,
+  }));
+}
 
 // ---------------------------------------------------------------------------
 // Tooltip do gráfico
@@ -213,15 +288,18 @@ type ReconFilter = 'todos' | ReconStatus;
 export default function DataQualityView(): React.ReactElement {
   const [filter, setFilter] = useState<ReconFilter>('todos');
 
-  const rows: ReconRow[] = useMemo(() => RAW_RECON.map(classify), []);
+  // --- Live wiring (M14): fallback demo. Em modo demo useLive→null → mock intacto. ---
+  const reconLive = useLive<ReconciliationApi>('/v1/data-quality/reconciliation');
+  const botLive = useLive<BotReportApi>('/v1/data-quality/bot-report');
 
-  // Agregados para os KPIs
-  const {
-    totalTruvo,
-    totalGateway,
-    globalGapPct,
-    uncertainDays,
-  } = useMemo(() => {
+  // Reconciliação: real quando 'live', senão o mock existente (RAW_RECON classificado).
+  const rows: ReconRow[] = useMemo(
+    () => (reconLive.data ? adaptReconRows(reconLive.data) : RAW_RECON.map(classify)),
+    [reconLive.data],
+  );
+
+  // Agregados a partir de rows — fallback demo dos KPIs.
+  const aggFromRows = useMemo(() => {
     let tTruvo = 0;
     let tGateway = 0;
     let tTruvoWithGt = 0;
@@ -243,6 +321,13 @@ export default function DataQualityView(): React.ReactElement {
     };
   }, [rows]);
 
+  // KPIs: summary real quando 'live' (period_gap é razão → ×100); senão o mock.
+  const summary = reconLive.data?.summary;
+  const totalTruvo = summary?.period_truvo_revenue ?? aggFromRows.totalTruvo;
+  const totalGateway = summary?.period_gateway_revenue ?? aggFromRows.totalGateway;
+  const globalGapPct = summary ? (summary.period_gap ?? 0) * 100 : aggFromRows.globalGapPct;
+  const uncertainDays = summary?.days_uncertain ?? aggFromRows.uncertainDays;
+
   const chartData: ChartPoint[] = useMemo(
     () =>
       rows.map((r) => ({
@@ -259,9 +344,17 @@ export default function DataQualityView(): React.ReactElement {
     [rows, filter],
   );
 
-  const botPct = (BOT_EVENTS / TOTAL_EVENTS) * 100;
-  const humanPct = (HUMAN_EVENTS / TOTAL_EVENTS) * 100;
-  const maxReason = Math.max(...BOT_REASONS.map((b) => b.count));
+  // Bots: totals reais quando 'live'; senão o mock. by_reason NÃO existe no
+  // contrato → a tabela de "motivos" usa top_bot_user_agents (adaptBotReasons).
+  const botTotals = botLive.data?.totals;
+  const TOTAL_EVENTS = botTotals?.events ?? MOCK_TOTAL_EVENTS;
+  const BOT_EVENTS = botTotals?.bots ?? MOCK_BOT_EVENTS;
+  const HUMAN_EVENTS = botTotals?.humans ?? MOCK_HUMAN_EVENTS;
+  const BOT_REASONS: BotReason[] = botLive.data ? adaptBotReasons(botLive.data) : MOCK_BOT_REASONS;
+
+  const botPct = TOTAL_EVENTS > 0 ? (BOT_EVENTS / TOTAL_EVENTS) * 100 : 0;
+  const humanPct = TOTAL_EVENTS > 0 ? (HUMAN_EVENTS / TOTAL_EVENTS) * 100 : 0;
+  const maxReason = BOT_REASONS.length > 0 ? Math.max(...BOT_REASONS.map((b) => b.count)) : 1;
 
   const filterTabs: { id: ReconFilter; label: string }[] = [
     { id: 'todos', label: 'Todos' },

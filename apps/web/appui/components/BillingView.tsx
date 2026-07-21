@@ -19,6 +19,7 @@ import {
   ArrowRight,
   Gauge,
 } from 'lucide-react';
+import { useLive } from '@/lib/live';
 
 // ---- Tipos ----
 type PlanId = 'starter' | 'growth' | 'agency' | 'enterprise';
@@ -42,6 +43,42 @@ interface Invoice {
   desc: string;
   amount: number;
   status: InvoiceStatus;
+}
+
+// ---- Formas da API real (billing) ----
+interface PlanApi {
+  id: PlanId;
+  name: string;
+  price_brl_cents: number | null; // em CENTAVOS; null = sob consulta
+  events_included: number | null;
+  workspaces_included: number | null;
+  contact_sales: boolean;
+  features: string[];
+}
+interface PlansResponse {
+  currency: string;
+  plans: PlanApi[];
+}
+interface SubscriptionResponse {
+  plan: string;
+  status: string;
+  entitled: boolean;
+  cancel_at_period_end: boolean;
+  current_period_end: string | null;
+  limits: { events_included: number | null; workspaces: number | null };
+  usage: {
+    periodMonth: string;
+    eventsUsed: number;
+    eventsIncluded: number;
+    overage: number;
+    usagePct: number; // camelCase — percentual 0..100
+    approachingLimit: boolean;
+  };
+  features: string[];
+}
+
+function isPlanId(v: string): v is PlanId {
+  return v === 'starter' || v === 'growth' || v === 'agency' || v === 'enterprise';
 }
 
 // ---- Formatação pt-BR ----
@@ -159,17 +196,47 @@ function priceForCycle(base: number, cycle: BillingCycle): number {
   return cycle === 'anual' ? Math.round(base * 0.8) : base;
 }
 
+// adapt(): mapeia o JSON de /v1/billing/plans para a MESMA forma (Plan) que o JSX
+// já consome. price_brl_cents está em CENTAVOS (÷100). tagline/icon/badge não vêm
+// da API → reaproveitamos o mock existente por id. Nunca quebra em null/undefined.
+function adaptPlans(res: PlansResponse): Plan[] {
+  return (res?.plans ?? []).map((p) => {
+    const base = PLANS.find((m) => m.id === p?.id);
+    const events = p?.events_included;
+    return {
+      id: p?.id ?? base?.id ?? 'starter',
+      name: p?.name ?? base?.name ?? '',
+      tagline: base?.tagline ?? '',
+      monthly: p?.price_brl_cents != null ? p.price_brl_cents / 100 : null,
+      eventsLabel:
+        events != null ? `${int(events)} eventos / mês` : base?.eventsLabel ?? 'Volume sob demanda',
+      icon: base?.icon ?? Rocket,
+      features: p?.features ?? base?.features ?? [],
+      badge: base?.badge,
+    };
+  });
+}
+
+// current_period_end → data pt-BR + dias restantes; null/inválido → fallback ao mock.
+function fmtRenewal(iso: string | null | undefined): { date: string; days: number } | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const days = Math.max(0, Math.ceil((d.getTime() - Date.now()) / 86_400_000));
+  return { date: d.toLocaleDateString('pt-BR'), days };
+}
+
 interface CtaSpec {
   label: string;
   className: string;
   disabled: boolean;
 }
 
-function ctaFor(planId: PlanId): CtaSpec {
-  const currentIdx = PLAN_ORDER.indexOf(CURRENT_PLAN);
-  const idx = PLAN_ORDER.indexOf(planId);
+function ctaFor(planId: PlanId, currentPlan: PlanId, order: PlanId[]): CtaSpec {
+  const currentIdx = order.indexOf(currentPlan);
+  const idx = order.indexOf(planId);
 
-  if (planId === CURRENT_PLAN) {
+  if (planId === currentPlan) {
     return {
       label: 'Plano atual',
       disabled: true,
@@ -209,8 +276,29 @@ export default function BillingView() {
     window.setTimeout(() => setNotice(null), 3500);
   };
 
-  const usagePct = (USAGE_USED / USAGE_LIMIT) * 100;
-  const usageRemaining = Math.max(0, USAGE_LIMIT - USAGE_USED);
+  // Live (API real) — em modo demo useLive retorna null → caímos nos mocks abaixo.
+  const plansLive = useLive<PlansResponse>('/v1/billing/plans', []);
+  const subLive = useLive<SubscriptionResponse>('/v1/billing/subscription', []);
+
+  // Grade de planos: real quando 'live', senão o mock existente (fallback demo).
+  const plans: Plan[] = plansLive.data ? adaptPlans(plansLive.data) : PLANS;
+  const planOrder: PlanId[] = plans.map((p) => p.id);
+
+  // Plano atual vem da assinatura (fallback ao mock CURRENT_PLAN).
+  const sub = subLive.data;
+  const currentPlanId: PlanId = sub?.plan && isPlanId(sub.plan) ? sub.plan : CURRENT_PLAN;
+
+  // Medidor de uso — usage.* é camelCase. Fallback aos números mock.
+  const usageUsed = sub?.usage?.eventsUsed ?? USAGE_USED;
+  const usageLimit = sub?.usage?.eventsIncluded ?? USAGE_LIMIT;
+  const usagePct = sub?.usage?.usagePct ?? (usageLimit > 0 ? (usageUsed / usageLimit) * 100 : 0);
+  const usageRemaining = Math.max(0, usageLimit - usageUsed);
+
+  // Renovação (current_period_end) com fallback ao mock.
+  const renewal = fmtRenewal(sub?.current_period_end);
+  const renewalDate = renewal?.date ?? RENEWAL_DATE;
+  const renewalDays = renewal?.days ?? RENEWAL_DAYS;
+
   const tone: 'good' | 'warn' | 'danger' =
     usagePct >= 90 ? 'danger' : usagePct >= 70 ? 'warn' : 'good';
 
@@ -221,7 +309,7 @@ export default function BillingView() {
       ? 'from-amber-400 to-amber-500'
       : 'from-teal-500 to-emerald-600';
 
-  const currentPlan = PLANS.find((p) => p.id === CURRENT_PLAN) ?? PLANS[0];
+  const currentPlan = plans.find((p) => p.id === currentPlanId) ?? plans[0] ?? PLANS[0];
   const CurrentPlanIcon = currentPlan.icon;
   const nextPaidInvoice = INVOICES.find((i) => i.status === 'pago');
   const pendingTotal = INVOICES.filter((i) => i.status === 'pendente').reduce(
@@ -313,8 +401,8 @@ export default function BillingView() {
               <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
               <span>
                 Renova em{' '}
-                <b className="text-slate-700 font-semibold font-mono">{RENEWAL_DATE}</b>
-                <span className="text-slate-400"> · em {RENEWAL_DAYS} dias</span>
+                <b className="text-slate-700 font-semibold font-mono">{renewalDate}</b>
+                <span className="text-slate-400"> · em {renewalDays} dias</span>
               </span>
             </div>
 
@@ -358,9 +446,9 @@ export default function BillingView() {
             <div className="mt-4 flex items-end justify-between">
               <div>
                 <span className="text-2xl font-bold text-slate-900 tracking-tight font-mono">
-                  {int(USAGE_USED)}
+                  {int(usageUsed)}
                 </span>
-                <span className="text-sm text-slate-400 font-mono"> / {int(USAGE_LIMIT)}</span>
+                <span className="text-sm text-slate-400 font-mono"> / {int(usageLimit)}</span>
               </div>
               <span className="text-lg font-bold text-slate-800 font-mono">{pct1(usagePct)}%</span>
             </div>
@@ -375,7 +463,7 @@ export default function BillingView() {
 
             <div className="mt-2 flex items-center justify-between text-[10px] font-mono text-slate-400">
               <span>{int(usageRemaining)} eventos restantes</span>
-              <span>Reinicia em {RENEWAL_DATE}</span>
+              <span>Reinicia em {renewalDate}</span>
             </div>
 
             {/* Aviso de overage */}
@@ -411,9 +499,9 @@ export default function BillingView() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          {PLANS.map((plan) => {
-            const isCurrent = plan.id === CURRENT_PLAN;
-            const cta = ctaFor(plan.id);
+          {plans.map((plan) => {
+            const isCurrent = plan.id === currentPlanId;
+            const cta = ctaFor(plan.id, currentPlanId, planOrder);
             const shownPrice =
               plan.monthly !== null ? priceForCycle(plan.monthly, cycle) : null;
             const PlanIcon = plan.icon;
@@ -579,7 +667,7 @@ export default function BillingView() {
               <span className="text-[9px] font-mono font-semibold uppercase tracking-wider text-slate-400">
                 Data de cobrança
               </span>
-              <p className="text-lg font-bold text-slate-900 font-mono mt-1">{RENEWAL_DATE}</p>
+              <p className="text-lg font-bold text-slate-900 font-mono mt-1">{renewalDate}</p>
             </div>
             <div className="bg-slate-50/60 rounded-xl border border-slate-100 p-3">
               <span className="text-[9px] font-mono font-semibold uppercase tracking-wider text-slate-400">

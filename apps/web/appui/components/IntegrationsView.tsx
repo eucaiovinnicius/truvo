@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ShoppingBag,
   CreditCard,
@@ -28,6 +28,7 @@ import {
   CartesianGrid,
   Tooltip,
 } from 'recharts';
+import { useLive } from '@/lib/live';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Tipos
@@ -192,6 +193,148 @@ const EVENT_SERIES: EventPoint[] = [
 ];
 
 // ────────────────────────────────────────────────────────────────────────────
+// Formas da API real (M4 entrada + M9 saída) + adapters (fallback demo)
+// ────────────────────────────────────────────────────────────────────────────
+
+type InboundApiType = 'shopify' | 'stripe' | 'hotmart' | 'kiwify' | 'hubspot';
+type InboundApiStatus = 'pending' | 'active' | 'inactive' | 'error';
+
+/** Item BARE de GET /v1/integrations (entrada M4). */
+interface InboundApiItem {
+  id: string;
+  type: InboundApiType;
+  name: string;
+  status: InboundApiStatus;
+  lastEventAt: string | null;
+  hasCredentials: boolean;
+  config?: Record<string, unknown>;
+}
+
+interface OutboundApiStats {
+  sent: number;
+  failed: number;
+  skipped: number;
+  avgMatchQuality: number | null; // pegadinha: 0–10 e pode vir null
+}
+
+/** Item de platforms[] de GET /v1/integrations-out/status (saída M9). */
+interface OutboundApiPlatform {
+  platform: string; // meta_capi | google_enhanced | tiktok_events | hubspot
+  configured: boolean;
+  enabled: boolean;
+  has_credentials: boolean; // snake_case no contrato
+  status: string;
+  last_forward_at: string | null;
+  stats: OutboundApiStats;
+}
+
+interface OutboundStatusResponse {
+  platforms: OutboundApiPlatform[];
+}
+
+/** status da API (M4) → status visual dos cards de entrada. */
+function mapInboundStatus(s: InboundApiStatus | undefined): InboundStatus {
+  if (s === 'active') return 'connected';
+  if (s === 'error') return 'error';
+  return 'syncing'; // pending | inactive | desconhecido
+}
+
+/** ISO → tempo relativo pt-BR curto (rótulo "último sync"). */
+function relTimePt(iso: string | null | undefined): string {
+  if (!iso) return 'sem eventos';
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return 'sem eventos';
+  const secs = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (secs < 60) return `há ${secs} s`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `há ${mins} min`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `há ${hrs} h`;
+  return `há ${Math.floor(hrs / 24)} d`;
+}
+
+/** Metadados visuais (ícone/cor/iniciais/categoria) por tipo — reaproveita o mock. */
+function inboundMetaFor(
+  type: string,
+): Pick<InboundIntegration, 'category' | 'icon' | 'brand' | 'initials'> {
+  const m = INBOUND.find((i) => i.id === type);
+  return {
+    category: m?.category ?? 'Integração',
+    icon: m?.icon ?? Link2,
+    brand: m?.brand ?? '#64748b',
+    initials: m?.initials ?? (type.slice(0, 2) || '?'),
+  };
+}
+
+/** GET /v1/integrations → forma que os cards de Entrada já consomem. */
+function adaptInbound(rows: InboundApiItem[]): InboundIntegration[] {
+  return (rows ?? []).map((r) => {
+    const meta = inboundMetaFor(r?.type ?? '');
+    return {
+      id: r?.id ?? r?.type ?? '',
+      name: r?.name ?? meta.category,
+      category: meta.category,
+      icon: meta.icon,
+      brand: meta.brand,
+      initials: meta.initials,
+      status: mapInboundStatus(r?.status),
+      lastSync: relTimePt(r?.lastEventAt),
+      eventsToday: 0, // TODO(live): a lista não expõe volume/receita
+      revenueToday: 0, // TODO(live): idem
+    };
+  });
+}
+
+/** Metadados visuais das plataformas de saída, chaveados pelo `platform` da API. */
+const OUTBOUND_META: Record<
+  string,
+  Pick<OutboundIntegration, 'name' | 'subtitle' | 'brand' | 'initials'>
+> = {
+  meta_capi: { name: 'Meta CAPI', subtitle: 'Conversions API', brand: '#0866FF', initials: 'M' },
+  google_enhanced: {
+    name: 'Google Enhanced Conversions',
+    subtitle: 'Enhanced Conversions',
+    brand: '#4285F4',
+    initials: 'G',
+  },
+  tiktok_events: {
+    name: 'TikTok Events',
+    subtitle: 'Events API',
+    brand: '#010101',
+    initials: 'TT',
+  },
+  hubspot: {
+    name: 'HubSpot',
+    subtitle: 'Custom Behavioral Events',
+    brand: '#FF7A59',
+    initials: 'Hs',
+  },
+};
+
+/** GET /v1/integrations-out/status → forma que os cards de Saída já consomem. */
+function adaptOutbound(platforms: OutboundApiPlatform[]): OutboundIntegration[] {
+  return (platforms ?? []).map((p) => {
+    const meta = OUTBOUND_META[p?.platform ?? ''] ?? {
+      name: p?.platform ?? 'Plataforma',
+      subtitle: 'Conversions API',
+      brand: '#64748b',
+      initials: (p?.platform ?? '?').slice(0, 2).toUpperCase(),
+    };
+    return {
+      id: p?.platform ?? '',
+      name: meta.name,
+      subtitle: meta.subtitle,
+      brand: meta.brand,
+      initials: meta.initials,
+      matchQuality: p?.stats?.avgMatchQuality ?? 0, // EMQ = avgMatchQuality (0–10)
+      sent: p?.stats?.sent ?? 0,
+      failed: p?.stats?.failed ?? 0,
+      enabled: p?.enabled ?? false,
+    };
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -289,7 +432,24 @@ function Toggle({
 // ────────────────────────────────────────────────────────────────────────────
 
 export default function IntegrationsView(): React.ReactElement {
+  // ── Live wiring (M4 entrada + M9 saída) ────────────────────────────────────
+  // Em modo demo useLive retorna null → cai nos mocks (INBOUND / OUTBOUND_SEED).
+  const inboundLive = useLive<InboundApiItem[]>('/v1/integrations', []);
+  const outboundLive = useLive<OutboundStatusResponse>('/v1/integrations-out/status', []);
+
+  // Entrada: real quando 'live' (e não-vazio); senão o mock existente.
+  const inbound: InboundIntegration[] =
+    inboundLive.data && inboundLive.data.length > 0 ? adaptInbound(inboundLive.data) : INBOUND;
+
   const [outbound, setOutbound] = useState<OutboundIntegration[]>(OUTBOUND_SEED);
+
+  // Saída: quando o live chega, hidrata o estado (preserva o toggle otimista local).
+  useEffect(() => {
+    const platforms = outboundLive.data?.platforms;
+    if (platforms && platforms.length > 0) {
+      setOutbound(adaptOutbound(platforms));
+    }
+  }, [outboundLive.data]);
 
   const toggleOutbound = (id: string): void => {
     setOutbound((prev) =>
@@ -298,10 +458,10 @@ export default function IntegrationsView(): React.ReactElement {
   };
 
   // KPIs derivados (reagem aos toggles) ──────────────────────────────────────
-  const inboundConnected = INBOUND.filter((i) => i.status === 'connected').length;
+  const inboundConnected = inbound.filter((i) => i.status === 'connected').length;
   const outboundEnabled = outbound.filter((o) => o.enabled).length;
   const activeCount = inboundConnected + outboundEnabled;
-  const totalConnections = INBOUND.length + outbound.length;
+  const totalConnections = inbound.length + outbound.length;
 
   const eventsSentToday = outbound
     .filter((o) => o.enabled)
@@ -458,7 +618,7 @@ export default function IntegrationsView(): React.ReactElement {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5">
-          {INBOUND.map((it) => {
+          {inbound.map((it) => {
             const badge = INBOUND_BADGE[it.status];
             const Icon = it.icon;
             const isError = it.status === 'error';

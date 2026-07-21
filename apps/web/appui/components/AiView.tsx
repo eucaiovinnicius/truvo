@@ -30,6 +30,9 @@ import {
   CartesianGrid,
   Tooltip,
 } from 'recharts';
+import { useLive } from '@/lib/live';
+import { useSession } from '@/lib/session';
+import { api } from '@/lib/api';
 
 // ---- Domínio ----------------------------------------------------------------
 
@@ -259,6 +262,97 @@ const SUGGESTIONS: string[] = [
   'O TikTok vale o investimento?',
 ];
 
+// ---- API real (M9 · AI Journeys) --------------------------------------------
+// Formas do contrato /v1/ai/journeys/best e /v1/ai/ask. Atenção aos nomes:
+// `persons` (≠ people) e `attributed_revenue` (≠ revenue).
+
+interface ApiBestChannel {
+  rank: number;
+  channel: string;
+  persons: number;
+  converters: number;
+  conversions: number;
+  cvr: number;
+  roas: number;
+  cac: number;
+  attributed_revenue: number;
+  goal_score: number;
+}
+interface ApiTopJourney {
+  path: string[];
+  conversions: number;
+  revenue: number;
+}
+interface ApiReconciliation {
+  truvo_revenue: number;
+  gateway_revenue: number;
+  reconciliation_gap: number;
+  status: 'reconciled' | 'uncertain' | 'no_ground_truth';
+}
+interface AiJourneysResponse {
+  goal: string;
+  window: string;
+  reconciliation: ApiReconciliation;
+  best_channels: ApiBestChannel[];
+  top_journeys: ApiTopJourney[];
+  anomalies: unknown[];
+}
+interface AskResponse {
+  answer: string;
+  uncertain: boolean;
+  status: string;
+}
+
+/** Objective (UI) → goal (contrato do endpoint). */
+const GOAL_PARAM: Record<Objective, string> = {
+  roas: 'maximize_roas',
+  cac: 'minimize_cac',
+  ltv: 'maximize_ltv',
+  cvr: 'maximize_cvr',
+};
+
+/** best_channels → Journey[] (cada canal vira uma "rota" de 1 toque na tabela). */
+function adaptChannels(data: AiJourneysResponse): Journey[] {
+  return (data?.best_channels ?? []).map((c) => ({
+    path: [c?.channel ?? '—'],
+    people: c?.persons ?? 0,
+    cvr: c?.cvr ?? 0,
+    roas: c?.roas ?? 0,
+    cac: c?.cac ?? 0,
+    revenue: c?.attributed_revenue ?? 0,
+  }));
+}
+
+/**
+ * Jornada campeã: caminho real de `top_journeys[0]` (as chips de jornada);
+ * persons/cvr/roas/cac vêm do canal #1 como proxy, pois `top_journeys` só
+ * traz path/conversions/revenue. // TODO(live)
+ */
+function adaptTopJourney(data: AiJourneysResponse): Journey | undefined {
+  const tj = data?.top_journeys?.[0];
+  const top = data?.best_channels?.[0];
+  if (!tj && !top) return undefined;
+  return {
+    path: tj?.path ?? (top?.channel ? [top.channel] : []),
+    people: top?.persons ?? tj?.conversions ?? 0,
+    cvr: top?.cvr ?? 0,
+    roas: top?.roas ?? 0,
+    cac: top?.cac ?? 0,
+    revenue: tj?.revenue ?? top?.attributed_revenue ?? 0,
+  };
+}
+
+/** reconciliation → % de match (0–100). Sem gateway ⇒ sem ground truth. */
+function reconPct(r?: ApiReconciliation): number {
+  const gw = r?.gateway_revenue ?? 0;
+  const tv = r?.truvo_revenue ?? 0;
+  if (gw > 0) {
+    const match = 1 - Math.abs(gw - tv) / gw;
+    return Math.max(0, Math.min(100, Math.round(match * 100)));
+  }
+  return r?.status === 'reconciled' ? 100 : r?.status === 'uncertain' ? 60 : 0;
+}
+
 // ---- Componentes auxiliares -------------------------------------------------
 
 function PathChips({ path, dark = false }: { path: string[]; dark?: boolean }): React.ReactElement {
@@ -314,6 +408,8 @@ function ChartTip({ active, payload, metric }: TipProps): React.ReactElement | n
 // ---- View -------------------------------------------------------------------
 
 export default function AiView(): React.ReactElement {
+  const { isLive } = useSession();
+
   const [selected, setSelected] = useState<Objective>('roas');
   const [active, setActive] = useState<Objective>('roas');
   const [analyzing, setAnalyzing] = useState(false);
@@ -321,9 +417,29 @@ export default function AiView(): React.ReactElement {
   const [question, setQuestion] = useState('');
   const [answer, setAnswer] = useState<AiAnswer | null>(null);
 
-  const cfg = OBJECTIVES.find((o) => o.id === active) ?? OBJECTIVES[0];
+  // Live (API real M9): refaz quando o goal muda (clique em Analisar → setActive).
+  // Em modo demo useLive retorna null → tudo cai no mock existente (fallback).
+  const live = useLive<AiJourneysResponse>(
+    `/v1/ai/journeys/best?goal=${GOAL_PARAM[active]}&limit=10`,
+    [active],
+  );
+
+  const mockCfg = OBJECTIVES.find((o) => o.id === active) ?? OBJECTIVES[0];
+  // Real quando 'live'; senão o mock existente. A narrativa (headline/ações do
+  // card escuro) fica no mock — o contrato não devolve texto gerado. // TODO(live)
+  const cfg: ObjectiveConfig = live.data
+    ? {
+        id: mockCfg.id,
+        label: mockCfg.label,
+        short: mockCfg.short,
+        metric: mockCfg.metric,
+        recon: reconPct(live.data.reconciliation),
+        journeys: adaptChannels(live.data),
+      }
+    : mockCfg;
+
   const insight = AI_INSIGHT[cfg.id];
-  const topJourney = cfg.journeys[0];
+  const topJourney = live.data ? adaptTopJourney(live.data) : cfg.journeys[0];
   const confident = cfg.recon >= 90;
 
   const channelCount = useMemo(() => {
@@ -355,16 +471,38 @@ export default function AiView(): React.ReactElement {
     }, 850);
   };
 
+  const ask = async (q: string): Promise<void> => {
+    // Demo (ou sem sessão live) → resposta mock local (fallback).
+    if (!isLive) {
+      setAnswer({ q, ...answerFor(q) });
+      return;
+    }
+    try {
+      const res = await api<AskResponse>('/v1/ai/ask', {
+        method: 'POST',
+        body: JSON.stringify({ question: q }),
+      });
+      setAnswer({ q, text: res?.answer ?? '', confident: !(res?.uncertain ?? false) });
+    } catch {
+      // 503/erro (ex.: sem ANTHROPIC_API_KEY) → aviso gracioso no mesmo card.
+      setAnswer({
+        q,
+        text: 'A análise generativa da Truvo AI está indisponível no momento. Consulte o ranking de canais e o comparativo acima — eles seguem com os dados reconciliados das suas jornadas.',
+        confident: false,
+      });
+    }
+  };
+
   const handleAsk = (e?: React.FormEvent): void => {
     e?.preventDefault();
     const q = question.trim();
     if (!q) return;
-    setAnswer({ q, ...answerFor(q) });
+    void ask(q);
   };
 
   const askSuggestion = (q: string): void => {
     setQuestion(q);
-    setAnswer({ q, ...answerFor(q) });
+    void ask(q);
   };
 
   const cellCls = (k: MetricKey): string => (cfg.metric === k ? 'text-teal-700 font-bold' : '');
