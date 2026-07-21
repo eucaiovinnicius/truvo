@@ -6,6 +6,7 @@ import { enrich } from './enrich';
 import { ClickHouseBatcher, buildRow } from './clickhouse-batch';
 import { incrementMonthlyCounter } from './billing-counter';
 import { getRedis } from './redis';
+import { identifyRequestFromEvent } from './identity/event-hook';
 
 const TOPIC = process.env.KAFKA_EVENTS_TOPIC ?? 'truvo.events';
 const GROUP_ID = process.env.CONSUMER_GROUP_ID ?? 'truvo-consumer';
@@ -111,11 +112,45 @@ export class EventPipelineConsumer {
     if (!isBot) {
       await incrementMonthlyCounter(event);
     }
+
+    // 8. wiring M2×M8: constrói o grafo de identidade a partir do evento (só não-bot).
+    if (!isBot) {
+      await forwardIdentity(event);
+    }
   }
 
   async stop(): Promise<void> {
     await this.consumer.disconnect().catch(() => undefined);
     await this.batcher.close().catch(() => undefined);
     await getRedis().quit().catch(() => undefined);
+  }
+}
+
+const INTERNAL_API_URL = process.env.INTERNAL_API_URL ?? 'http://localhost:3333';
+const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET;
+
+/**
+ * Fecha o wiring M2×M8: para eventos com identificador (purchase / user_id /
+ * order_id / email_hash...), chama o endpoint INTERNO de identify na API (que tem
+ * Drizzle) para construir/atualizar o grafo de identidade. Best-effort — nunca
+ * derruba o pipeline (o merge no Postgres é reconciliável por replay/backfill).
+ * Sem `INTERNAL_API_SECRET` no ambiente, o forward fica desligado (dev).
+ */
+async function forwardIdentity(event: TruvoEvent): Promise<void> {
+  if (!INTERNAL_API_SECRET) return;
+  const req = identifyRequestFromEvent(event);
+  if (!req) return;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    await fetch(`${INTERNAL_API_URL}/v1/internal/identity/identify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-internal-secret': INTERNAL_API_SECRET },
+      body: JSON.stringify(req),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+  } catch {
+    /* best-effort */
   }
 }

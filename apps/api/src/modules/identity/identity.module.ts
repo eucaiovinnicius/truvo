@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { IdentityController } from './identity.controller';
+import { IdentityInternalController } from './identity-internal.controller';
 import { IdentityService } from './identity.service';
+import { InternalAuthGuard } from './guards/internal-auth.guard';
 
 /**
  * M8 — IDENTITY RESOLUTION + DEDUP avançado (lado da API).
@@ -14,8 +16,8 @@ import { IdentityService } from './identity.service';
  * integração (app.module.ts não é editado aqui — contrato de arquivos).
  */
 @Module({
-  controllers: [IdentityController],
-  providers: [IdentityService],
+  controllers: [IdentityController, IdentityInternalController],
+  providers: [IdentityService, InternalAuthGuard],
   exports: [IdentityService],
 })
 export class IdentityModule {}

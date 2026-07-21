@@ -73,6 +73,16 @@ export const identifySchema = z
   );
 export type IdentifyDto = z.infer<typeof identifySchema>;
 
+/**
+ * POST /v1/internal/identity/identify (server-to-server, consumer M2 → M8).
+ * Igual ao identify público, mas com `workspace_id` no corpo (não há JWT/header).
+ */
+export const internalIdentifySchema = z.intersection(
+  identifySchema,
+  z.object({ workspace_id: z.string().min(1).max(255) }),
+);
+export type InternalIdentifyDto = z.infer<typeof internalIdentifySchema>;
+
 /** GET /v1/identity/merges?canonical_id=&limit=&cursor= */
 export const mergesQuerySchema = z.object({
   canonical_id: z.string().min(1).max(512).optional(),
