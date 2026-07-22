@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   User, 
   Settings, 
@@ -17,6 +17,14 @@ import {
 import { WorkspaceConfig, ProfileConfig } from '../types';
 import { useSession } from '@/lib/session';
 import { useLive } from '@/lib/live';
+import { api } from '@/lib/api';
+
+/** Papel legível (form) → enum de convite da API (owner não é convidável). */
+function roleToApiInvite(role: string): 'admin' | 'member' | 'viewer' {
+  if (role === 'Auditor') return 'viewer';
+  if (role === 'admin' || role === 'Admin') return 'admin';
+  return 'member';
+}
 
 interface SettingsViewProps {
   profile: ProfileConfig;
@@ -63,9 +71,10 @@ export default function SettingsView({
 }: SettingsViewProps) {
   const [activeTab, setActiveTab] = useState<'profile' | 'workspace' | 'team' | 'billing'>('profile');
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Teams list state
-  const [teamMembers, setTeamMembers] = useState([
+  // Teams list state (semeado pela API em 'live'; mock em demo)
+  const [teamMembers, setTeamMembers] = useState<TeamMemberRow[]>([
     { id: 1, name: 'Alex Mercer', email: 'alex@truvo.ai', role: 'Owner', status: 'Active' },
     { id: 2, name: 'Samantha Cole', email: 'sam@truvo.ai', role: 'Growth Marketer', status: 'Active' },
     { id: 3, name: 'John Sterling', email: 'john@truvo.ai', role: 'Lead Developer', status: 'Pending Invite' }
@@ -76,50 +85,99 @@ export default function SettingsView({
   const [inviteRole, setInviteRole] = useState('Growth Marketer');
 
   // Team Members ligados à API real. Em demo (ou sem wid) useLive retorna null
-  // → a tabela cai no mock `teamMembers` acima, intacto.
-  const wid = useSession().workspace?.id;
+  // → a tabela mantém o mock `teamMembers`. Em live, o array real semeia o estado.
+  const session = useSession();
+  const wid = session.workspace?.id;
+  const isLive = session.isLive;
   const membersPath = wid ? `/v1/workspaces/${wid}/members` : null;
   const liveMembers = useLive<ApiMember[]>(membersPath, [wid]);
-  const displayMembers: TeamMemberRow[] = liveMembers.data
-    ? adaptMembers(liveMembers.data)
-    : teamMembers;
+  useEffect(() => {
+    if (liveMembers.data) setTeamMembers(adaptMembers(liveMembers.data));
+  }, [liveMembers.data]);
+
+  const flashSuccess = () => {
+    setSaveError(null);
+    setSaveSuccess(true);
+    setTimeout(() => setSaveSuccess(false), 3000);
+  };
 
   const handleProfileSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 3000);
+    // TODO(live): PATCH /v1/users/me (perfil) — mantido local nesta fase.
+    flashSuccess();
   };
 
-  const handleWorkspaceSubmit = (e: React.FormEvent) => {
+  // Workspace — demo: sucesso local; live: PATCH /v1/workspaces/:id.
+  const handleWorkspaceSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 3000);
+    setSaveError(null);
+    if (!isLive || !wid) {
+      flashSuccess();
+      return;
+    }
+    try {
+      await api(`/v1/workspaces/${wid}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: workspace.name,
+          slug: workspace.slug,
+          timezone: workspace.timezone,
+          currency: workspace.currency,
+        }),
+      });
+      flashSuccess();
+    } catch {
+      setSaveError('Não foi possível salvar o workspace. Verifique suas permissões (owner/admin).');
+    }
   };
 
-  const handleInviteMember = (e: React.FormEvent) => {
+  // Invite — demo: adiciona local; live: POST /v1/workspaces/:id/invite {email, role}.
+  const handleInviteMember = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inviteName || !inviteEmail) return;
+    setSaveError(null);
 
-    setTeamMembers([
-      ...teamMembers,
-      {
-        id: Date.now(),
-        name: inviteName,
-        email: inviteEmail,
-        role: inviteRole,
-        status: 'Pending Invite'
-      }
-    ]);
-    setInviteName('');
-    setInviteEmail('');
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 3000);
+    const optimistic: TeamMemberRow = {
+      id: isLive ? inviteEmail : Date.now(),
+      name: inviteName,
+      email: inviteEmail,
+      role: inviteRole,
+      status: 'Pending Invite',
+    };
+
+    if (!isLive || !wid) {
+      setTeamMembers((prev) => [...prev, optimistic]);
+      setInviteName('');
+      setInviteEmail('');
+      flashSuccess();
+      return;
+    }
+    try {
+      await api(`/v1/workspaces/${wid}/invite`, {
+        method: 'POST',
+        body: JSON.stringify({ email: inviteEmail, role: roleToApiInvite(inviteRole) }),
+      });
+      setTeamMembers((prev) => [...prev, optimistic]);
+      setInviteName('');
+      setInviteEmail('');
+      flashSuccess();
+    } catch {
+      setSaveError('Não foi possível enviar o convite. Verifique o e-mail e suas permissões.');
+    }
   };
 
-  const handleDeleteMember = (id: number | string) => {
-    if (window.confirm('Are you sure you want to revoke workspace access for this member?')) {
-      setTeamMembers(prev => prev.filter(m => m.id !== id));
+  // Remove — demo: remove local; live: DELETE /v1/workspaces/:id/members/:userId.
+  const handleDeleteMember = async (id: number | string) => {
+    if (!window.confirm('Are you sure you want to revoke workspace access for this member?')) return;
+    if (isLive && wid) {
+      try {
+        await api(`/v1/workspaces/${wid}/members/${id}`, { method: 'DELETE' });
+      } catch {
+        setSaveError('Não foi possível remover o membro. Verifique suas permissões.');
+        return;
+      }
     }
+    setTeamMembers((prev) => prev.filter((m) => m.id !== id));
   };
 
   return (
@@ -184,6 +242,14 @@ export default function SettingsView({
             <div className="bg-emerald-50 border border-emerald-100 p-3 rounded-xl flex items-center gap-2 text-emerald-800 text-xs">
               <CheckCircle className="w-4 h-4 text-emerald-600" />
               <span>Settings updated successfully!</span>
+            </div>
+          )}
+
+          {/* Error toast (live) */}
+          {saveError && (
+            <div className="bg-rose-50 border border-rose-100 p-3 rounded-xl flex items-center gap-2 text-rose-800 text-xs">
+              <Info className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{saveError}</span>
             </div>
           )}
 
@@ -330,7 +396,7 @@ export default function SettingsView({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-xs">
-                    {displayMembers.map((member) => (
+                    {teamMembers.map((member) => (
                       <tr key={member.id} className="hover:bg-slate-50/50 transition-colors">
                         <td className="py-3 px-3">
                           <span className="font-bold text-slate-800 block">{member.name}</span>

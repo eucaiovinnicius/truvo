@@ -24,6 +24,30 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useLive } from '@/lib/live';
+import { useSession } from '@/lib/session';
+import { api } from '@/lib/api';
+
+/** Frequência (pt-BR) → enum da API (M13). */
+function frequencyToApi(freq: Frequency): 'daily' | 'weekly' | 'monthly' {
+  if (freq === 'Diário') return 'daily';
+  if (freq === 'Mensal') return 'monthly';
+  return 'weekly';
+}
+
+/** Tipo de relatório (badge) → template da API (M13). */
+function typeToApiTemplate(
+  type: ReportType,
+): 'client_report' | 'ads_performance' | 'monthly_funnel' | 'custom' {
+  if (type === 'Performance') return 'ads_performance';
+  if (type === 'Executivo') return 'client_report';
+  return 'custom';
+}
+
+/** Item de POST /v1/reports (resposta) — só o necessário p/ adaptar de volta. */
+interface DashboardApiItem {
+  id: string;
+  name?: string;
+}
 
 // ---------------------------------------------------------------------------
 // Tipos locais (self-contained — mock puro nesta fase)
@@ -375,6 +399,13 @@ export default function ReportsView() {
     if (reportsLive.data) setReports(adaptReports(reportsLive.data));
   }, [reportsLive.data]);
 
+  // Escrita: criar exige um dashboard_id (M13) → usamos o 1º dashboard do workspace.
+  const { isLive } = useSession();
+  const dashboardsLive = useLive<DashboardApiItem[]>('/v1/dashboards');
+  const defaultDashboardId = Array.isArray(dashboardsLive.data)
+    ? dashboardsLive.data[0]?.id ?? null
+    : null;
+
   const notify = (message: string, reportId?: string): void => {
     setToast(message);
     if (reportId) {
@@ -384,29 +415,41 @@ export default function ReportsView() {
     window.setTimeout(() => setToast((cur) => (cur === message ? null : cur)), 2600);
   };
 
+  // Enviar agora — demo: só local; live: POST /v1/reports/:id/send { format:'web' }.
   const handleSendNow = (report: ScheduledReport): void => {
     setReports((prev) =>
       prev.map((r) => (r.id === report.id ? { ...r, lastSent: 'Agora mesmo' } : r)),
     );
     notify(`Relatório "${report.name}" enviado agora.`, report.id);
+    if (isLive) {
+      void api(`/v1/reports/${report.id}/send`, {
+        method: 'POST',
+        body: JSON.stringify({ format: 'web' }),
+      }).catch(() =>
+        notify(`Falha ao enviar "${report.name}". Verifique a configuração de envio.`, report.id),
+      );
+    }
   };
 
   const handleEdit = (report: ScheduledReport): void => {
+    // TODO(live): abrir editor + PATCH /v1/reports/:id (form de edição ainda não existe).
     notify(`Editando "${report.name}"…`, report.id);
   };
 
+  // Pausar/ativar — demo: só local; live: PATCH /v1/reports/:id { enabled }.
   const handleToggle = (report: ScheduledReport): void => {
+    const nextStatus: ReportStatus = report.status === 'ativo' ? 'pausado' : 'ativo';
     setReports((prev) =>
-      prev.map((r) => {
-        if (r.id !== report.id) return r;
-        const nextStatus: ReportStatus = r.status === 'ativo' ? 'pausado' : 'ativo';
-        return {
-          ...r,
-          status: nextStatus,
-          nextSend:
-            nextStatus === 'pausado' ? 'Pausado' : nextSendFromFrequency[r.frequency],
-        };
-      }),
+      prev.map((r) =>
+        r.id !== report.id
+          ? r
+          : {
+              ...r,
+              status: nextStatus,
+              nextSend:
+                nextStatus === 'pausado' ? 'Pausado' : nextSendFromFrequency[r.frequency],
+            },
+      ),
     );
     notify(
       report.status === 'ativo'
@@ -414,38 +457,92 @@ export default function ReportsView() {
         : `Relatório "${report.name}" reativado.`,
       report.id,
     );
+    if (isLive) {
+      void api(`/v1/reports/${report.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled: nextStatus === 'ativo' }),
+      }).catch(() => notify('Não foi possível atualizar o relatório na API.', report.id));
+    }
   };
 
+  // Criar a partir de um modelo — demo: local; live: POST /v1/reports.
   const handleUseTemplate = (tpl: ReportTemplate): void => {
-    const newReport: ScheduledReport = {
-      id: `rep-${Date.now()}`,
-      name: `${tpl.name} — Novo`,
-      type: tpl.type,
-      frequency: tpl.frequency,
-      format: tpl.format,
-      recipients: [{ name: 'Alex Mercer', email: 'alex@truvo.ai' }],
-      lastSent: '—',
-      nextSend: nextSendFromFrequency[tpl.frequency],
-      status: 'ativo',
-    };
-    setReports((prev) => [newReport, ...prev]);
-    notify(`Relatório criado a partir do modelo "${tpl.name}".`, newReport.id);
+    if (!isLive) {
+      const newReport: ScheduledReport = {
+        id: `rep-${Date.now()}`,
+        name: `${tpl.name} — Novo`,
+        type: tpl.type,
+        frequency: tpl.frequency,
+        format: tpl.format,
+        recipients: [{ name: 'Alex Mercer', email: 'alex@truvo.ai' }],
+        lastSent: '—',
+        nextSend: nextSendFromFrequency[tpl.frequency],
+        status: 'ativo',
+      };
+      setReports((prev) => [newReport, ...prev]);
+      notify(`Relatório criado a partir do modelo "${tpl.name}".`, newReport.id);
+      return;
+    }
+    if (!defaultDashboardId) {
+      notify('Crie um dashboard antes de agendar um relatório.');
+      return;
+    }
+    void api<ReportApiItem>('/v1/reports', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: `${tpl.name} — Novo`,
+        dashboard_id: defaultDashboardId,
+        template: typeToApiTemplate(tpl.type),
+        frequency: frequencyToApi(tpl.frequency),
+        enabled: true,
+      }),
+    })
+      .then((res) => {
+        const created = adaptReports([res])[0];
+        if (created) setReports((prev) => [created, ...prev]);
+        notify(`Relatório criado a partir do modelo "${tpl.name}".`, created?.id);
+      })
+      .catch(() => notify('Não foi possível criar o relatório na API.'));
   };
 
+  // Novo relatório em branco — demo: local; live: POST /v1/reports (pausado).
   const handleNewReport = (): void => {
-    const newReport: ScheduledReport = {
-      id: `rep-${Date.now()}`,
-      name: 'Novo relatório sem título',
-      type: 'Performance',
-      frequency: 'Semanal',
-      format: 'PDF',
-      recipients: [{ name: 'Alex Mercer', email: 'alex@truvo.ai' }],
-      lastSent: '—',
-      nextSend: nextSendFromFrequency['Semanal'],
-      status: 'pausado',
-    };
-    setReports((prev) => [newReport, ...prev]);
-    notify('Novo relatório criado. Configure e ative quando quiser.', newReport.id);
+    if (!isLive) {
+      const newReport: ScheduledReport = {
+        id: `rep-${Date.now()}`,
+        name: 'Novo relatório sem título',
+        type: 'Performance',
+        frequency: 'Semanal',
+        format: 'PDF',
+        recipients: [{ name: 'Alex Mercer', email: 'alex@truvo.ai' }],
+        lastSent: '—',
+        nextSend: nextSendFromFrequency['Semanal'],
+        status: 'pausado',
+      };
+      setReports((prev) => [newReport, ...prev]);
+      notify('Novo relatório criado. Configure e ative quando quiser.', newReport.id);
+      return;
+    }
+    if (!defaultDashboardId) {
+      notify('Crie um dashboard antes de agendar um relatório.');
+      return;
+    }
+    void api<ReportApiItem>('/v1/reports', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'Novo relatório sem título',
+        dashboard_id: defaultDashboardId,
+        template: 'custom',
+        frequency: 'weekly',
+        enabled: false,
+      }),
+    })
+      .then((res) => {
+        const created = adaptReports([res])[0];
+        if (created) setReports((prev) => [created, ...prev]);
+        notify('Novo relatório criado. Configure e ative quando quiser.', created?.id);
+      })
+      .catch(() => notify('Não foi possível criar o relatório na API.'));
   };
 
   const counts = useMemo(() => {

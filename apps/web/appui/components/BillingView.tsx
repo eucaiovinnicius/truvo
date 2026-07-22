@@ -20,6 +20,8 @@ import {
   Gauge,
 } from 'lucide-react';
 import { useLive } from '@/lib/live';
+import { useSession } from '@/lib/session';
+import { api } from '@/lib/api';
 
 // ---- Tipos ----
 type PlanId = 'starter' | 'growth' | 'agency' | 'enterprise';
@@ -271,9 +273,38 @@ export default function BillingView() {
   const [cycle, setCycle] = useState<BillingCycle>('mensal');
   const [notice, setNotice] = useState<string | null>(null);
 
+  const { isLive } = useSession();
+
   const flash = (msg: string): void => {
     setNotice(msg);
     window.setTimeout(() => setNotice(null), 3500);
+  };
+
+  // CTA de plano — demo: só aviso; live: POST /v1/billing/checkout { plan } e
+  // redireciona à Checkout Session. Depende do Stripe (STRIPE_SECRET_KEY) →
+  // sem ele a chamada falha-fechado (503) e mostramos a mensagem.
+  const handlePlanCta = (plan: Plan, cta: CtaSpec): void => {
+    if (cta.disabled) return;
+    if (plan.id === 'enterprise') {
+      flash('Nossa equipe de vendas entrará em contato em breve.');
+      return;
+    }
+    if (!isLive) {
+      flash(`${cta.label} para o plano ${plan.name} solicitado.`);
+      return;
+    }
+    flash('Redirecionando para o checkout seguro…');
+    void api<{ url?: string }>('/v1/billing/checkout', {
+      method: 'POST',
+      body: JSON.stringify({ plan: plan.id }),
+    })
+      .then((res) => {
+        if (res?.url) window.location.href = res.url;
+        else flash('Checkout indisponível no momento. Tente novamente mais tarde.');
+      })
+      .catch(() =>
+        flash('Cobrança indisponível — configure o Stripe (STRIPE_SECRET_KEY) para habilitar o checkout.'),
+      );
   };
 
   // Live (API real) — em modo demo useLive retorna null → caímos nos mocks abaixo.
@@ -585,14 +616,7 @@ export default function BillingView() {
                 {/* CTA */}
                 <button
                   disabled={cta.disabled}
-                  onClick={() => {
-                    if (cta.disabled) return;
-                    if (plan.id === 'enterprise') {
-                      flash('Nossa equipe de vendas entrará em contato em breve.');
-                    } else {
-                      flash(`${cta.label} para o plano ${plan.name} solicitado.`);
-                    }
-                  }}
+                  onClick={() => handlePlanCta(plan, cta)}
                   className={`mt-5 w-full py-2.5 rounded-xl text-xs font-bold transition-colors ${cta.className}`}
                 >
                   {cta.label}

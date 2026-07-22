@@ -17,6 +17,46 @@ import {
   Play
 } from 'lucide-react';
 import { Funnel, FunnelStep, Condition } from '../types';
+import { useSession } from '@/lib/session';
+import { api } from '@/lib/api';
+
+/** status local → enum da API (M5): inactive ↔ archived. */
+function localToApiFunnelStatus(status: 'active' | 'inactive' | 'draft'): 'active' | 'archived' | 'draft' {
+  return status === 'inactive' ? 'archived' : status;
+}
+
+/** conditions locais (array) → objeto strict do M5 (best-effort; extras ignorados). */
+interface ApiFunnelConditions {
+  url_contains?: string;
+  element_id?: string;
+  property_eq?: { key: string; value: string | number | boolean };
+  property_gte?: { key: string; value: number };
+}
+
+function conditionsToApi(conditions: Condition[]): ApiFunnelConditions {
+  const out: ApiFunnelConditions = {};
+  for (const c of conditions) {
+    const value = (c.value ?? '').trim();
+    if (!value) continue;
+    if (c.field === 'page_path') {
+      out.url_contains = value;
+    } else if (c.operator === 'greater_than' && !Number.isNaN(Number(value))) {
+      out.property_gte = { key: c.field, value: Number(value) };
+    } else if (c.operator === 'equals') {
+      out.property_eq = { key: c.field, value };
+    }
+    // 'contains'/'starts_with' em campos não-URL não têm equivalente no schema strict → ignorados
+  }
+  return out;
+}
+
+function stepsToApi(steps: FunnelStep[]): Array<{ name: string; event: string; conditions: ApiFunnelConditions }> {
+  return steps.map((s) => ({
+    name: s.name,
+    event: s.eventType,
+    conditions: conditionsToApi(s.conditions),
+  }));
+}
 
 interface FunnelBuilderViewProps {
   funnels: Funnel[];
@@ -34,10 +74,12 @@ export default function FunnelBuilderView({
   // Find or create default editable funnel state
   const activeFunnel = funnels.find(f => f.id === selectedFunnelId) || funnels[0];
   
+  const { isLive } = useSession();
   const [funnelName, setFunnelName] = useState('');
   const [funnelStatus, setFunnelStatus] = useState<'active' | 'inactive' | 'draft'>('active');
   const [steps, setSteps] = useState<FunnelStep[]>([]);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Initialize state based on the selected funnel
   useEffect(() => {
@@ -159,8 +201,12 @@ export default function FunnelBuilderView({
     }));
   };
 
-  // Save Funnel and commit back to parent
+  // Save Funnel and commit back to parent.
+  // Demo: apenas estado local (protótipo intacto). Live: POST (funil novo) ou
+  // PATCH /v1/funnels/:id e só então confirma o sucesso na UI.
   const handleApplyChanges = () => {
+    setSaveError(null);
+
     // Generate computed reach numbers
     const finalStepsWithReach = steps.map((s, idx) => ({
       ...s,
@@ -181,9 +227,44 @@ export default function FunnelBuilderView({
       updatedTime: 'Updated just now'
     };
 
-    onSaveFunnel(updatedFunnel);
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 4000);
+    const commitLocal = () => {
+      onSaveFunnel(updatedFunnel);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 4000);
+    };
+
+    if (!isLive) {
+      commitLocal();
+      return;
+    }
+
+    // Live: valida o mínimo do M5 (≥ 2 steps) antes de chamar a API.
+    const apiSteps = stepsToApi(steps);
+    if (apiSteps.length < 2) {
+      setSaveError('Um funil precisa de ao menos 2 etapas para ser salvo.');
+      return;
+    }
+    const isNew = activeFunnel.id.startsWith('funnel-new-');
+    const payload = {
+      name: funnelName,
+      status: localToApiFunnelStatus(funnelStatus),
+      steps: apiSteps,
+      ...(isNew ? { attribution_window_days: 7 } : {}),
+    };
+    void api(isNew ? '/v1/funnels' : `/v1/funnels/${activeFunnel.id}`, {
+      method: isNew ? 'POST' : 'PATCH',
+      body: JSON.stringify(payload),
+    })
+      .then(() => {
+        // TODO(live): ao criar, o id do servidor difere do id temporário local;
+        // a lista é re-sincronizada por GET /v1/funnels ao voltar para "Funnels".
+        commitLocal();
+      })
+      .catch(() => {
+        setSaveError(
+          'Não foi possível salvar o funil na API. Verifique suas permissões e tente novamente.',
+        );
+      });
   };
 
   const currentComputedSteps = steps.map((s, idx) => ({
@@ -215,6 +296,17 @@ export default function FunnelBuilderView({
           </button>
         </div>
       </div>
+
+      {/* Error Banner (live) */}
+      {saveError && (
+        <div className="bg-rose-50 border border-rose-100 p-4 rounded-xl flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+          <div>
+            <h4 className="text-xs font-bold text-rose-900 leading-normal">Não foi possível salvar</h4>
+            <p className="text-[11px] text-rose-700 font-sans mt-0.5">{saveError}</p>
+          </div>
+        </div>
+      )}
 
       {/* Success Notification Banner */}
       {saveSuccess && (

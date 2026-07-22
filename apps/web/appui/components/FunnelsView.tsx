@@ -34,6 +34,12 @@ import {
 import { Funnel } from '../types';
 import { useLive } from '@/lib/live';
 import { useSession } from '@/lib/session';
+import { api } from '@/lib/api';
+
+/** status local do funil → enum da API (M5): inactive ↔ archived. */
+function localToApiFunnelStatus(status: 'active' | 'inactive' | 'draft'): 'active' | 'archived' | 'draft' {
+  return status === 'inactive' ? 'archived' : status;
+}
 
 interface FunnelChannelPerformance {
   channel: string;
@@ -523,7 +529,9 @@ export default function FunnelsView({
   const [videoProgress, setVideoProgress] = useState(0);
 
   // ---- Live (API real). Em modo demo useLive retorna null → cai nas props/mock. ----
-  const workspaceId = useSession().workspace?.id;
+  const session = useSession();
+  const workspaceId = session.workspace?.id;
+  const isLive = session.isLive;
 
   // GRID: GET /v1/funnels. Quando 'live' chega, semeia o estado do pai — assim o
   // grid e as mutações locais (toggle/delete/create) seguem lendo `funnels` intactos.
@@ -569,31 +577,58 @@ export default function FunnelsView({
     return () => clearInterval(interval);
   }, [isPlaying]);
 
-  const handleToggleStatus = (funnelId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setFunnels(prev => prev.map(f => {
-      if (f.id === funnelId) {
-        const nextStatus: Record<string, 'active' | 'inactive' | 'draft'> = {
-          active: 'inactive',
-          inactive: 'active',
-          draft: 'active'
-        };
-        return {
-          ...f,
-          status: nextStatus[f.status]
-        };
-      }
-      return f;
-    }));
+  const nextFunnelStatus: Record<string, 'active' | 'inactive' | 'draft'> = {
+    active: 'inactive',
+    inactive: 'active',
+    draft: 'active',
   };
 
-  const handleDeleteFunnel = (funnelId: string, e: React.MouseEvent) => {
+  const applyStatus = (funnelId: string, status: 'active' | 'inactive' | 'draft') => {
+    setFunnels((prev) => prev.map((f) => (f.id === funnelId ? { ...f, status } : f)));
+  };
+
+  // Toggle — demo: local; live: PATCH /v1/funnels/:id { status }.
+  const handleToggleStatus = async (funnelId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (window.confirm('Tem certeza de que deseja excluir este funil de marketing? Todos os cálculos históricos serão reiniciados.')) {
-      setFunnels(prev => prev.filter(f => f.id !== funnelId));
-      if (selectedPerformanceFunnelId === funnelId) {
-        setSelectedPerformanceFunnelId(null);
+    const current = funnels.find((f) => f.id === funnelId);
+    if (!current) return;
+    const next = nextFunnelStatus[current.status];
+    if (!isLive) {
+      applyStatus(funnelId, next);
+      return;
+    }
+    try {
+      await api(`/v1/funnels/${funnelId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: localToApiFunnelStatus(next) }),
+      });
+      applyStatus(funnelId, next);
+    } catch {
+      window.alert('Não foi possível atualizar o status do funil. Tente novamente.');
+    }
+  };
+
+  // Delete — demo: local; live: DELETE /v1/funnels/:id.
+  const handleDeleteFunnel = async (funnelId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (
+      !window.confirm(
+        'Tem certeza de que deseja excluir este funil de marketing? Todos os cálculos históricos serão reiniciados.',
+      )
+    ) {
+      return;
+    }
+    if (isLive) {
+      try {
+        await api(`/v1/funnels/${funnelId}`, { method: 'DELETE' });
+      } catch {
+        window.alert('Não foi possível excluir o funil. Tente novamente.');
+        return;
       }
+    }
+    setFunnels((prev) => prev.filter((f) => f.id !== funnelId));
+    if (selectedPerformanceFunnelId === funnelId) {
+      setSelectedPerformanceFunnelId(null);
     }
   };
 

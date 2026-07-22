@@ -25,6 +25,18 @@ interface OnboardingFlowProps {
   showCancelButton: boolean;
 }
 
+/*
+ * TODO(live): este wizard é 100% simulado. Para ligá-lo à API real seriam
+ * necessários vários passos (fora do escopo mínimo desta fase):
+ *  - Step 1: PATCH /v1/workspaces/:id (nome/segmento) — hoje o nome só volta via onComplete.
+ *  - Step 2: POST /v1/api-keys para gerar a chave real do pixel (em vez do pk_live_… fixo)
+ *            e escutar o 1º evento (GET /v1/events/volume) em vez do botão de simulação.
+ *  - Step 3: "Connect Meta/Google" mapeia para PUT /v1/integrations-out/:platform, que hoje
+ *            falha-fechado sem INTEGRATIONS_ENCRYPTION_KEY (mesmo bloqueio da IntegrationsView).
+ * Como envolve um fluxo multi-etapas com credenciais e tratamento de erro por passo,
+ * priorizamos as telas 1–4 (TrackingView/Funnels/Settings/Reports) e deixamos isto anotado.
+ */
+
 export default function OnboardingFlow({ onComplete, onCancel, showCancelButton }: OnboardingFlowProps) {
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [workspaceName, setWorkspaceName] = useState('Truvo Global Store');

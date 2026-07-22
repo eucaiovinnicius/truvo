@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   Code2, 
   Copy, 
@@ -20,6 +20,7 @@ import {
 import { Integration, ApiKey } from '../types';
 import { useSession } from '@/lib/session';
 import { useLive } from '@/lib/live';
+import { api } from '@/lib/api';
 
 interface TrackingViewProps {
   integrations: Integration[];
@@ -42,6 +43,15 @@ interface ApiKeyRow {
 }
 interface ApiKeysResponse {
   apiKeys: ApiKeyRow[];
+}
+
+/** POST /v1/api-keys → segredo em claro (`key`) exibido UMA vez. */
+interface ApiKeyCreateResponse {
+  id: string;
+  name: string;
+  prefix?: string;
+  status?: string;
+  key: string;
 }
 
 /** GET /v1/integrations (entrada / webhooks) → array de integrações. */
@@ -166,11 +176,17 @@ export default function TrackingView({
   const [copied, setCopied] = useState(false);
   const [newKeyLabel, setNewKeyLabel] = useState('');
   const [showAddKey, setShowAddKey] = useState(false);
+  // Segredo em claro recém-criado (mostrado UMA vez) + erro amigável de escrita.
+  const [revealedKey, setRevealedKey] = useState<{ name: string; key: string } | null>(null);
+  const [keyError, setKeyError] = useState<string | null>(null);
+  const [keyCopied, setKeyCopied] = useState(false);
 
   // Fonte de dados: prefere API real; em demo (ou sem workspace) useLive
   // retorna null → cai nas props/mock, intactos. Endpoints são escopados por
   // workspace via header x-workspace-id; gate no wid p/ evitar 401 prematuro.
-  const wid = useSession().workspace?.id;
+  const session = useSession();
+  const wid = session.workspace?.id;
+  const isLive = session.isLive;
   const keysLive = useLive<ApiKeysResponse>(wid ? '/v1/api-keys' : null, [wid]);
   const intInLive = useLive<IntegrationInRow[]>(wid ? '/v1/integrations' : null, [wid]);
   const intOutLive = useLive<IntegrationsOutStatusResponse>(
@@ -178,7 +194,14 @@ export default function TrackingView({
     [wid],
   );
 
-  const apiKeys: ApiKey[] = keysLive.data ? adaptApiKeys(keysLive.data) : propApiKeys;
+  // Em 'live' semeamos uma cópia local mutável (create/revoke atualizam sem
+  // re-fetch); em demo (liveKeys === null) caímos nas props do pai, intactas.
+  const [liveKeys, setLiveKeys] = useState<ApiKey[] | null>(null);
+  useEffect(() => {
+    if (keysLive.data) setLiveKeys(adaptApiKeys(keysLive.data));
+  }, [keysLive.data]);
+
+  const apiKeys: ApiKey[] = liveKeys ?? propApiKeys;
   const liveIntegrations = adaptIntegrations(intInLive.data, intOutLive.data);
   const integrations: Integration[] = liveIntegrations ?? propIntegrations;
 
@@ -199,36 +222,82 @@ export default function TrackingView({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Create API Key
-  const handleCreateKey = (e: React.FormEvent) => {
+  // Create API Key — demo: local; live: POST /v1/api-keys {name} e mostra o
+  // segredo em claro (`key`) UMA vez (não é recuperável depois).
+  const handleCreateKey = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newKeyLabel.trim()) return;
+    const name = newKeyLabel.trim();
+    if (!name) return;
+    setKeyError(null);
 
-    const newKey: ApiKey = {
-      id: `key-new-${Date.now()}`,
-      name: newKeyLabel,
-      key: `pk_live_${Math.random().toString(16).substring(2, 16)}`,
-      status: 'active'
-    };
+    if (!isLive) {
+      const newKey: ApiKey = {
+        id: `key-new-${Date.now()}`,
+        name,
+        key: `pk_live_${Math.random().toString(16).substring(2, 16)}`,
+        status: 'active',
+      };
+      setApiKeys([...apiKeys, newKey]);
+      setNewKeyLabel('');
+      setShowAddKey(false);
+      return;
+    }
 
-    setApiKeys([...apiKeys, newKey]);
-    setNewKeyLabel('');
-    setShowAddKey(false);
+    try {
+      const res = await api<ApiKeyCreateResponse>('/v1/api-keys', {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      });
+      setRevealedKey({ name: res.name, key: res.key });
+      setLiveKeys((prev) => [
+        {
+          id: res.id,
+          name: res.name,
+          key: `${res.prefix ?? ''}••••••`,
+          status: res.status === 'revoked' ? 'inactive' : 'active',
+        },
+        ...(prev ?? []),
+      ]);
+      setNewKeyLabel('');
+      setShowAddKey(false);
+    } catch {
+      setKeyError('Não foi possível criar a chave. Verifique suas permissões e tente novamente.');
+    }
   };
 
-  // Toggle API Key Status
+  // Toggle API Key Status (sem endpoint dedicado — só visual; em live não persiste).
   const handleToggleKeyStatus = (keyId: string) => {
-    setApiKeys(prev => prev.map(k => {
-      if (k.id === keyId) {
-        return { ...k, status: k.status === 'active' ? 'inactive' : 'active' };
-      }
-      return k;
-    }));
+    const flip = (prev: ApiKey[]): ApiKey[] =>
+      prev.map((k) =>
+        k.id === keyId
+          ? { ...k, status: k.status === 'active' ? ('inactive' as const) : ('active' as const) }
+          : k,
+      );
+    if (isLive) setLiveKeys((prev) => flip(prev ?? []));
+    else setApiKeys(flip(apiKeys));
   };
 
-  // Delete API Key
-  const handleDeleteKey = (keyId: string) => {
-    setApiKeys(prev => prev.filter(k => k.id !== keyId));
+  // Delete API Key — demo: local; live: DELETE /v1/api-keys/:id (revoga).
+  const handleDeleteKey = async (keyId: string) => {
+    if (!isLive) {
+      setApiKeys((prev) => prev.filter((k) => k.id !== keyId));
+      return;
+    }
+    setKeyError(null);
+    try {
+      await api(`/v1/api-keys/${keyId}`, { method: 'DELETE' });
+      setLiveKeys((prev) => (prev ?? []).filter((k) => k.id !== keyId));
+    } catch {
+      setKeyError('Não foi possível revogar a chave. Tente novamente.');
+    }
+  };
+
+  const handleCopyRevealed = () => {
+    if (revealedKey && typeof navigator !== 'undefined' && navigator.clipboard) {
+      void navigator.clipboard.writeText(revealedKey.key);
+      setKeyCopied(true);
+      setTimeout(() => setKeyCopied(false), 2000);
+    }
   };
 
   // Connect/Disconnect Integration
@@ -343,6 +412,45 @@ export default function TrackingView({
                 Create
               </button>
             </form>
+          )}
+
+          {/* Erro amigável de escrita (create/revoke) */}
+          {keyError && (
+            <div className="p-3 bg-rose-50 border border-rose-100 rounded-xl flex items-start gap-2 text-[11px] text-rose-700">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-px" />
+              <span>{keyError}</span>
+            </div>
+          )}
+
+          {/* Segredo em claro — mostrado UMA vez após a criação (live) */}
+          {revealedKey && (
+            <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl space-y-2 animate-fadeIn">
+              <div className="flex items-center gap-1.5 text-emerald-800">
+                <CheckCircle className="w-4 h-4" />
+                <span className="text-[11px] font-bold">
+                  Chave "{revealedKey.name}" criada — copie agora, ela não será exibida novamente.
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 min-w-0 text-[11px] font-mono text-slate-800 bg-white border border-emerald-100 rounded-lg px-2.5 py-1.5 truncate select-all">
+                  {revealedKey.key}
+                </code>
+                <button
+                  onClick={handleCopyRevealed}
+                  className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-bold cursor-pointer flex items-center gap-1 shrink-0"
+                >
+                  {keyCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  {keyCopied ? 'Copiado' : 'Copiar'}
+                </button>
+                <button
+                  onClick={() => setRevealedKey(null)}
+                  className="p-1.5 text-emerald-700 hover:bg-emerald-100 rounded-lg cursor-pointer shrink-0"
+                  title="Ocultar"
+                >
+                  <span className="text-xs font-bold">×</span>
+                </button>
+              </div>
+            </div>
           )}
 
           {/* Keys list */}

@@ -29,6 +29,8 @@ import {
   Tooltip,
 } from 'recharts';
 import { useLive } from '@/lib/live';
+import { useSession } from '@/lib/session';
+import { api } from '@/lib/api';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Tipos
@@ -441,7 +443,9 @@ export default function IntegrationsView(): React.ReactElement {
   const inbound: InboundIntegration[] =
     inboundLive.data && inboundLive.data.length > 0 ? adaptInbound(inboundLive.data) : INBOUND;
 
+  const { isLive } = useSession();
   const [outbound, setOutbound] = useState<OutboundIntegration[]>(OUTBOUND_SEED);
+  const [outError, setOutError] = useState<string | null>(null);
 
   // Saída: quando o live chega, hidrata o estado (preserva o toggle otimista local).
   useEffect(() => {
@@ -451,10 +455,23 @@ export default function IntegrationsView(): React.ReactElement {
     }
   }, [outboundLive.data]);
 
+  // Toggle — demo: só local; live: PUT /v1/integrations-out/:platform { enabled }.
+  // Hoje isso falha-fechado sem INTEGRATIONS_ENCRYPTION_KEY → revertemos e avisamos.
   const toggleOutbound = (id: string): void => {
-    setOutbound((prev) =>
-      prev.map((o) => (o.id === id ? { ...o, enabled: !o.enabled } : o)),
-    );
+    const next = !(outbound.find((o) => o.id === id)?.enabled ?? false);
+    setOutbound((prev) => prev.map((o) => (o.id === id ? { ...o, enabled: next } : o)));
+    if (!isLive) return;
+    setOutError(null);
+    void api(`/v1/integrations-out/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled: next }),
+    }).catch(() => {
+      setOutbound((prev) => prev.map((o) => (o.id === id ? { ...o, enabled: !next } : o)));
+      setOutError(
+        'Não foi possível atualizar a integração de saída. Configure a chave de criptografia (INTEGRATIONS_ENCRYPTION_KEY) no servidor.',
+      );
+      setTimeout(() => setOutError(null), 5000);
+    });
   };
 
   // KPIs derivados (reagem aos toggles) ──────────────────────────────────────
@@ -810,6 +827,13 @@ export default function IntegrationsView(): React.ReactElement {
             </p>
           </div>
         </div>
+
+        {outError && (
+          <div className="mb-3 p-3 bg-rose-50 border border-rose-100 rounded-xl flex items-start gap-2 text-[11px] text-rose-700">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
+            <span>{outError}</span>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           {outbound.map((o) => {
