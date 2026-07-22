@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Funnel, FunnelAlert } from '@truvo/db';
+import { NotificationService } from '../notifications/notifications.service';
 
 /**
  * Resultado da avaliação de um alerta de funil (conversão < X%).
@@ -38,6 +39,8 @@ export interface FunnelAlertNotification {
 export class FunnelAlertsService {
   private readonly logger = new Logger(FunnelAlertsService.name);
 
+  constructor(private readonly notifications: NotificationService) {}
+
   /** Avalia se a conversão observada rompe o limiar configurado no funil. */
   evaluate(funnel: Pick<Funnel, 'id' | 'workspaceId' | 'alert'>, observedConversionRate: number): AlertEvaluation {
     const alert: FunnelAlert = funnel.alert ?? { enabled: false, min_overall_conversion_rate: 0 };
@@ -55,11 +58,8 @@ export class FunnelAlertsService {
   }
 
   /**
-   * Dispara a notificação de um alerta rompido. Hoje: monta o payload e loga.
-   *
-   * TODO(live): integrar com o M12 (Notificações & Alertas) — publicar em
-   * `truvo.notifications` (Kafka) ou chamar NotificationsService quando existir.
-   * O M12 resolve destinatários por `channels` e aplica de-dup/rate-limit.
+   * Dispara a notificação de um alerta rompido pelo M12 (NotificationService):
+   * resolve regra/preferências/canais + dedup por funil e entrega in-app/email/Slack.
    */
   async dispatch(evaluation: AlertEvaluation, funnelName: string): Promise<FunnelAlertNotification | null> {
     if (!evaluation.breached) return null;
@@ -75,10 +75,16 @@ export class FunnelAlertsService {
       triggered_at: new Date().toISOString(),
     };
 
-    // TODO(live): substituir por publish no M12. Por ora, apenas registramos.
-    this.logger.warn(
-      `ALERTA funil ${notification.funnel_id}: conversão ${notification.observed_conversion_rate}% < ${notification.threshold}% (ws=${notification.workspace_id})`,
-    );
+    await this.notifications.dispatch(evaluation.workspace_id, 'funnel.conversion_below_threshold', {
+      data: {
+        funnel_id: notification.funnel_id,
+        funnel_name: notification.funnel_name,
+        threshold: notification.threshold,
+        observed_conversion_rate: notification.observed_conversion_rate,
+      },
+      dedupId: notification.funnel_id,
+      channels: evaluation.channels,
+    });
     return notification;
   }
 }

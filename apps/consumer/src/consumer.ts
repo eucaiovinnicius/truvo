@@ -7,6 +7,7 @@ import { ClickHouseBatcher, buildRow } from './clickhouse-batch';
 import { incrementMonthlyCounter } from './billing-counter';
 import { getRedis } from './redis';
 import { identifyRequestFromEvent } from './identity/event-hook';
+import { conversionForwardFromEvent } from './conversion-hook';
 
 const TOPIC = process.env.KAFKA_EVENTS_TOPIC ?? 'truvo.events';
 const GROUP_ID = process.env.CONSUMER_GROUP_ID ?? 'truvo-consumer';
@@ -113,9 +114,11 @@ export class EventPipelineConsumer {
       await incrementMonthlyCounter(event);
     }
 
-    // 8. wiring M2×M8: constrói o grafo de identidade a partir do evento (só não-bot).
+    // 8/9. wirings server-to-server (só não-bot, best-effort, em paralelo):
+    //   M2×M8 → constrói o grafo de identidade a partir do evento;
+    //   M2×M9 → encaminha conversões (purchase/lead/…) p/ as plataformas habilitadas.
     if (!isBot) {
-      await forwardIdentity(event);
+      await Promise.all([forwardIdentity(event), forwardConversion(event)]);
     }
   }
 
@@ -140,13 +143,32 @@ async function forwardIdentity(event: TruvoEvent): Promise<void> {
   if (!INTERNAL_API_SECRET) return;
   const req = identifyRequestFromEvent(event);
   if (!req) return;
+  await postInternal('/v1/internal/identity/identify', req);
+}
+
+/**
+ * Fecha o wiring M2×M9: em cada conversão (purchase/lead/…), encaminha para o
+ * endpoint interno que envia server-side às plataformas habilitadas (Meta CAPI /
+ * Google / TikTok / HubSpot). Best-effort — nunca derruba o pipeline; o forwarder
+ * é fail-closed (sem plataforma/consentimento/match key não envia). Sem
+ * `INTERNAL_API_SECRET`, o forward fica desligado (dev).
+ */
+async function forwardConversion(event: TruvoEvent): Promise<void> {
+  if (!INTERNAL_API_SECRET) return;
+  const input = conversionForwardFromEvent(event);
+  if (!input) return;
+  await postInternal('/v1/internal/conversions/forward', input);
+}
+
+/** POST server-to-server best-effort (timeout 4s, segredo interno). Nunca lança. */
+async function postInternal(path: string, body: unknown): Promise<void> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 4000);
-    await fetch(`${INTERNAL_API_URL}/v1/internal/identity/identify`, {
+    await fetch(`${INTERNAL_API_URL}${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-internal-secret': INTERNAL_API_SECRET },
-      body: JSON.stringify(req),
+      headers: { 'content-type': 'application/json', 'x-internal-secret': INTERNAL_API_SECRET as string },
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
     clearTimeout(timer);

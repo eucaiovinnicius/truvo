@@ -7,6 +7,7 @@ import {
   type CreativePlatform,
 } from '@truvo/db';
 import { DRIZZLE, type Database } from '../auth/database.provider';
+import { NotificationService } from '../notifications/notifications.service';
 import { queryDailySeries, type DailyKeyedPoint } from './creatives-ch';
 import {
   ALERT_THRESHOLDS,
@@ -55,7 +56,10 @@ interface AdSeries {
 export class CreativeAlertsService {
   private readonly logger = new Logger(CreativeAlertsService.name);
 
-  constructor(@Inject(DRIZZLE) private readonly db: Database) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Database,
+    private readonly notifications: NotificationService,
+  ) {}
 
   /**
    * Avalia os alertas do workspace na janela dada. Fadiga precisa de 2 janelas
@@ -79,8 +83,8 @@ export class CreativeAlertsService {
     if (dto.persist !== false && alerts.length > 0) {
       await this.persist(workspaceId, alerts);
     }
-    // Roteia cada alerta pelo M12 (hoje: log + ponto de integração).
-    for (const a of alerts) this.dispatch(workspaceId, a);
+    // Roteia cada alerta pelo M12 (NotificationService).
+    await Promise.all(alerts.map((a) => this.dispatch(workspaceId, a)));
 
     return {
       range: { start: range.startDay, end: range.endDay },
@@ -277,17 +281,25 @@ export class CreativeAlertsService {
   }
 
   /**
-   * Roteia o alerta pelo M12. HOJE: apenas loga e marca o ponto de integração.
-   *
-   * TODO(live): publicar em `truvo.notifications` (Kafka) ou chamar o
-   * NotificationsService (M12) quando existir. O M12 resolve destinatários por
-   * regra/preferência de canal, aplica de-dup/rate-limit e entrega (email/Slack/
-   * in-app). MESMO ponto de integração do M5 (FunnelAlertsService) e do M14.
+   * Roteia o alerta pelo M12 (NotificationService): resolve regra/preferências/
+   * canais + dedup por `dedup_key` e entrega in-app/email/Slack. O `type` mapeia p/
+   * o registry ('creative.fatigue'/'creative.discrepancy'/…).
    */
-  private dispatch(workspaceId: string, alert: CreativeAlert): void {
-    this.logger.warn(
-      `ALERTA criativo [${alert.type}] ${alert.platform}/${alert.ad_id} (ws=${workspaceId}): ${alert.message}`,
-    );
+  private async dispatch(workspaceId: string, alert: CreativeAlert): Promise<void> {
+    const type = String(alert.type).startsWith('creative.')
+      ? String(alert.type)
+      : `creative.${alert.type}`;
+    await this.notifications.dispatch(workspaceId, type, {
+      data: {
+        creative_name: alert.ad_id,
+        ad_id: alert.ad_id,
+        platform: alert.platform,
+        ...alert.details,
+      },
+      body: alert.message,
+      severity: alert.severity,
+      dedupId: alert.dedup_key,
+    });
   }
 }
 

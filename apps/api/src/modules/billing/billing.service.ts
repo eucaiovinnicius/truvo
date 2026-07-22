@@ -15,6 +15,7 @@ import {
   type SubscriptionStatus,
 } from '@truvo/db';
 import { DRIZZLE, type Database } from '../auth/database.provider';
+import { NotificationService } from '../notifications/notifications.service';
 import { getStripe, isStripeConfigured } from './infra';
 import { UsageService } from './usage.service';
 import { featuresForPlan } from './feature-gates';
@@ -48,6 +49,7 @@ export class BillingService {
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly usage: UsageService,
+    private readonly notifications: NotificationService,
   ) {}
 
   // ─────────────────────────────── catálogo ────────────────────────────────
@@ -391,18 +393,24 @@ export class BillingService {
   }
 
   /**
-   * Emite alerta de billing. TODO(live): rotear pelo M12 (NotificationsService —
-   * in-app/email/Slack). Hoje apenas loga (wiring do M12 na integração).
+   * Emite alerta de billing pelo M12 (NotificationService): in-app/email/Slack com
+   * dedup por tipo. Best-effort — a falha de entrega não derruba o fluxo de billing
+   * (o webhook do Stripe precisa responder 2xx). Sem workspace resolvido, só loga.
    */
   private emitBillingAlert(
     type: 'payment_failed' | 'approaching_limit',
     workspaceId: string | undefined,
     meta?: Record<string, unknown>,
   ): void {
-    // TODO(live): this.notifications.enqueue({ workspaceId, kind: `billing.${type}`, meta })
-    this.logger.warn(
-      `[billing-alert] ${type} ws=${workspaceId ?? '?'} ${meta ? JSON.stringify(meta) : ''}`,
-    );
+    if (!workspaceId) {
+      this.logger.warn(`[billing-alert] ${type} sem workspace resolvido ${meta ? JSON.stringify(meta) : ''}`);
+      return;
+    }
+    const alertType =
+      type === 'payment_failed' ? 'billing.payment_failed' : 'billing.usage_approaching_limit';
+    this.notifications
+      .dispatch(workspaceId, alertType, { data: meta ?? {}, dedupId: type })
+      .catch((e) => this.logger.warn(`falha ao despachar alerta billing ${type}: ${(e as Error).message}`));
   }
 }
 

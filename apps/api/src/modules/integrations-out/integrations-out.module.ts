@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
+import { InternalAuthGuard } from '../identity/guards/internal-auth.guard';
 import { IntegrationsOutController } from './integrations-out.controller';
+import { ConversionsInternalController } from './conversions-internal.controller';
 import { IntegrationOutConfigService } from './config.service';
 import { ConversionForwarderService } from './conversion-forwarder.service';
 import { databaseProvider } from './integrations-out.providers';
@@ -34,11 +36,12 @@ import {
  *     (// TODO(live) — ver openTODOs).
  */
 @Module({
-  controllers: [IntegrationsOutController],
+  controllers: [IntegrationsOutController, ConversionsInternalController],
   providers: [
     databaseProvider,
     IntegrationOutConfigService,
     ConversionForwarderService,
+    InternalAuthGuard,
     MetaCapiClient,
     GoogleEnhancedClient,
     TikTokEventsClient,

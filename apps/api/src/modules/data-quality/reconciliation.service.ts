@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import { dataQualitySettings, reconciliationAlerts } from '@truvo/db';
 import { getClickHouse, getDb } from '../events/infra';
+import { NotificationService } from '../notifications/notifications.service';
 import { GatewayMetricsService } from './gateway-metrics.service';
 import {
   CH_RECONCILIATION_TABLE,
@@ -73,7 +74,10 @@ interface TruvoDaily {
 export class ReconciliationService {
   private readonly logger = new Logger(ReconciliationService.name);
 
-  constructor(private readonly gateway: GatewayMetricsService) {}
+  constructor(
+    private readonly gateway: GatewayMetricsService,
+    private readonly notifications: NotificationService,
+  ) {}
 
   /** GET /v1/data-quality/reconciliation — recomputa (ao vivo), persiste e devolve. */
   async getReconciliation(
@@ -256,9 +260,19 @@ export class ReconciliationService {
           )}`,
         );
       }
+
+      // Entrega pelo M12 (NotificationService): dedup por dia + regra/preferências.
+      await this.notifications.dispatch(workspaceId, 'quality.reconciliation_gap', {
+        data: {
+          gap: d.gap,
+          threshold,
+          day: d.day,
+          truvo_revenue: d.truvo_revenue,
+          gateway_revenue: d.gateway_revenue,
+        },
+        dedupId: d.day,
+      });
     }
-    // TODO(live): integração M12 — o M12 varre reconciliation_alerts.status='open'
-    // e dispara e-mail/Slack/in-app, avançando para 'notified'. Aqui só registramos.
   }
 
   /* ─────────────────────────────── settings ─────────────────────────────── */
