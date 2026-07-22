@@ -102,12 +102,13 @@ WHERE is_bot = 0;                                                       -- regra
 -- ---------------------------------------------------------------------------
 
 -- ---------------------------------------------------------------------------
--- TODO(live) — QUEM POPULA `touchpoints`:
---   Hoje a matéria-prima da atribuição depende do CONSUMER do M2 gravar cada toque
---   e do STITCHING do M8 (apps/consumer/src/identity) reescrever `canonical_id`
---   após merges (ALTER ... UPDATE; ver 05-identity.sql). Enquanto esse pipeline não
---   estiver ligado em produção, `touchpoints` pode estar vazia e os relatórios do M7
---   retornam zeros — a LEITURA já está pronta e correta (este arquivo + o serviço).
+-- QUEM POPULA `touchpoints` (RESOLVIDO):
+--   A MV `touchpoints_mv` (05-identity.sql) grava um toque por session_start
+--   (aquisição) e por conversão (order_id != '') a cada INSERT em `events` — o
+--   `canonical_id` provisório segue o convênio do M8, e o STITCHING do M8
+--   (apps/consumer/src/identity) reescreve `canonical_id` após merges (ALTER ...
+--   UPDATE; ver 05-identity.sql). Backfill de histórico: INSERT INTO touchpoints
+--   SELECT (mesmo predicado). A LEITURA (este arquivo + o serviço) já era correta.
 --
 -- TODO(live) — HIERARQUIA Canal→Campanha→Conjunto→Anúncio (campaign-breakdown):
 --   `touchpoints` carrega utm_source/medium/campaign, mas NÃO utm_content/utm_term.

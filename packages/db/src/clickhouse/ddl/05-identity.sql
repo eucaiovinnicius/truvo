@@ -76,3 +76,45 @@ SETTINGS index_granularity = 8192;
 -- canonical p/ eventos históricos é feita por JOIN em identity_links na leitura
 -- (mais barato que reescrever bilhões de linhas). Ver notes do M8.
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- touchpoints_mv — POPULA `touchpoints` a partir de `events` (fecha o TODO(live)
+-- do 08-attribution.sql: "QUEM POPULA touchpoints"). Um TOQUE é emitido para:
+--   · a ENTRADA de sessão (event_name = 'session_start') → toque de AQUISIÇÃO, que
+--     carrega o canal/UTM/click daquela visita; e
+--   · toda CONVERSÃO (order_id != '') → toque de CONVERSÃO, que carrega order_id +
+--     value para o M7 detectar a conversão e repartir crédito.
+-- Só emite quando há PESSOA (user_id ou anonymous_id). O `canonical_id` provisório
+-- segue o MESMO convênio do M8 (usr_<user_id> > anon_<anonymous_id>, ver
+-- identity.service.ts) — o stitching retroativo (worker M8) reescreve `canonical_id`
+-- após merges. `channel` fica '' e é resolvido na LEITURA (CHANNEL_RESOLVE_SQL /
+-- v_attribution_touchpoints, 08-attribution.sql) — fonte única do rótulo de canal.
+-- `is_bot` é preservado na linha (auditável); o M7 filtra is_bot = 0 na leitura.
+--
+-- CONVENÇÃO: um toque por sessão (session_start), padrão de mercado (GA-like);
+-- cliques mid-sessão não viram toque próprio. Se um cliente não emitir session_start,
+-- adicionar aqui a 1ª página com sinal de marketing. // TODO(live): projetar também
+-- utm_content/utm_term p/ o breakdown do M7 chegar a conjunto/anúncio.
+-- ---------------------------------------------------------------------------
+CREATE MATERIALIZED VIEW IF NOT EXISTS touchpoints_mv TO touchpoints AS
+SELECT
+    workspace_id,
+    multiIf(user_id != '',      concat('usr_', user_id),
+            anonymous_id != '', concat('anon_', anonymous_id),
+            '')                                             AS canonical_id,
+    timestamp                                               AS ts,
+    utm_source,
+    utm_medium,
+    utm_campaign,
+    click_id,
+    order_id,
+    source,
+    event_id,
+    value,
+    is_bot
+FROM events
+WHERE (user_id != '' OR anonymous_id != '')
+  AND (event_name = 'session_start' OR order_id != '');
+-- Leitura: o serviço do M7 agrupa por canonical_id, ordena por ts e reparte crédito
+-- (last_click/linear/…); backfill de eventos históricos: INSERT INTO touchpoints
+-- SELECT (mesmo predicado) — ReplacingMergeTree(_version) dedup por event_id.
