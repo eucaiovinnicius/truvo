@@ -2,6 +2,7 @@ import {
   BadRequestException,
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   Logger,
   UnauthorizedException,
@@ -16,9 +17,8 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
  * A `SUPABASE_SERVICE_ROLE_KEY` é usada APENAS aqui no backend (regra 3 — nunca
  * vai ao frontend). Anexa `workspaceId`/`userId` ao request.
  *
- * // TODO(live): validar a associação usuário↔workspace contra `workspace_members`
- * (M1). Enquanto o M1 não expõe a tabela, confiamos no header já autenticado —
- * este é o único ponto que precisa ser fechado antes de produção.
+ * Enforcement multi-tenant (regra 1): valida a associação usuário↔workspace contra
+ * `workspace_members` (service-role contorna RLS) — sem membership → 403.
  */
 @Injectable()
 export class WorkspaceAuthGuard implements CanActivate {
@@ -69,6 +69,22 @@ export class WorkspaceAuthGuard implements CanActivate {
     const workspaceId = req.headers['x-workspace-id'];
     if (!workspaceId || typeof workspaceId !== 'string') {
       throw new BadRequestException('header x-workspace-id obrigatório');
+    }
+
+    // Enforcement multi-tenant (regra 1): confirma que o usuário é MEMBRO do
+    // workspace do header (service-role contorna RLS). Mesmo critério do M1.
+    const { data: members, error: memErr } = await this.getClient()
+      .from('workspace_members')
+      .select('role')
+      .eq('workspace_id', workspaceId)
+      .eq('user_id', userId)
+      .limit(1);
+    if (memErr) {
+      this.logger.error(`falha ao checar membership: ${memErr.message}`);
+      throw new UnauthorizedException('falha na autorização');
+    }
+    if (!members || members.length === 0) {
+      throw new ForbiddenException('Sem acesso a este workspace');
     }
 
     req.userId = userId;

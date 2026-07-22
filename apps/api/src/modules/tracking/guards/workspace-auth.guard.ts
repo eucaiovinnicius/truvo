@@ -4,6 +4,7 @@ import {
   Injectable,
   UnauthorizedException,
   BadRequestException,
+  ForbiddenException,
   Logger,
 } from '@nestjs/common';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
@@ -17,8 +18,9 @@ import type { WorkspaceContext } from './current-workspace.decorator';
  *  - Regra 1: o workspace resolvido é usado em TODA query do serviço (filtro obrigatório).
  *  - Regra 3: usa a SERVICE_ROLE apenas no backend; jamais exposta ao front.
  *
- * TODO(live): validar a associação usuário↔workspace contra `workspace_members` (M1)
- *             assim que o schema de auth estiver no barrel de @truvo/db.
+ * Enforcement multi-tenant (regra 1): valida a associação usuário↔workspace contra
+ * `workspace_members` (service-role contorna RLS) — sem membership → 403. O escape
+ * hatch TRUVO_DEV_AUTH_BYPASS só vale fora de produção (NODE_ENV != production).
  */
 @Injectable()
 export class WorkspaceAuthGuard implements CanActivate {
@@ -52,8 +54,8 @@ export class WorkspaceAuthGuard implements CanActivate {
     }
 
     // Escape hatch de dev (OFF por padrão): permite testar sem Supabase no ar.
-    // TODO(live): remover/duplo-checar antes de produção.
-    if (process.env.TRUVO_DEV_AUTH_BYPASS === '1') {
+    // Fail-safe: NUNCA vale em produção, mesmo que a env vaze ligada.
+    if (process.env.TRUVO_DEV_AUTH_BYPASS === '1' && process.env.NODE_ENV !== 'production') {
       this.logger.warn('TRUVO_DEV_AUTH_BYPASS=1 — pulando validação de JWT (apenas dev)');
       req.workspace = { id: workspaceId, userId: 'dev-bypass' };
       return true;
@@ -72,7 +74,23 @@ export class WorkspaceAuthGuard implements CanActivate {
       throw new UnauthorizedException('token inválido ou expirado');
     }
 
-    // TODO(live): checar membership em workspace_members (M1) antes de liberar.
+    // Enforcement multi-tenant (regra 1): o usuário autenticado precisa ser MEMBRO
+    // do workspace do header — senão qualquer usuário logado veria outro tenant.
+    // Lê via service-role (contorna RLS); mesmo critério do WorkspaceGuard (M1).
+    const { data: members, error: memErr } = await supabase
+      .from('workspace_members')
+      .select('role')
+      .eq('workspace_id', workspaceId)
+      .eq('user_id', data.user.id)
+      .limit(1);
+    if (memErr) {
+      this.logger.error(`falha ao checar membership: ${memErr.message}`);
+      throw new UnauthorizedException('falha na autorização');
+    }
+    if (!members || members.length === 0) {
+      throw new ForbiddenException('Sem acesso a este workspace');
+    }
+
     req.workspace = { id: workspaceId, userId: data.user.id };
     return true;
   }
