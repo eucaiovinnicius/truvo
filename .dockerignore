@@ -1,0 +1,39 @@
+# Contexto de build = raiz do monorepo (build com: docker build -f apps/<app>/Dockerfile .)
+# Tudo aqui é gerado/rebuildado DENTRO da imagem — não copie do host.
+
+# deps e artefatos de build (rebuildados no builder)
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+**/*.tsbuildinfo
+out
+build
+
+# git / ci
+.git
+.gitignore
+.github
+
+# segredos e envs locais (NUNCA na imagem)
+.env
+.env.*
+**/.env
+**/.env.*
+
+# docker
+**/Dockerfile
+.dockerignore
+
+# infra local (não entra nas imagens dos apps)
+infra
+
+# docs / referência (pesado, desnecessário p/ build)
+_reference
+*.md
+**/*.md
+
+# logs / os
+**/*.log
+.DS_Store
+Thumbs.db
