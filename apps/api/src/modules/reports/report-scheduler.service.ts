@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nest
 import { and, eq, isNotNull, lte } from 'drizzle-orm';
 import { reports, type Report } from '@truvo/db';
 import { DRIZZLE, type Database } from '../auth/database.provider';
+import { withLeaderLock } from '../../common/leader-lock';
 import { ReportsService } from './reports.service';
 import { schedulerEnabled, schedulerScanMs } from './reports.constants';
 
@@ -14,10 +15,11 @@ const BATCH_SIZE = 25;
  * o snapshot e entrega por email). Após rodar, `runReport` já recomputa `next_run_at`.
  *
  * ESTRUTURA (segue o padrão do worker de retry do M4): setInterval in-process, ligado só
- * quando `REPORTS_SCHEDULER_ENABLED=1` (default OFF).
- * // TODO(live): em produção, com múltiplas réplicas da API, mover para um worker dedicado
- *    (apps/consumer) ou um agendador durável (cron/BullMQ/Kafka delay) para evitar disparo
- *    duplicado; adicionar lock por relatório (SELECT ... FOR UPDATE SKIP LOCKED) ao claim.
+ * quando `REPORTS_SCHEDULER_ENABLED=1` (default OFF). Cada varredura roda atrás de um
+ * LEADER-LOCK Redis (withLeaderLock) — com N réplicas da API, só uma varre por tick,
+ * evitando envio duplicado de relatórios. // TODO(live): claim por relatório (SELECT ...
+ * FOR UPDATE SKIP LOCKED) permitiria paralelizar entre réplicas; o lock aqui já garante
+ * a corretude (uma varredura por vez).
  */
 @Injectable()
 export class ReportSchedulerService implements OnModuleInit, OnModuleDestroy {
@@ -36,9 +38,16 @@ export class ReportSchedulerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     const ms = schedulerScanMs();
-    this.timer = setInterval(() => void this.tick(), ms);
+    this.timer = setInterval(() => void this.scheduledTick(), ms);
     this.timer.unref?.();
     this.logger.log(`scheduler de relatórios ativo (scan a cada ${ms}ms)`);
+  }
+
+  /** Varredura agendada protegida por leader-lock: em N réplicas, só uma varre por tick. */
+  private async scheduledTick(): Promise<void> {
+    await withLeaderLock('truvo:cron:reports-scheduler', 5 * 60_000, async () => {
+      await this.tick();
+    });
   }
 
   onModuleDestroy(): void {

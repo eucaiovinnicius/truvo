@@ -31,6 +31,6 @@ import { FeatureGuard } from './feature.guard';
 @Module({
   controllers: [BillingController, BillingWebhookController],
   providers: [BillingService, UsageService, FeatureAccessService, FeatureGuard],
-  exports: [FeatureAccessService, FeatureGuard, UsageService],
+  exports: [FeatureAccessService, FeatureGuard, UsageService, BillingService],
 })
 export class BillingModule {}

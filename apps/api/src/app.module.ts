@@ -17,6 +17,7 @@ import { CreativesModule } from './modules/creatives/creatives.module';
 import { AiModule } from './modules/ai/ai.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { BillingModule } from './modules/billing/billing.module';
+import { SchedulerModule } from './modules/scheduler/scheduler.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { BillingModule } from './modules/billing/billing.module';
     AiModule, // M17
     ReportsModule, // M13
     BillingModule, // M11
+    SchedulerModule, // crons (leader-lock) — sweeps de billing/alertas/reconc/ads-sync
   ],
 })
 export class AppModule {}
