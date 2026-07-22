@@ -52,12 +52,15 @@ export async function runRetroStitch(ch: ClickHouseClient, job: StitchJob): Prom
     });
   }
 
-  // 2..4 — TODO(live): recompute de funis/atribuição/perfil do canonical vencedor.
-  //   M5 funnel recompute:  reprocessar coortes que contêm {canonical_id}.
-  //   M7 attribution:        reconstruir conversion paths do {canonical_id}.
-  //   M15 user_profiles:     recalcular a projeção consolidada do {canonical_id}.
-  // Estruturado aqui de propósito: quando M5/M7/M15 estiverem materializados,
-  // plugar as chamadas neste ponto — o job já carrega tudo que precisam.
+  // 2..3 — SEM AÇÃO NECESSÁRIA: M5 (funis) e M7 (atribuição) NÃO são materializados —
+  //   leem `touchpoints`/`events` AO VIVO na consulta. Como o passo 1 já reescreveu o
+  //   canonical_id em `touchpoints`, qualquer leitura de funil/atribuição posterior já
+  //   reflete o merge automaticamente. Nada a recomputar aqui.
+  // 4 — M15 (user_profiles): a projeção é LAZY (recomputa do ClickHouse por actor
+  //   quando o `computed_at` passa do TTL, ≤300s). Após o merge, a próxima leitura do
+  //   Customer 360 do vencedor recomputa sozinha. // TODO(live): invalidação PROATIVA
+  //   (zerar computed_at do vencedor) exigiria um endpoint interno — o consumer não
+  //   escreve Postgres de propósito; hoje o TTL cobre a defasagem.
 
   return {
     workspace_id: job.workspace_id,

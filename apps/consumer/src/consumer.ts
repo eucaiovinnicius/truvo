@@ -8,6 +8,7 @@ import { incrementMonthlyCounter } from './billing-counter';
 import { getRedis } from './redis';
 import { identifyRequestFromEvent } from './identity/event-hook';
 import { conversionForwardFromEvent } from './conversion-hook';
+import { deadLetter } from './dlq';
 
 const TOPIC = process.env.KAFKA_EVENTS_TOPIC ?? 'truvo.events';
 const GROUP_ID = process.env.CONSUMER_GROUP_ID ?? 'truvo-consumer';
@@ -73,15 +74,17 @@ export class EventPipelineConsumer {
     try {
       const parsed = eventSchema.safeParse(JSON.parse(rawValue));
       if (!parsed.success) {
-        // TODO(live): mandar p/ dead-letter topic com o erro de validação.
+        // Dead-letter em vez de perda silenciosa (inspeção/replay depois).
+        await deadLetter(`schema_invalido: ${parsed.error.issues[0]?.message ?? 'inválido'}`, rawValue);
         // eslint-disable-next-line no-console
-        console.warn('[truvo/consumer] evento inválido descartado');
+        console.warn('[truvo/consumer] evento inválido → DLQ');
         return;
       }
       event = parsed.data;
     } catch {
+      await deadLetter('payload_nao_json', rawValue);
       // eslint-disable-next-line no-console
-      console.warn('[truvo/consumer] payload não-JSON descartado');
+      console.warn('[truvo/consumer] payload não-JSON → DLQ');
       return;
     }
 
