@@ -262,16 +262,26 @@ export class ReconciliationService {
       }
 
       // Entrega pelo M12 (NotificationService): dedup por dia + regra/preferências.
-      await this.notifications.dispatch(workspaceId, 'quality.reconciliation_gap', {
-        data: {
-          gap: d.gap,
-          threshold,
-          day: d.day,
-          truvo_revenue: d.truvo_revenue,
-          gateway_revenue: d.gateway_revenue,
-        },
-        dedupId: d.day,
-      });
+      // Best-effort: a entrega NUNCA pode derrubar o endpoint de reconciliação (que
+      // já computou e persistiu). Falha de notificação só loga.
+      try {
+        await this.notifications.dispatch(workspaceId, 'quality.reconciliation_gap', {
+          data: {
+            gap: d.gap,
+            threshold,
+            day: d.day,
+            truvo_revenue: d.truvo_revenue,
+            gateway_revenue: d.gateway_revenue,
+          },
+          dedupId: d.day,
+        });
+      } catch (err) {
+        this.logger.warn(
+          `dispatch de alerta de reconciliação falhou (ws=${workspaceId}, day=${d.day}): ${String(
+            (err as Error)?.message ?? err,
+          )}`,
+        );
+      }
     }
   }
 

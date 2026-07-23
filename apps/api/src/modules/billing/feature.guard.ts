@@ -85,7 +85,9 @@ export class FeatureGuard implements CanActivate {
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error(`[truvo/api] FeatureGuard resolvePlan fail-closed: ${(err as Error).message}`);
-      return defaultPlan();
+      // Erro de DB NUNCA pode conceder premium: usa o MENOR tier fixo (não o
+      // BILLING_DEFAULT_PLAN, que a config poderia ter elevado a agency/enterprise).
+      return 'starter';
     }
   }
 }

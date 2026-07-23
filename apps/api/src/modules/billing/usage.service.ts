@@ -24,9 +24,10 @@ export interface UsageSummary {
  * (`billing:events:{workspace_id}:{YYYYMM}`, incrementado só por eventos não-bot —
  * regra 11). Aqui apenas LEMOS esse contador; nunca reingerimos.
  *
- * Excedente → Stripe Usage Records (metered). É fail-closed: sem item metered
- * configurado na assinatura (STRIPE_PRICE_*_METERED / webhook), gravamos a linha
- * de auditoria em `usage_records` mas NÃO enviamos (TODO(live)).
+ * Excedente → Stripe Usage Records (metered). Quando HÁ item metered na assinatura
+ * (`stripe_usage_item_id`) e o Stripe está configurado, ENVIAMOS o Usage Record
+ * (createUsageRecord). Fail-closed: sem item metered/Stripe, só gravamos a linha de
+ * auditoria em `usage_records` — nunca cobramos o que não dá para cobrar.
  */
 @Injectable()
 export class UsageService {

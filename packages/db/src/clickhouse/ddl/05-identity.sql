@@ -25,10 +25,12 @@
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
--- touchpoints — ReplacingMergeTree. Idempotência final por `event_id`
--- (a mesma interação reprocessada colapsa p/ 1 linha, mantendo o maior _version).
--- A chave de ordenação (workspace_id, canonical_id, ts, event_id) inclui event_id
--- para preservar toques distintos no MESMO instante e ainda colapsar duplicatas.
+-- touchpoints — ReplacingMergeTree. Colapsa pela ORDER BY key INTEIRA
+-- (workspace_id, canonical_id, ts, event_id), mantendo o maior _version — NÃO por
+-- event_id sozinho. A mesma interação reprocessada com o MESMO canonical colapsa p/
+-- 1 linha; se o event_id reaparecer com canonical_id DIFERENTE (ex.: durante o
+-- re-stitch, que é feito por reinsert+delete justamente por isso), são 2 linhas até
+-- o delete remover a antiga. O event_id na chave preserva toques distintos no mesmo ts.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS touchpoints
 (

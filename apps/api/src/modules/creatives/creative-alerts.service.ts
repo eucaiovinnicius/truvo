@@ -289,17 +289,23 @@ export class CreativeAlertsService {
     const type = String(alert.type).startsWith('creative.')
       ? String(alert.type)
       : `creative.${alert.type}`;
-    await this.notifications.dispatch(workspaceId, type, {
-      data: {
-        creative_name: alert.ad_id,
-        ad_id: alert.ad_id,
-        platform: alert.platform,
-        ...alert.details,
-      },
-      body: alert.message,
-      severity: alert.severity,
-      dedupId: alert.dedup_key,
-    });
+    try {
+      await this.notifications.dispatch(workspaceId, type, {
+        data: {
+          creative_name: alert.ad_id,
+          ad_id: alert.ad_id,
+          platform: alert.platform,
+          ...alert.details,
+        },
+        body: alert.message,
+        severity: alert.severity,
+        dedupId: alert.dedup_key,
+      });
+    } catch (err) {
+      // best-effort: a entrega de notificação NUNCA pode derrubar o endpoint de
+      // alertas (que só lê/avalia). O alerta já foi calculado e persistido.
+      this.logger.warn(`dispatch de alerta de criativo falhou (ws=${workspaceId}): ${errMsg(err)}`);
+    }
   }
 }
 

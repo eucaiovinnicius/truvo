@@ -32,7 +32,9 @@ export const internalForwardSchema = z.object({
     ip: z.string().optional(),
     userAgent: z.string().optional(),
   }),
-  platforms: z.array(z.string()).optional(),
+  // Enum (não string livre): um valor fora do conjunto vira 400 explícito, em vez de
+  // filtrar zero plataformas e descartar a conversão silenciosamente.
+  platforms: z.array(z.enum(['meta_capi', 'google_enhanced', 'tiktok_events', 'hubspot'])).optional(),
 });
 
 export type InternalForwardDto = z.infer<typeof internalForwardSchema>;
