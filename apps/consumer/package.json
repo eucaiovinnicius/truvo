@@ -9,7 +9,7 @@
     "start:identity-worker": "node dist/identity/main.js",
     "dev:identity-worker": "tsx watch src/identity/main.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/bot-filter.test.ts src/conversion-hook.test.ts src/identity/event-hook.test.ts ../api/src/modules/attribution/attribution-models.test.ts"
+    "test": "tsx --test src/bot-filter.test.ts src/conversion-hook.test.ts src/identity/event-hook.test.ts ../api/src/modules/attribution/attribution-models.test.ts ../api/src/modules/billing/feature-gates.test.ts"
   },
   "dependencies": {
     "@truvo/db": "workspace:*",
