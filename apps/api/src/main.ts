@@ -4,12 +4,17 @@ import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
+import { validateEnv } from './common/env.validation';
 import { requestIdMiddleware } from './common/request-id.middleware';
 import { securityHeadersMiddleware } from './common/security-headers.middleware';
 import { httpLoggerMiddleware } from './common/http-logger.middleware';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
+
+  // Fail-fast: valida env essencial ANTES de tocar em qualquer dependência.
+  validateEnv();
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
 
   // Atrás de CDN/proxy (Railway/Cloudflare): confia no 1º hop para IP real
