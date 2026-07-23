@@ -59,3 +59,23 @@ export function getSupabase(): SupabaseClient {
   }
   return _supabase;
 }
+
+let _supabaseAdmin: SupabaseClient | undefined;
+/**
+ * Client Supabase com SERVICE_ROLE (contorna RLS) — SÓ no backend (regra 3), usado
+ * para conferir membership em `workspace_members` (o client anon não leria a tabela
+ * sob RLS). Cai para a anon se o service-role não estiver configurado.
+ */
+export function getSupabaseAdmin(): SupabaseClient {
+  if (!_supabaseAdmin) {
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_ANON_KEY;
+    if (!url || !key) {
+      throw new Error('SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY não configurados — ver .env.example');
+    }
+    _supabaseAdmin = createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  }
+  return _supabaseAdmin;
+}

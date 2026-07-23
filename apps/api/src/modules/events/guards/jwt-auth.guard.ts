@@ -1,5 +1,12 @@
-import { CanActivate, ExecutionContext, Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
-import { getSupabase } from '../infra';
+import {
+  CanActivate,
+  ExecutionContext,
+  Injectable,
+  UnauthorizedException,
+  BadRequestException,
+  ForbiddenException,
+} from '@nestjs/common';
+import { getSupabase, getSupabaseAdmin } from '../infra';
 import type { AuthenticatedRequest } from '../types';
 
 /**
@@ -10,8 +17,10 @@ import type { AuthenticatedRequest } from '../types';
  * ingestão (essa é X-Api-Key). O `workspace_id` é obrigatório e vira `req.workspaceId`
  * para que toda query filtre por ele (regra 1).
  *
- * TODO(live): confirmar que `user.id` é membro de `workspace_id` consultando
- * `workspace_members` do M1 (Auth) — pertence ao módulo de auth, que roda em paralelo.
+ * Enforcement multi-tenant (regra 1): confirma que `user.id` é MEMBRO de
+ * `workspace_id` em `workspace_members` (via service-role, contorna RLS) — senão
+ * qualquer usuário logado passaria o workspace de outro tenant e leria o stream de
+ * eventos / criaria API keys dele. Mesmo critério dos demais guards.
  */
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
@@ -42,6 +51,20 @@ export class JwtAuthGuard implements CanActivate {
       (req.header('x-workspace-id') ?? (req.query?.workspace_id as string | undefined))?.trim();
     if (!workspaceId) {
       throw new BadRequestException('Missing workspace context (x-workspace-id header or ?workspace_id=)');
+    }
+
+    // Enforcement multi-tenant: user precisa ser membro do workspace (contorna RLS).
+    const { data: members, error: memErr } = await getSupabaseAdmin()
+      .from('workspace_members')
+      .select('role')
+      .eq('workspace_id', workspaceId)
+      .eq('user_id', userId)
+      .limit(1);
+    if (memErr) {
+      throw new UnauthorizedException('Authorization check failed');
+    }
+    if (!members || members.length === 0) {
+      throw new ForbiddenException('No access to this workspace');
     }
 
     req.user = { id: userId, email };
