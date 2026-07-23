@@ -3,6 +3,8 @@ import { ZodValidationPipe } from '../../common/zod-validation.pipe';
 import { SupabaseAuthGuard } from '../auth/guards/supabase-auth.guard';
 import { WorkspaceGuard } from '../auth/guards/workspace.guard';
 import { CurrentUser, CurrentWorkspace, Roles } from '../auth/decorators';
+import { FeatureGuard } from '../billing/feature.guard';
+import { RequireFeature } from '../billing/feature.decorator';
 import type { AiInsight, AiJourneyRun, AiObjective, AiRecommendation } from '@truvo/db';
 import { AiRunsService } from './runs.service';
 import { AiConversationsService } from './conversations.service';
@@ -27,9 +29,15 @@ import {
  * `:id` (o WorkspaceGuard resolveria como workspace) — os params são `:runId` e
  * `:insightId`, então o workspace vem SEMPRE do header `x-workspace-id` (regra 1),
  * mesmo padrão do M7. Rotas de mutação exigem papel >= member (viewer é read-only).
+ *
+ * Gate de PLANO: todo o M17 é a feature `ai_journey` (Agency/Enterprise, M11) — o
+ * @RequireFeature no nível da classe + FeatureGuard negam com 402 fora do plano
+ * (role-gated: exige owner/admin). Independente da ANTHROPIC_API_KEY (que só liga a
+ * geração; sem ela as rotas de LLM já respondem 503).
  */
 @Controller('v1/ai')
-@UseGuards(SupabaseAuthGuard, WorkspaceGuard)
+@UseGuards(SupabaseAuthGuard, WorkspaceGuard, FeatureGuard)
+@RequireFeature('ai_journey')
 export class AiController {
   constructor(
     private readonly runs: AiRunsService,

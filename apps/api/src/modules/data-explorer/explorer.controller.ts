@@ -3,6 +3,8 @@ import { ZodValidationPipe } from '../../common/zod-validation.pipe';
 import { SupabaseAuthGuard } from '../auth/guards/supabase-auth.guard';
 import { WorkspaceGuard } from '../auth/guards/workspace.guard';
 import { CurrentUser, CurrentWorkspace, Roles } from '../auth/decorators';
+import { FeatureGuard } from '../billing/feature.guard';
+import { RequireFeature } from '../billing/feature.decorator';
 import { ExplorerService } from './explorer.service';
 import { CatalogService } from './catalog.service';
 import {
@@ -26,11 +28,13 @@ import {
  * resolvido é a ÚNICA fonte de `workspace_id` do compilador (regra 19); o corpo
  * (spec) não o controla.
  *
- * O modo SQL guardado exige role owner|admin (M1). // TODO(live): gate de PLANO
- * (feature `explorer_sql` — Agency/Enterprise, M11) antes de liberar /sql*.
+ * O modo SQL guardado exige role owner|admin (M1) E o plano liberar `explorer_sql`
+ * (Agency/Enterprise, M11) — via FeatureGuard + @RequireFeature nas rotas /sql*. As
+ * demais rotas (visual/catálogo) não têm @RequireFeature → passam (explorer_visual
+ * está em todos os planos).
  */
 @Controller('v1/explorer')
-@UseGuards(SupabaseAuthGuard, WorkspaceGuard)
+@UseGuards(SupabaseAuthGuard, WorkspaceGuard, FeatureGuard)
 export class ExplorerController {
   constructor(
     private readonly explorer: ExplorerService,
@@ -67,6 +71,7 @@ export class ExplorerController {
   @Post('sql/validate')
   @HttpCode(200)
   @Roles('owner', 'admin')
+  @RequireFeature('explorer_sql')
   validateSql(
     @CurrentWorkspace('id') workspaceId: string,
     @CurrentUser('id') userId: string,
@@ -79,6 +84,7 @@ export class ExplorerController {
   @Post('sql')
   @HttpCode(200)
   @Roles('owner', 'admin')
+  @RequireFeature('explorer_sql')
   runSql(
     @CurrentWorkspace('id') workspaceId: string,
     @CurrentUser('id') userId: string,
