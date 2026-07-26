@@ -11,8 +11,52 @@ import type { FunnelFiltersDto } from './dto/funnel.dto';
  * `is_bot = 0`. Os builders abaixo já injetam ambos — não há caminho sem eles.
  */
 
-/** Identidade da pessoa p/ o funil: user_id quando existe, senão anonymous_id. */
-const USER_KEY = "if(user_id != '', concat('u_', user_id), concat('a_', anonymous_id))";
+/**
+ * Identidade da pessoa p/ o funil, AGORA resolvendo merges (regra 1 / M8): um
+ * anônimo que depois se identifica deve contar como UMA pessoa no funil — senão o
+ * anônimo (steps 1-2) e o identificado (step 3) viram 2 pessoas e o funil marca
+ * drop-off falso. Como o grafo de identidade vive no Postgres (fora do ClickHouse),
+ * resolvemos aqui de forma NATIVA no CH: derivamos `anonymous_id → user_id` dos
+ * PRÓPRIOS eventos onde os dois co-ocorrem (todo evento pós-identificação carrega
+ * ambos), e reescrevemos a chave. Cobre o caso principal (anon→identificado); e-mail-
+ * -only/cross-device fica p/ o grafo completo. // TODO(live): quando houver um mapa de
+ * canonical materializado no CH (sincronizado do M8), trocar este JOIN por ele.
+ *
+ * `uk` já vem computado pela subquery `eventsCanonicalSource()`; os builders só
+ * agrupam por `uk`. A resolução prefere user_id do próprio evento; senão o user_id
+ * resolvido do mapa; senão o anonymous_id cru.
+ */
+const CANONICAL_UK =
+  "if(e.user_id != '', concat('u_', e.user_id), if(m.ruid != '', concat('u_', m.ruid), concat('a_', e.anonymous_id)))";
+
+/**
+ * Fonte de eventos com a coluna `uk` (identidade resolvida) já materializada por
+ * linha via LEFT JOIN a um mapa anonymous_id→user_id (último user_id por anon na
+ * janela). Expõe `e.*` para os builders referenciarem as colunas de evento sem
+ * qualificar. Filtros base (regras 1 e 11) aplicados no alias `e`.
+ */
+function eventsCanonicalSource(): string {
+  return `(
+          SELECT e.*, ${CANONICAL_UK} AS uk
+          FROM events AS e
+          LEFT JOIN (
+            SELECT anonymous_id, argMax(user_id, timestamp) AS ruid
+            FROM events
+            WHERE workspace_id = {ws:String}
+              AND is_bot = 0
+              AND anonymous_id != ''
+              AND user_id != ''
+              AND timestamp >= {start:DateTime64(3)}
+              AND timestamp <  {end:DateTime64(3)}
+            GROUP BY anonymous_id
+          ) AS m ON e.anonymous_id = m.anonymous_id
+          WHERE e.workspace_id = {ws:String}
+            AND e.is_bot = 0
+            AND (e.user_id != '' OR e.anonymous_id != '')
+            AND e.timestamp >= {start:DateTime64(3)}
+            AND e.timestamp <  {end:DateTime64(3)}
+      )`;
+}
 
 /** Formata Date → DateTime64 do ClickHouse ('YYYY-MM-DD HH:MM:SS.mmm', UTC). */
 export function toChDateTime(d: Date): string {
@@ -109,17 +153,6 @@ export function buildFilters(filters: FunnelFiltersDto): {
   return { flagSelects, outerWhere, params };
 }
 
-/** WHERE base do scan de eventos (regras 1 e 11 embutidas). */
-function baseEventsWhere(): string {
-  return [
-    'workspace_id = {ws:String}',
-    'is_bot = 0',
-    "(user_id != '' OR anonymous_id != '')",
-    'timestamp >= {start:DateTime64(3)}',
-    'timestamp <  {end:DateTime64(3)}',
-  ].join('\n            AND ');
-}
-
 export interface StatsSqlInput {
   workspaceId: string;
   steps: FunnelStep[];
@@ -140,7 +173,7 @@ export function buildStatsSql(input: StatsSqlInput): { sql: string; params: Reco
   const { flagSelects, outerWhere, params: filterParams } = buildFilters(filters);
 
   const innerSelect = [
-    `${USER_KEY} AS uk`,
+    'uk',
     `windowFunnel(${windowSeconds})(timestamp, ${exprs.join(', ')}) AS level`,
     ...exprs.map((e, i) => `minIf(timestamp, ${e}) AS t${i + 1}`),
     'sum(value) AS rev',
@@ -164,8 +197,7 @@ export function buildStatsSql(input: StatsSqlInput): { sql: string; params: Reco
     FROM (
         SELECT
           ${innerSelect}
-        FROM events
-        WHERE ${baseEventsWhere()}
+        FROM ${eventsCanonicalSource()}
         GROUP BY uk
     )${outerWhereSql}`;
 
@@ -183,7 +215,7 @@ export function buildBestSourceSql(input: StatsSqlInput): { sql: string; params:
   const { flagSelects, outerWhere, params: filterParams } = buildFilters(filters);
 
   const innerSelect = [
-    `${USER_KEY} AS uk`,
+    'uk',
     'argMin(utm_source, timestamp) AS first_source',
     `windowFunnel(${windowSeconds})(timestamp, ${exprs.join(', ')}) AS level`,
     ...flagSelects,
@@ -199,8 +231,7 @@ export function buildBestSourceSql(input: StatsSqlInput): { sql: string; params:
     FROM (
         SELECT
           ${innerSelect}
-        FROM events
-        WHERE ${baseEventsWhere()}
+        FROM ${eventsCanonicalSource()}
         GROUP BY uk
     )
     WHERE ${outerConds.join(' AND ')}
@@ -224,7 +255,7 @@ export function buildDropoffSql(input: DropoffSqlInput): { sql: string; params: 
   const { flagSelects, outerWhere, params: filterParams } = buildFilters(filters);
 
   const innerSelect = [
-    `${USER_KEY} AS uk`,
+    'uk',
     `windowFunnel(${windowSeconds})(timestamp, ${exprs.join(', ')}) AS level`,
     'any(anonymous_id) AS anonymous_id',
     'any(user_id) AS user_id',
@@ -242,8 +273,7 @@ export function buildDropoffSql(input: DropoffSqlInput): { sql: string; params: 
     FROM (
         SELECT
           ${innerSelect}
-        FROM events
-        WHERE ${baseEventsWhere()}
+        FROM ${eventsCanonicalSource()}
         GROUP BY uk
     )
     WHERE ${outerConds.join(' AND ')}
