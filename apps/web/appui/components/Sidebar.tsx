@@ -178,6 +178,17 @@ export default function Sidebar({
           <span className="text-[9px] font-semibold bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded-full font-mono shrink-0">LIVE</span>
         </div>
 
+        {/* Docs de integração (página pública /docs) */}
+        <a
+          href="/docs"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="w-full py-1.5 border border-slate-200 hover:border-indigo-300 bg-white hover:bg-indigo-50/60 rounded-lg text-[10px] font-bold text-slate-600 hover:text-indigo-700 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+        >
+          <HelpCircle className="w-3.5 h-3.5" />
+          <span>Docs de integração</span>
+        </a>
+
         {/* Logout Button */}
         <button
           onClick={onLogout}

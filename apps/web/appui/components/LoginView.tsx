@@ -385,6 +385,16 @@ export default function LoginView({ onLoginSuccess }: LoginViewProps) {
             </button>
           </div>
 
+          {/* Link público p/ a documentação de integração */}
+          <div className="mt-5 text-center">
+            <a
+              href="/docs"
+              className="text-[11px] font-mono text-slate-500 hover:text-teal-400 transition-colors"
+            >
+              Docs de integração →
+            </a>
+          </div>
+
         </div>
       </div>
     </div>

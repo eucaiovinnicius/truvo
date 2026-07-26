@@ -1,12 +1,14 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;600&display=swap');
 @import 'tailwindcss';
 
 /* Telas da marca ficam em /appui — garante que o v4 escaneie essas classes. */
 @source '../appui/**/*.{ts,tsx}';
 
+/* Fontes auto-hospedadas via next/font (layout.tsx) — SEM request ao Google em
+ * runtime (LGPD: não vaza IP do visitante) e sem @import remoto que trava o build
+ * offline. As variáveis --font-inter/--font-jbmono são injetadas no <html>. */
 @theme {
-  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jbmono), ui-monospace, SFMono-Regular, monospace;
 }
 
 /* ─── Scrollbar premium ─── */
