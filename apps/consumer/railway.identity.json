@@ -1,0 +1,13 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "//": "Worker de STITCHING de identidade (M8). MESMA imagem do consumer, 2º entrypoint. No Railway: crie um SEGUNDO serviço apontando o 'Config-as-code file path' para apps/consumer/railway.identity.json.",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "apps/consumer/Dockerfile"
+  },
+  "deploy": {
+    "startCommand": "node dist/identity/main.js",
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  }
+}
