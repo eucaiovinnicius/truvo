@@ -174,7 +174,7 @@ export function buildStatsSql(input: StatsSqlInput): { sql: string; params: Reco
 
   const innerSelect = [
     'uk',
-    `windowFunnel(${windowSeconds})(timestamp, ${exprs.join(', ')}) AS level`,
+    `windowFunnel(${windowSeconds})(toDateTime(timestamp), ${exprs.join(', ')}) AS level`,
     ...exprs.map((e, i) => `minIf(timestamp, ${e}) AS t${i + 1}`),
     'sum(value) AS rev',
     ...flagSelects,
@@ -217,7 +217,7 @@ export function buildBestSourceSql(input: StatsSqlInput): { sql: string; params:
   const innerSelect = [
     'uk',
     'argMin(utm_source, timestamp) AS first_source',
-    `windowFunnel(${windowSeconds})(timestamp, ${exprs.join(', ')}) AS level`,
+    `windowFunnel(${windowSeconds})(toDateTime(timestamp), ${exprs.join(', ')}) AS level`,
     ...flagSelects,
   ].join(',\n          ');
 
@@ -256,7 +256,7 @@ export function buildDropoffSql(input: DropoffSqlInput): { sql: string; params: 
 
   const innerSelect = [
     'uk',
-    `windowFunnel(${windowSeconds})(timestamp, ${exprs.join(', ')}) AS level`,
+    `windowFunnel(${windowSeconds})(toDateTime(timestamp), ${exprs.join(', ')}) AS level`,
     'any(anonymous_id) AS anonymous_id',
     'any(user_id) AS user_id',
     'max(timestamp) AS last_event_at',
