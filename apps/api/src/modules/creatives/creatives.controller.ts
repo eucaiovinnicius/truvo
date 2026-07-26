@@ -3,6 +3,8 @@ import { ZodValidationPipe } from '../../common/zod-validation.pipe';
 import { SupabaseAuthGuard } from '../auth/guards/supabase-auth.guard';
 import { WorkspaceGuard } from '../auth/guards/workspace.guard';
 import { CurrentWorkspace, Roles } from '../auth/decorators';
+import { FeatureGuard } from '../billing/feature.guard';
+import { RequireFeature } from '../billing/feature.decorator';
 import type { CreativePlatform } from '@truvo/db';
 import { CreativesService } from './creatives.service';
 import { CreativeAlertsService } from './creative-alerts.service';
@@ -37,7 +39,8 @@ import {
  * `:adId` para não serem capturadas como um id.
  */
 @Controller('v1/creatives')
-@UseGuards(SupabaseAuthGuard, WorkspaceGuard)
+@UseGuards(SupabaseAuthGuard, WorkspaceGuard, FeatureGuard)
+@RequireFeature('creative_analytics')
 export class CreativesController {
   constructor(
     private readonly creatives: CreativesService,

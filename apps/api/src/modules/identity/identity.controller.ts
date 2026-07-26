@@ -3,6 +3,8 @@ import { ZodValidationPipe } from '../../common/zod-validation.pipe';
 import { SupabaseAuthGuard } from '../auth/guards/supabase-auth.guard';
 import { WorkspaceGuard } from '../auth/guards/workspace.guard';
 import { CurrentWorkspace } from '../auth/decorators';
+import { FeatureGuard } from '../billing/feature.guard';
+import { RequireFeature } from '../billing/feature.decorator';
 import { IdentityService } from './identity.service';
 import {
   identifySchema,
@@ -22,7 +24,8 @@ import {
  * por `workspace_id` (regra 1) — identidades NUNCA cruzam workspaces.
  */
 @Controller('v1/identity')
-@UseGuards(SupabaseAuthGuard, WorkspaceGuard)
+@UseGuards(SupabaseAuthGuard, WorkspaceGuard, FeatureGuard)
+@RequireFeature('identity_resolution')
 export class IdentityController {
   constructor(private readonly identity: IdentityService) {}
 

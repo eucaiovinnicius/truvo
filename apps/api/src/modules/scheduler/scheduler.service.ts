@@ -36,6 +36,8 @@ interface Job {
 export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SchedulerService.name);
   private readonly timers: NodeJS.Timeout[] = [];
+  /** Jobs em execução NESTA réplica — evita reentrância mesmo se o lock expirar antes de o job terminar. */
+  private readonly running = new Set<string>();
 
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
@@ -69,11 +71,19 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     // TTL do lock = min(intervalo, 10min): cobre o job sem segurar além do necessário.
     const ttl = Math.min(job.intervalMs, 10 * 60_000);
     const tick = () => {
+      // Reentrância NESTA réplica: se o job anterior ainda roda (ex.: varredura mais
+      // longa que o intervalo), pula o tick — não sobrepõe execuções.
+      if (this.running.has(job.name)) {
+        this.logger.warn(`cron '${job.name}' ainda em execução — tick pulado`);
+        return;
+      }
+      this.running.add(job.name);
       void withLeaderLock(job.lockKey, ttl, job.run)
         .then((ran) => {
           if (ran) this.logger.log(`cron '${job.name}' executado (leader desta réplica)`);
         })
-        .catch((e) => this.logger.warn(`cron '${job.name}' falhou: ${(e as Error).message}`));
+        .catch((e) => this.logger.warn(`cron '${job.name}' falhou: ${(e as Error).message}`))
+        .finally(() => this.running.delete(job.name));
     };
     const timer = setInterval(tick, job.intervalMs);
     if (typeof timer.unref === 'function') timer.unref(); // não segura o processo
