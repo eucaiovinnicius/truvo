@@ -3,6 +3,7 @@ import { IdentityController } from './identity.controller';
 import { IdentityInternalController } from './identity-internal.controller';
 import { IdentityService } from './identity.service';
 import { InternalAuthGuard } from './guards/internal-auth.guard';
+import { CustomerContextModule } from '../customer-context/customer-context.module';
 
 /**
  * M8 — IDENTITY RESOLUTION + DEDUP avançado (lado da API).
@@ -16,6 +17,7 @@ import { InternalAuthGuard } from './guards/internal-auth.guard';
  * integração (app.module.ts não é editado aqui — contrato de arquivos).
  */
 @Module({
+  imports: [CustomerContextModule],
   controllers: [IdentityController, IdentityInternalController],
   providers: [IdentityService, InternalAuthGuard],
   exports: [IdentityService],

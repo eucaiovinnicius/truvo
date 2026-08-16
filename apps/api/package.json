@@ -7,7 +7,7 @@
     "dev": "nest start --watch",
     "start": "node dist/main.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/common/feature-flags.test.ts"
+    "test": "tsx --test src/common/feature-flags.test.ts src/modules/customer-context/customer-context.contracts.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",

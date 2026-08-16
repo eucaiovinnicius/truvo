@@ -13,6 +13,7 @@ import { sha256 } from '../events/crypto.util';
 import { getClickHouse, getRedis } from './identity.infra';
 import { IDENTITY_STITCH_STREAM, type StitchJob } from './identity.constants';
 import type { IdentifierType, IdentifyDto, MergesQueryDto } from './dto/identity.dto';
+import { CustomerContextService } from '../customer-context/customer-context.service';
 
 /** Uma aresta identificador→tipo, montada a partir do payload de identify. */
 interface IdRef {
@@ -45,7 +46,10 @@ function emptyGraph(): Record<IdentifierType, string[]> {
 export class IdentityService {
   private readonly logger = new Logger(IdentityService.name);
 
-  constructor(@Inject(DRIZZLE) private readonly db: Database) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Database,
+    private readonly customerContext: CustomerContextService,
+  ) {}
 
   // ───────────────────────────── lookup ─────────────────────────────
 
@@ -198,6 +202,10 @@ export class IdentityService {
 
     const identified = target.startsWith('usr_') || Boolean(emailHash) || Boolean(dto.user_id);
     const reason = dto.user_id ? 'identify:user_id' : emailHash ? 'stitch:email_hash' : 'stitch:identifier';
+
+    // Additive bridge: M8 remains authoritative for merge decisions. Canonical
+    // Context only mirrors its deterministic result and provider-namespaced IDs.
+    await this.customerContext.synchronizeLegacyIdentity(workspaceId, target, refs, losers, now);
 
     // 3. stitching retroativo: só quando algo foi fundido (recompute é caro — PRD §15).
     if (losers.length > 0) {

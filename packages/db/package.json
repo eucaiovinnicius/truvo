@@ -19,6 +19,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/postgres/migrate.ts",
     "db:adopt-baseline": "tsx src/postgres/migrate.ts --adopt-baseline",
+    "db:backfill:customer-context": "tsx src/postgres/backfill-customer-context.ts",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "ch:migrate": "tsx src/clickhouse/migrate.ts"

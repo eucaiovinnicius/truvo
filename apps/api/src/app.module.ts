@@ -18,6 +18,7 @@ import { AiModule } from './modules/ai/ai.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { SchedulerModule } from './modules/scheduler/scheduler.module';
+import { CustomerContextModule } from './modules/customer-context/customer-context.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { SchedulerModule } from './modules/scheduler/scheduler.module';
     TrackingModule,
     WebhooksModule,
     IdentityModule,
+    CustomerContextModule,
     DataQualityModule,
     FunnelsModule,
     MetricsModule,

@@ -16,6 +16,7 @@
     "infra:logs": "docker compose -f infra/docker-compose.yml logs -f",
     "db:pg": "pnpm --filter @truvo/db db:migrate",
     "db:pg:adopt-baseline": "pnpm --filter @truvo/db db:adopt-baseline",
+    "db:backfill:customer-context": "pnpm --filter @truvo/db db:backfill:customer-context",
     "db:ch": "pnpm --filter @truvo/db ch:migrate",
     "db:setup": "pnpm db:pg && pnpm db:ch",
     "migration:validate": "node scripts/validate-migrations.mjs",
