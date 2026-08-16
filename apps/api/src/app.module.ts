@@ -21,6 +21,7 @@ import { SchedulerModule } from './modules/scheduler/scheduler.module';
 import { CustomerContextModule } from './modules/customer-context/customer-context.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { DataLifecycleModule } from './modules/data-lifecycle/data-lifecycle.module';
+import { ConnectorsModule } from './modules/connectors/connectors.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { DataLifecycleModule } from './modules/data-lifecycle/data-lifecycle.mod
     IdentityModule,
     CustomerContextModule,
     DataLifecycleModule, // Order 035 §5 — depende de CustomerContextModule
+    ConnectorsModule, // Order 050 — provider-neutral connector framework
     DataQualityModule,
     FunnelsModule,
     MetricsModule,
