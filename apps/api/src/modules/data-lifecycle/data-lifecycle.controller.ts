@@ -38,6 +38,19 @@ export class DataLifecycleController {
     return this.lifecycle.requestSubjectDeletion(workspaceId, customerId, user);
   }
 
+  /** Order 055 §1 — resumes an existing subject_deletion request, re-running only
+   * the stores that are not yet 'completed'. */
+  @Post('requests/:requestId/retry')
+  @HttpCode(202)
+  @Roles('owner', 'admin')
+  retrySubjectDeletion(
+    @Param('id') workspaceId: string,
+    @Param('requestId') requestId: string,
+    @CurrentUser() user: { id: string; email?: string },
+  ) {
+    return this.lifecycle.retrySubjectDeletion(workspaceId, requestId, user);
+  }
+
   @Post('delete')
   @HttpCode(202)
   @Roles('owner')

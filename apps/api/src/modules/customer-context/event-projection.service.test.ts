@@ -3,16 +3,24 @@ import test from 'node:test';
 import { EventProjectionService } from './event-projection.service';
 import type { Database } from '../auth/database.provider';
 
-/** Fake mínimo do driver Drizzle cobrindo o padrão usado por EventProjectionService:
- * insert(table).values(v).onConflictDoNothing(opts) — awaited direto (sem .returning())
- * OU .returning(sel) — usado no insert de customer_outcomes p/ detectar dedupe. */
+/** Fake mínimo do driver Drizzle cobrindo os padrões usados por EventProjectionService:
+ * select(...).from().where().limit() — Order 055's "customer não está suprimido/
+ * tombstoned" guard, roda ANTES de tudo; por padrão simula um customer VIVO
+ * (deletedAt: null) para que os testes pré-existentes continuem exercitando o MESMO
+ * caminho de antes — e insert(table).values(v).onConflictDoNothing(opts) — awaited
+ * direto (sem .returning()) OU .returning(sel) — usado no insert de
+ * customer_outcomes p/ detectar dedupe. */
 function fakeDb(opts: {
   onInsert?: (table: unknown, values: Record<string, unknown>) => void;
   /** linhas simuladas de retorno do INSERT de customer_outcomes — [] simula onConflict (dedupe). */
   outcomeReturning?: unknown[];
+  /** simula o customer encontrado pelo guard de supressão — [{deletedAt: null}] (vivo) por padrão. */
+  customerRows?: unknown[];
 } = {}) {
   const outcomeReturning = opts.outcomeReturning ?? [{ id: 'row_1' }];
+  const customerRows = opts.customerRows ?? [{ deletedAt: null }];
   return {
+    select: () => ({ from: () => ({ where: () => ({ limit: async () => customerRows }) }) }),
     insert: (table: unknown) => ({
       values: (values: Record<string, unknown>) => {
         opts.onInsert?.(table, values);
@@ -116,4 +124,30 @@ test('mesmo (workspace,namespace,key,dedupeKey) sempre gera o MESMO outcomeId �
   });
 
   assert.equal(a.outcomeId, b.outcomeId);
+});
+
+test('Order 055 §3: recusa projetar sob um customer tombstoned (deletedAt preenchido) — fail closed', async () => {
+  const inserts: unknown[] = [];
+  const db = fakeDb({ onInsert: () => inserts.push(1), customerRows: [{ deletedAt: new Date('2026-01-01') }] });
+  const svc = new EventProjectionService(db);
+
+  const result = await svc.project('ws_1', 'usr_deleted', {
+    event_id: 'evt_deleted', event_name: 'purchase', order_id: 'ord_deleted', properties: { value: 1, currency: 'BRL' },
+  });
+
+  assert.equal(result.projected, false);
+  assert.equal(result.reason, 'customer_suppressed');
+  assert.equal(inserts.length, 0, 'nenhuma escrita deve acontecer para um customer removido');
+});
+
+test('Order 055 §3: recusa projetar quando o customer nem existe (canonicalId desconhecido)', async () => {
+  const db = fakeDb({ customerRows: [] });
+  const svc = new EventProjectionService(db);
+
+  const result = await svc.project('ws_1', 'usr_nunca_existiu', {
+    event_id: 'evt_missing', event_name: 'purchase', properties: {},
+  });
+
+  assert.equal(result.projected, false);
+  assert.equal(result.reason, 'customer_suppressed');
 });

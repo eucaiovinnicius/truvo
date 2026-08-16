@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import { customerOutcomes, outcomeDefinitions, type ContextProvenance } from '@truvo/db';
+import { and, eq, isNull } from 'drizzle-orm';
+import { customers, customerOutcomes, outcomeDefinitions, type ContextProvenance } from '@truvo/db';
 import { DRIZZLE, type Database } from '../auth/database.provider';
 import { findOutcomeProjectionRule } from './outcome-projection.registry';
 
@@ -60,6 +61,19 @@ export class EventProjectionService {
     const dedupeKey = (rule.dedupeFrom === 'order_id' ? event.order_id : undefined) ?? event.event_id;
     const observedAt = event.timestamp ? new Date(event.timestamp) : new Date();
     if (Number.isNaN(observedAt.getTime())) return { projected: false, reason: 'invalid_timestamp' };
+
+    // Order 055 §3: fail closed — never write NEW outcome/trait data under a
+    // canonical id whose customer row has been tombstoned (deleted subject). A
+    // replayed historical event for a deleted person must not silently reappear
+    // as fresh canonical data.
+    const [customer] = await this.db
+      .select({ deletedAt: customers.deletedAt })
+      .from(customers)
+      .where(and(eq(customers.workspaceId, workspaceId), eq(customers.id, canonicalId)))
+      .limit(1);
+    if (!customer || customer.deletedAt !== null) {
+      return { projected: false, reason: 'customer_suppressed' };
+    }
 
     // 1. garante a entrada de catálogo (idempotente — onConflictDoNothing na chave natural).
     const definitionId = deterministicId('ocd', workspaceId, rule.outcomeNamespace, rule.outcomeKey);

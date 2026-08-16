@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { IdentityGraphService } from '../identity/identity-graph.service';
+import { IdentityGraphService, SuppressedIdentifierError } from '../identity/identity-graph.service';
 import { CustomerContextService } from '../customer-context/customer-context.service';
 import type { TypedTraitValue } from '../customer-context/customer-context.contracts';
 import type { NormalizedRecord, NormalizedTrait } from './contracts';
@@ -26,6 +26,9 @@ export interface ApplyRecordsResult {
   identifiersAttached: number;
   traitsWritten: number;
   conflicts: number;
+  /** Order 055 §3: records whose identifier belonged to a deleted, suppressed
+   * subject — skipped (not applied), never a batch-wide failure. */
+  suppressed: number;
 }
 
 /**
@@ -46,35 +49,53 @@ export class CanonicalMappingService {
   ) {}
 
   async apply(workspaceId: string, sourceNamespace: string, records: NormalizedRecord[]): Promise<ApplyRecordsResult> {
-    const result: ApplyRecordsResult = { customersResolved: 0, identifiersAttached: 0, traitsWritten: 0, conflicts: 0 };
+    const result: ApplyRecordsResult = { customersResolved: 0, identifiersAttached: 0, traitsWritten: 0, conflicts: 0, suppressed: 0 };
 
     for (const record of records) {
       if (record.identifiers.length === 0) continue;
       const observedAt = new Date(record.observedAt);
       const [primary, ...rest] = record.identifiers;
 
-      const { customerId } = await this.identityGraph.resolveOrCreateCustomer({
-        workspaceId,
-        providerNamespace: primary!.providerNamespace,
-        identifierType: primary!.identifierType,
-        identifierValue: primary!.identifierValue,
-        sourceNamespace,
-        observedAt,
-      });
-      result.customersResolved += 1;
-
-      for (const identifier of rest) {
-        const attach = await this.identityGraph.attachIdentifier({
+      let customerId: string;
+      try {
+        const resolved = await this.identityGraph.resolveOrCreateCustomer({
           workspaceId,
-          customerId,
-          providerNamespace: identifier.providerNamespace,
-          identifierType: identifier.identifierType,
-          identifierValue: identifier.identifierValue,
+          providerNamespace: primary!.providerNamespace,
+          identifierType: primary!.identifierType,
+          identifierValue: primary!.identifierValue,
           sourceNamespace,
           observedAt,
         });
-        if (attach.status === 'conflict') result.conflicts += 1;
-        else result.identifiersAttached += 1;
+        customerId = resolved.customerId;
+      } catch (err) {
+        if (err instanceof SuppressedIdentifierError) {
+          result.suppressed += 1;
+          continue; // skip this ENTIRE record — no owner to attach the rest of its identifiers/traits to.
+        }
+        throw err;
+      }
+      result.customersResolved += 1;
+
+      for (const identifier of rest) {
+        try {
+          const attach = await this.identityGraph.attachIdentifier({
+            workspaceId,
+            customerId,
+            providerNamespace: identifier.providerNamespace,
+            identifierType: identifier.identifierType,
+            identifierValue: identifier.identifierValue,
+            sourceNamespace,
+            observedAt,
+          });
+          if (attach.status === 'conflict') result.conflicts += 1;
+          else result.identifiersAttached += 1;
+        } catch (err) {
+          if (err instanceof SuppressedIdentifierError) {
+            result.suppressed += 1;
+            continue; // this ONE identifier is skipped; the record's primary customer/traits still apply.
+          }
+          throw err;
+        }
       }
 
       for (const trait of record.traits ?? []) {

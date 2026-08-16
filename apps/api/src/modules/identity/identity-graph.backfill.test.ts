@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm';
 import { createDb, closeDb, customers, customerIdentifiers, identityConflicts, identityLinks, identityMerges } from '@truvo/db';
 import { IdentityGraphService } from './identity-graph.service';
 import { CustomerContextService, LEGACY_IDENTITY_NAMESPACE } from '../customer-context/customer-context.service';
+import { SuppressionService } from '../customer-context/suppression.service';
 
 /**
  * Order 045 — "Critical migration rule": v1 `identity_links`/`identity_merges` data
@@ -43,7 +44,8 @@ test('backfillLegacyIdentity: reconciles pre-existing v1 data non-destructively,
   }
 
   const db = createDb();
-  const svc = new IdentityGraphService(db, new CustomerContextService(db));
+  const suppression = new SuppressionService(db);
+  const svc = new IdentityGraphService(db, new CustomerContextService(db, suppression), suppression);
   const now = new Date();
   const canonicalWinner = `usr_bf_${STAMP}`;
   const canonicalLoser = `anon_bf_${STAMP}`;

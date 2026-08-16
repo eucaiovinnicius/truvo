@@ -6,6 +6,7 @@ import { createDb, closeDb, customers, customerIdentifiers, identityConflicts, i
 import { IdentityGraphService } from './identity-graph.service';
 import { closeRedis } from './identity.infra';
 import { CustomerContextService } from '../customer-context/customer-context.service';
+import { SuppressionService } from '../customer-context/suppression.service';
 
 /**
  * Order 045 — real-Postgres proof (same skip-if-unreachable pattern as every prior
@@ -46,7 +47,8 @@ test('Identity Graph v2: collision-safety, provider-neutral resolution, conflict
   }
 
   const db = createDb();
-  const svc = new IdentityGraphService(db, new CustomerContextService(db));
+  const suppression = new SuppressionService(db);
+  const svc = new IdentityGraphService(db, new CustomerContextService(db, suppression), suppression);
   const now = new Date();
   const emailHash = `email_${STAMP}`;
 

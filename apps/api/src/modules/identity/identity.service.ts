@@ -1,5 +1,5 @@
 import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
-import { and, desc, eq, inArray, lt } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt } from 'drizzle-orm';
 import { ulid } from 'ulid';
 // NOTA DE INTEGRAÇÃO: `identityLinks`/`identityMerges` só existem em @truvo/db após
 // o barrel `schema/index.ts` re-exportar `./identity` na integração do M8 (openTODOs).
@@ -12,7 +12,8 @@ import { DRIZZLE, type Database } from '../auth/database.provider';
 import { sha256 } from '../events/crypto.util';
 import { getClickHouse, enqueueRetroStitch } from './identity.infra';
 import type { IdentifierType, IdentifyDto, MergesQueryDto } from './dto/identity.dto';
-import { CustomerContextService } from '../customer-context/customer-context.service';
+import { CustomerContextService, LEGACY_IDENTITY_NAMESPACE } from '../customer-context/customer-context.service';
+import { SuppressionService } from '../customer-context/suppression.service';
 
 /** Uma aresta identificador→tipo, montada a partir do payload de identify. */
 interface IdRef {
@@ -48,6 +49,7 @@ export class IdentityService {
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly customerContext: CustomerContextService,
+    private readonly suppression: SuppressionService,
   ) {}
 
   // ───────────────────────────── lookup ─────────────────────────────
@@ -62,7 +64,7 @@ export class IdentityService {
     const anchor = await this.db
       .select({ canonicalId: identityLinks.canonicalId })
       .from(identityLinks)
-      .where(and(eq(identityLinks.workspaceId, workspaceId), eq(identityLinks.identifier, identifier)))
+      .where(and(eq(identityLinks.workspaceId, workspaceId), eq(identityLinks.identifier, identifier), isNull(identityLinks.deletedAt)))
       .limit(1);
 
     const canonicalId = anchor[0]?.canonicalId;
@@ -82,7 +84,7 @@ export class IdentityService {
         firstSeen: identityLinks.firstSeen,
       })
       .from(identityLinks)
-      .where(and(eq(identityLinks.workspaceId, workspaceId), eq(identityLinks.canonicalId, canonicalId)))
+      .where(and(eq(identityLinks.workspaceId, workspaceId), eq(identityLinks.canonicalId, canonicalId), isNull(identityLinks.deletedAt)))
       .orderBy(identityLinks.firstSeen);
 
     const identity = emptyGraph();
@@ -138,8 +140,26 @@ export class IdentityService {
       throw new BadRequestException('nenhum identificador informado');
     }
 
+    // Order 055 §3: identificadores suprimidos (de um titular já removido) são
+    // filtrados ANTES de qualquer escrita — v1 (identity_links, aqui) e v2 (o
+    // espelho em synchronizeLegacyIdentity, abaixo) aplicam a MESMA checagem, para
+    // que um replay de evento histórico não recrie identidade canônica em nenhum
+    // dos dois grafos.
+    const activeRefs: IdRef[] = [];
+    for (const ref of refs) {
+      const suppressed = await this.suppression.isSuppressed(workspaceId, {
+        providerNamespace: LEGACY_IDENTITY_NAMESPACE,
+        identifierType: ref.type,
+        identifierValue: ref.identifier,
+      });
+      if (!suppressed) activeRefs.push(ref);
+    }
+    if (activeRefs.length === 0) {
+      throw new BadRequestException('todos os identificadores informados estão suprimidos (titular removido)');
+    }
+
     const now = new Date();
-    const identifierValues = refs.map((r) => r.identifier);
+    const identifierValues = activeRefs.map((r) => r.identifier);
 
     const { target, losers } = await this.db.transaction(async (tx) => {
       // 1. canonicals já existentes para qualquer aresta informada.
@@ -147,7 +167,7 @@ export class IdentityService {
         .select({ canonicalId: identityLinks.canonicalId, firstSeen: identityLinks.firstSeen })
         .from(identityLinks)
         .where(
-          and(eq(identityLinks.workspaceId, workspaceId), inArray(identityLinks.identifier, identifierValues)),
+          and(eq(identityLinks.workspaceId, workspaceId), inArray(identityLinks.identifier, identifierValues), isNull(identityLinks.deletedAt)),
         );
 
       const firstSeenByCanonical = new Map<string, Date>();
@@ -179,7 +199,10 @@ export class IdentityService {
       }
 
       // 4. upsert de cada aresta → alvo (mantém first_seen; só re-aponta canonical).
-      for (const ref of refs) {
+      // `deletedAt: null` no conflito: se este identifier foi reativado
+      // explicitamente (Order 055 §3) após ter sido tombstoned por uma deleção
+      // anterior, um identify() legítimo (não-suprimido) deve revivê-lo de verdade.
+      for (const ref of activeRefs) {
         await tx
           .insert(identityLinks)
           .values({
@@ -192,7 +215,7 @@ export class IdentityService {
           })
           .onConflictDoUpdate({
             target: [identityLinks.workspaceId, identityLinks.identifier],
-            set: { canonicalId: target },
+            set: { canonicalId: target, deletedAt: null },
           });
       }
 
@@ -204,7 +227,9 @@ export class IdentityService {
 
     // Additive bridge: M8 remains authoritative for merge decisions. Canonical
     // Context only mirrors its deterministic result and provider-namespaced IDs.
-    await this.customerContext.synchronizeLegacyIdentity(workspaceId, target, refs, losers, now);
+    // (synchronizeLegacyIdentity applies its OWN suppression filter too — activeRefs
+    // here is already filtered, so this is a consistent no-op re-check, not skipped.)
+    await this.customerContext.synchronizeLegacyIdentity(workspaceId, target, activeRefs, losers, now);
 
     // 3. stitching retroativo: só quando algo foi fundido (recompute é caro — PRD §15).
     if (losers.length > 0) {

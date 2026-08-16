@@ -4,6 +4,7 @@ import { DataLifecycleService } from './data-lifecycle.service';
 import type { Database } from '../auth/database.provider';
 import type { AuditService } from '../audit/audit.service';
 import type { CustomerContextService } from '../customer-context/customer-context.service';
+import type { SuppressionService } from '../customer-context/suppression.service';
 import type { CustomerContext } from '../customer-context/customer-context.contracts';
 
 /** Fake mínimo do driver Drizzle cobrindo os padrões usados por DataLifecycleService
@@ -45,6 +46,10 @@ function fakeContext(context: CustomerContext | null | (() => CustomerContext | 
   } as unknown as CustomerContextService;
 }
 
+function fakeSuppression(): SuppressionService {
+  return { isSuppressed: async () => false } as unknown as SuppressionService;
+}
+
 const SAMPLE_CONTEXT: CustomerContext = {
   customer: {
     workspaceId: 'ws_1', id: 'cus_1', legacyCanonicalId: null, status: 'identified',
@@ -63,7 +68,7 @@ test('requestSubjectExport: assembles context, audits, and logs LGPD profile acc
   const auditCalls: Array<Record<string, unknown>> = [];
   const insertedTables: unknown[] = [];
   const db = fakeDb({ onInsert: (table) => insertedTables.push(table) });
-  const svc = new DataLifecycleService(db, fakeContext(SAMPLE_CONTEXT), fakeAudit({ calls: auditCalls }));
+  const svc = new DataLifecycleService(db, fakeContext(SAMPLE_CONTEXT), fakeAudit({ calls: auditCalls }), fakeSuppression());
 
   const result = await svc.requestSubjectExport('ws_1', 'cus_1', { id: 'user_owner', email: 'owner@ws.com' });
 
@@ -86,7 +91,7 @@ test('requestSubjectExport: getContext failing marks the request failed but neve
   const auditCalls: Array<Record<string, unknown>> = [];
   const db = fakeDb();
   const failingContext = { getContext: async () => { throw new Error('clickhouse down'); } } as unknown as CustomerContextService;
-  const svc = new DataLifecycleService(db, failingContext, fakeAudit({ calls: auditCalls }));
+  const svc = new DataLifecycleService(db, failingContext, fakeAudit({ calls: auditCalls }), fakeSuppression());
 
   const result = await svc.requestSubjectExport('ws_1', 'cus_1', { id: 'user_owner' });
   assert.equal(result.status, 'failed');
@@ -96,30 +101,18 @@ test('requestSubjectExport: getContext failing marks the request failed but neve
   assert.equal(metadata.status, 'failed');
 });
 
-test('requestSubjectDeletion: tombstones the subject rows and audits the counts', async () => {
-  const auditCalls: Array<Record<string, unknown>> = [];
-  const db = fakeDb({ returningRows: [{ id: 'x1' }, { id: 'x2' }] }); // 2 linhas "afetadas" por tabela
-  const svc = new DataLifecycleService(db, fakeContext(null), fakeAudit({ calls: auditCalls }));
-
-  const result = await svc.requestSubjectDeletion('ws_1', 'cus_1', { id: 'user_owner' });
-
-  assert.equal(result.status, 'completed');
-  assert.equal(result.counts.customers, 2);
-  assert.equal(result.counts.identifiers, 2);
-  assert.equal(result.counts.traits, 2);
-  assert.equal(result.counts.relationships, 2);
-  assert.equal(result.counts.outcomeDefinitions, 0); // subject_deletion NÃO toca outcome_definitions
-
-  const auditAction = auditCalls.find((c) => c.action === 'data_lifecycle.subject_deletion');
-  assert.ok(auditAction);
-  assert.equal((auditAction!.metadata as Record<string, unknown>).status, 'completed');
-});
+// `requestSubjectDeletion`'s substantive proof moved to
+// `data-lifecycle.subject-erasure.test.ts` (real Postgres + real ClickHouse,
+// Order 055) — the new per-store orchestration calls the real erasure registry
+// (drizzle query chains this fake db doesn't model, plus a real ClickHouse client),
+// so a fake-db unit test here would either mock so much it proves nothing, or
+// diverge from the real DB. Same posture Order 045 took for `mergeCustomers`/etc.
 
 test('getRequest returns null for an unknown request id (no throw)', async () => {
   const db = {
     select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }),
   } as unknown as Database;
-  const svc = new DataLifecycleService(db, fakeContext(null), fakeAudit({ calls: [] }));
+  const svc = new DataLifecycleService(db, fakeContext(null), fakeAudit({ calls: [] }), fakeSuppression());
   const result = await svc.getRequest('ws_1', 'dlr_missing');
   assert.equal(result, null);
 });

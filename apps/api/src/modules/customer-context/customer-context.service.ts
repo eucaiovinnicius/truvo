@@ -18,6 +18,7 @@ import {
   type TraitWrite,
   type TraitWriteResult,
 } from './customer-context.contracts';
+import { SuppressionService } from './suppression.service';
 
 export const LEGACY_IDENTITY_NAMESPACE = 'truvo.identity';
 
@@ -32,7 +33,10 @@ function deterministicId(prefix: string, ...parts: string[]): string {
 
 @Injectable()
 export class CustomerContextService {
-  constructor(@Inject(DRIZZLE) private readonly db: Database) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Database,
+    private readonly suppression: SuppressionService,
+  ) {}
 
   async getContext(workspaceId: string, customerId: string): Promise<CustomerContext | null> {
     const now = new Date();
@@ -165,7 +169,15 @@ export class CustomerContextService {
     return { accepted: false, current };
   }
 
-  /** Mirrors the existing, authoritative M8 graph without introducing merge heuristics. */
+  /**
+   * Mirrors the existing, authoritative M8 graph without introducing merge heuristics.
+   *
+   * Order 055 §3: refs that resolve to a SUPPRESSED identifier (a deleted subject's
+   * old identifier, replayed) are filtered out BEFORE anything is written — this is
+   * what stops a replayed historical event from silently recreating canonical
+   * context for a deleted person. If every ref is suppressed and there's no merge
+   * to reconcile either, this is a full no-op (nothing touched at all).
+   */
   async synchronizeLegacyIdentity(
     workspaceId: string,
     targetCanonicalId: string,
@@ -173,7 +185,18 @@ export class CustomerContextService {
     mergedFrom: string[],
     observedAt: Date,
   ): Promise<void> {
-    const identified = targetCanonicalId.startsWith('usr_') || refs.some((r) => r.type === 'user_id' || r.type === 'email_hash');
+    const activeRefs: LegacyIdentityRef[] = [];
+    for (const ref of refs) {
+      const suppressed = await this.suppression.isSuppressed(workspaceId, {
+        providerNamespace: LEGACY_IDENTITY_NAMESPACE,
+        identifierType: ref.type,
+        identifierValue: ref.identifier,
+      });
+      if (!suppressed) activeRefs.push(ref);
+    }
+    if (activeRefs.length === 0 && mergedFrom.length === 0) return;
+
+    const identified = targetCanonicalId.startsWith('usr_') || activeRefs.some((r) => r.type === 'user_id' || r.type === 'email_hash');
     await this.db.transaction(async (tx) => {
       await tx.insert(customers).values({
         workspaceId, id: targetCanonicalId, legacyCanonicalId: targetCanonicalId,
@@ -215,7 +238,7 @@ export class CustomerContextService {
         ));
       }
 
-      for (const ref of refs) {
+      for (const ref of activeRefs) {
         const id = deterministicId('cid', workspaceId, LEGACY_IDENTITY_NAMESPACE, ref.type, ref.identifier);
         await tx.insert(customerIdentifiers).values({
           workspaceId, id, customerId: targetCanonicalId, identifierType: ref.type,

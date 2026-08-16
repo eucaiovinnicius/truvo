@@ -1,6 +1,14 @@
 import { pgEnum, pgTable, text, timestamp, index, uniqueIndex } from 'drizzle-orm/pg-core';
 
 /**
+ * Order 055 — `deleted_at` added (nullable, additive) so v1's identity graph can
+ * participate in the SAME tombstone-then-purge lifecycle every other subject-owned
+ * table already uses, instead of a one-off erasure mechanism just for this table.
+ * `IdentityService`'s read paths (`lookup`/`graphOf`/`identify`'s existing-canonicals
+ * lookup) now filter `isNull(deletedAt)` — see identity.service.ts.
+ */
+
+/**
  * M8 — IDENTITY RESOLUTION + DEDUP avançado (PRD §7 Módulo 8, §8).
  *
  * O identity graph liga TODOS os identificadores de uma mesma pessoa
@@ -66,6 +74,8 @@ export const identityLinks = pgTable(
      */
     canonicalId: text('canonical_id').notNull(),
     firstSeen: timestamp('first_seen', { withTimezone: true }).notNull().defaultNow(),
+    /** Order 055: tombstone for subject erasure — nullable, additive. */
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
   },
   (t) => ({
     // regra 1 + idempotência do vínculo: um identificador só aparece uma vez por workspace.

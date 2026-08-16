@@ -12,6 +12,7 @@ import { BillingService } from '../billing/billing.service';
 import { CreativeAlertsService } from '../creatives/creative-alerts.service';
 import { ReconciliationService } from '../data-quality/reconciliation.service';
 import { AdsService } from '../creatives/ads/ads.service';
+import { RetentionEnforcementService } from '../data-lifecycle/retention-enforcement.service';
 
 interface Job {
   name: string;
@@ -45,6 +46,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     private readonly creativeAlerts: CreativeAlertsService,
     private readonly reconciliation: ReconciliationService,
     private readonly ads: AdsService,
+    private readonly retention: RetentionEnforcementService,
   ) {}
 
   onModuleInit(): void {
@@ -58,6 +60,9 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       { name: 'creative-alerts', intervalMs: HOUR, lockKey: 'truvo:cron:creative-alerts', run: () => this.sweepPerWorkspace(async (ws) => { await this.creativeAlerts.getAlerts(ws, { persist: true }); }) },
       { name: 'reconciliation', intervalMs: HOUR, lockKey: 'truvo:cron:reconciliation', run: () => this.sweepPerWorkspace(async (ws) => { await this.reconciliation.getReconciliation(ws, undefined, undefined); }) },
       { name: 'ads-sync', intervalMs: 24 * HOUR, lockKey: 'truvo:cron:ads-sync', run: () => this.sweepPerWorkspace(async (ws) => { await this.ads.syncWorkspace(ws); }) },
+      // Order 055 §5 — retention enforcement: skips a workspace entirely when it
+      // has no configured tombstone_purge_after_days (fail-safe, no default).
+      { name: 'retention-purge', intervalMs: 24 * HOUR, lockKey: 'truvo:cron:retention-purge', run: () => this.sweepPerWorkspace(async (ws) => { await this.retention.sweepWorkspace(ws); }) },
     ];
     for (const job of jobs) this.schedule(job);
     this.logger.log(`scheduler ligado: ${jobs.map((j) => j.name).join(', ')}`);

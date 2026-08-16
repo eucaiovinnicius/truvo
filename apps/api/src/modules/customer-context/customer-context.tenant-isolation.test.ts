@@ -4,6 +4,7 @@ import postgres from 'postgres';
 import { eq } from 'drizzle-orm';
 import { createDb, closeDb, customers } from '@truvo/db';
 import { CustomerContextService } from './customer-context.service';
+import { SuppressionService } from './suppression.service';
 
 /**
  * Order 035 §1 — TENANT BOUNDARY (real-Postgres negative proof). Prova, contra um
@@ -49,7 +50,7 @@ test('workspace A cannot read/mutate a same-id customer row owned by workspace B
   }
 
   const db = createDb();
-  const service = new CustomerContextService(db);
+  const service = new CustomerContextService(db, new SuppressionService(db));
   const now = new Date();
 
   try {

@@ -14,6 +14,7 @@ import {
 } from '@truvo/db';
 import { AuditService } from '../audit/audit.service';
 import { CustomerContextService } from '../customer-context/customer-context.service';
+import { SuppressionService } from '../customer-context/suppression.service';
 import { IdentityGraphService } from '../identity/identity-graph.service';
 import { ConnectorRegistryService } from './connector-registry.service';
 import { ConnectorConnectionService } from './connector-connection.service';
@@ -74,8 +75,9 @@ test('Connector Framework contract kit: fake provider proves the framework end-t
 
   const db = createDb();
   const audit = new AuditService(db);
-  const customerContext = new CustomerContextService(db);
-  const identityGraph = new IdentityGraphService(db, customerContext);
+  const suppression = new SuppressionService(db);
+  const customerContext = new CustomerContextService(db, suppression);
+  const identityGraph = new IdentityGraphService(db, customerContext, suppression);
   const registry = new ConnectorRegistryService();
   const connections = new ConnectorConnectionService(db, audit, registry);
   const mapping = new CanonicalMappingService(identityGraph, customerContext);

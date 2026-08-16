@@ -7,6 +7,7 @@ import { IdentityService } from '../identity/identity.service';
 import { closeRedis } from '../identity/identity.infra';
 import { CustomerContextService } from './customer-context.service';
 import { EventProjectionService } from './event-projection.service';
+import { SuppressionService } from './suppression.service';
 
 /**
  * Order 040 §5 — prova fim-a-fim contra Postgres real (mesmo padrão de
@@ -49,8 +50,9 @@ test('anonymous → identify → purchase: resolve em UM canonical/outcome, idem
   }
 
   const db = createDb();
-  const customerContext = new CustomerContextService(db);
-  const identity = new IdentityService(db, customerContext);
+  const suppression = new SuppressionService(db);
+  const customerContext = new CustomerContextService(db, suppression);
+  const identity = new IdentityService(db, customerContext, suppression);
   const projection = new EventProjectionService(db);
 
   try {

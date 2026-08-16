@@ -20,8 +20,24 @@ import {
 import { DRIZZLE, type Database } from '../auth/database.provider';
 import { assertNamespace } from '../customer-context/customer-context.contracts';
 import { CustomerContextService, LEGACY_IDENTITY_NAMESPACE } from '../customer-context/customer-context.service';
+import { SuppressionService } from '../customer-context/suppression.service';
 import { enqueueRetroStitch } from './identity.infra';
 import { isStrongIdentifier } from './identity-graph.policy';
+
+/** Order 055 §3 — thrown when a caller tries to attach/resolve a SUPPRESSED
+ * identifier (belonged to a deleted subject, not reactivated). Distinct from
+ * `BadRequestException` so callers (e.g. `CanonicalMappingService`) can catch it
+ * specifically and skip just that record instead of failing an entire batch. */
+export class SuppressedIdentifierError extends Error {
+  constructor(
+    public readonly providerNamespace: string,
+    public readonly identifierType: string,
+    public readonly identifierValue: string,
+  ) {
+    super(`identifier suppressed: ${providerNamespace}/${identifierType}`);
+    this.name = 'SuppressedIdentifierError';
+  }
+}
 
 function deterministicId(prefix: string, ...parts: string[]): string {
   return `${prefix}_${createHash('sha256').update(parts.join('')).digest('hex').slice(0, 32)}`;
@@ -135,6 +151,7 @@ export class IdentityGraphService {
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly customerContext: CustomerContextService,
+    private readonly suppression: SuppressionService,
   ) {}
 
   // ────────────────────────── lookup helpers ─────────────────────────
@@ -170,10 +187,16 @@ export class IdentityGraphService {
 
   // ──────────────────────── required v2 methods ──────────────────────
 
-  /** Finds the customer already owning this identifier, or creates a fresh one. */
+  /** Finds the customer already owning this identifier, or creates a fresh one.
+   * Order 055 §3: fails closed (throws `SuppressedIdentifierError`) for a
+   * suppressed identifier — never resolves/creates against it. */
   async resolveOrCreateCustomer(input: ResolveOrCreateInput): Promise<{ customerId: string; created: boolean }> {
     const provider = assertNamespace(input.providerNamespace, 'providerNamespace');
     const sourceNamespace = assertNamespace(input.sourceNamespace, 'sourceNamespace');
+
+    if (await this.suppression.isSuppressed(input.workspaceId, { providerNamespace: provider, identifierType: input.identifierType, identifierValue: input.identifierValue })) {
+      throw new SuppressedIdentifierError(provider, input.identifierType, input.identifierValue);
+    }
 
     const existing = await this.findOwner(input.workspaceId, provider, input.identifierType, input.identifierValue);
     if (existing) return { customerId: existing, created: false };
@@ -222,6 +245,11 @@ export class IdentityGraphService {
   async attachIdentifier(input: AttachIdentifierInput): Promise<AttachIdentifierResult> {
     const provider = assertNamespace(input.providerNamespace, 'providerNamespace');
     const sourceNamespace = assertNamespace(input.sourceNamespace, 'sourceNamespace');
+
+    // Order 055 §3: fail closed on a suppressed identifier, before touching anything.
+    if (await this.suppression.isSuppressed(input.workspaceId, { providerNamespace: provider, identifierType: input.identifierType, identifierValue: input.identifierValue })) {
+      throw new SuppressedIdentifierError(provider, input.identifierType, input.identifierValue);
+    }
 
     const [existingRow] = await this.db
       .select({ id: customerIdentifiers.id, customerId: customerIdentifiers.customerId })

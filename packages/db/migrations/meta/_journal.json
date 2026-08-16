@@ -43,6 +43,13 @@
       "when": 1786895697091,
       "tag": "0005_silly_impossible_man",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786903273081,
+      "tag": "0006_easy_ultimates",
+      "breakpoints": true
     }
   ]
 }
