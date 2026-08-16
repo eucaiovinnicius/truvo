@@ -4,6 +4,7 @@ import { sql } from 'drizzle-orm';
 import { STANDARD_EVENTS } from '@truvo/event-schema';
 import { getClickHouse, getDb, getRedis } from '../modules/events/infra';
 import { pingKafka } from './kafka.health';
+import { metrics } from '@truvo/observability';
 
 type Check = 'ok' | 'down' | 'unknown';
 
@@ -34,6 +35,12 @@ export class HealthController {
       },
       ts: new Date().toISOString(),
     };
+  }
+
+  /** Lightweight process-local counters for provider-neutral scraping/log forwarding. */
+  @Get('metrics')
+  metricSnapshot() {
+    return { service: 'truvo-api', metrics: metrics.snapshot(), ts: new Date().toISOString() };
   }
 
   /**

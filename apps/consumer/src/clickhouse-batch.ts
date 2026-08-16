@@ -1,6 +1,7 @@
 import { createClickHouse, type ClickHouseClient } from '@truvo/db';
 import type { TruvoEvent } from '@truvo/event-schema';
 import type { EnrichedContext } from './enrich';
+import { classifyFailure, metrics, structuredLog } from '@truvo/observability';
 
 /** DateTime64(3) do ClickHouse: 'YYYY-MM-DD HH:MM:SS.mmm' (UTC, sem 'Z'). */
 function toChDateTime(iso: string | undefined): string {
@@ -140,11 +141,16 @@ export class ClickHouseBatcher {
     this.buffer = [];
     try {
       await this.ch.insert({ table: 'events', values: rows, format: 'JSONEachRow' });
+      metrics.increment('storage_writes_total', { storage: 'clickhouse', result: 'success' });
       // eslint-disable-next-line no-console
       console.log(`[truvo/consumer] inseridas ${rows.length} linha(s) no ClickHouse`);
     } catch (err) {
       // Recoloca no início do buffer p/ nova tentativa. TODO(live): DLQ/backoff.
       this.buffer = rows.concat(this.buffer);
+      const failure = classifyFailure(err);
+      metrics.increment('storage_writes_total', { storage: 'clickhouse', result: 'failure' });
+      metrics.gauge('consumer_retry_buffer_rows', this.buffer.length);
+      structuredLog('error', 'storage_write_failed', { storage: 'clickhouse', retryable: failure.kind === 'transient', retryAfterMs: failure.retryAfterMs, bufferedRows: this.buffer.length });
       // eslint-disable-next-line no-console
       console.error(`[truvo/consumer] falha no insert ClickHouse (requeue): ${(err as Error).message}`);
       throw err;

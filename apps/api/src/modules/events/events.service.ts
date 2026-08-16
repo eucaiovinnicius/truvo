@@ -4,6 +4,7 @@ import type { TruvoEvent } from '@truvo/event-schema';
 import { KafkaProducerService } from './kafka.producer';
 import { getClickHouse } from './infra';
 import type { ApiIngestDto, ApiBatchDto } from './dto/ingest.dto';
+import { metrics } from '@truvo/observability';
 
 /** Formata um Date como DateTime64 do ClickHouse ('YYYY-MM-DD HH:MM:SS.mmm', UTC). */
 function toChDateTime(iso: string): string {
@@ -37,6 +38,7 @@ export class EventsService {
   async ingestOne(input: ApiIngestDto, workspaceId: string) {
     const event = this.normalize(input, workspaceId);
     await this.kafka.publish([{ key: workspaceId, value: JSON.stringify(event) }]);
+    metrics.increment('ingestion_accepted_total', { count: 1 });
     return { accepted: 1, event_id: event.event_id };
   }
 
@@ -46,6 +48,7 @@ export class EventsService {
     await this.kafka.publish(
       events.map((e) => ({ key: workspaceId, value: JSON.stringify(e) })),
     );
+    metrics.increment('ingestion_accepted_total', { count: events.length });
     return { accepted: events.length, event_ids: events.map((e) => e.event_id) };
   }
 

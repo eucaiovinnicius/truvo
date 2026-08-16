@@ -6,6 +6,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { Kafka, Producer, logLevel, type Message } from 'kafkajs';
+import { classifyFailure, metrics, structuredLog } from '@truvo/observability';
 
 /**
  * Producer Kafka (Redpanda em dev). É a fronteira de durabilidade da ingestão:
@@ -57,7 +58,9 @@ export class KafkaProducerService implements OnModuleInit, OnModuleDestroy {
     } catch (err) {
       this.connected = false;
       // TODO(live): Redpanda/Kafka no ar (docker-compose) + retry/backoff de conexão.
-      this.logger.error(`Kafka producer indisponível: ${(err as Error).message}`);
+      const failure = classifyFailure(err);
+      metrics.increment('queue_failures_total', { kind: failure.kind, operation: 'connect' });
+      structuredLog('error', 'queue_connect_failed', { module: 'events', failure: failure.kind });
     }
   }
 
@@ -73,6 +76,9 @@ export class KafkaProducerService implements OnModuleInit, OnModuleDestroy {
       await this.producer.send({ topic: this.topic, messages });
     } catch (err) {
       this.connected = false;
+      const failure = classifyFailure(err);
+      metrics.increment('ingestion_rejected_total', { kind: failure.kind });
+      structuredLog('error', 'queue_publish_failed', { module: 'events', retryable: failure.kind === 'transient', retryAfterMs: failure.retryAfterMs });
       throw new ServiceUnavailableException(`Falha ao enfileirar evento: ${(err as Error).message}`);
     }
   }

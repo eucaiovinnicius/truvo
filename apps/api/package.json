@@ -18,6 +18,7 @@
     "@truvo/db": "workspace:*",
     "@truvo/event-schema": "workspace:*",
     "@truvo/pixel": "workspace:*",
+    "@truvo/observability": "workspace:*",
     "dotenv": "^16.4.5",
     "drizzle-orm": "^0.32.1",
     "ioredis": "^5.4.1",

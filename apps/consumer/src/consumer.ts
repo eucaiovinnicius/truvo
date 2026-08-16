@@ -9,6 +9,7 @@ import { getRedis } from './redis';
 import { identifyRequestFromEvent } from './identity/event-hook';
 import { conversionForwardFromEvent } from './conversion-hook';
 import { deadLetter } from './dlq';
+import { classifyFailure, metrics, structuredLog } from '@truvo/observability';
 
 const TOPIC = process.env.KAFKA_EVENTS_TOPIC ?? 'truvo.events';
 const GROUP_ID = process.env.CONSUMER_GROUP_ID ?? 'truvo-consumer';
@@ -57,7 +58,7 @@ export class EventPipelineConsumer {
         for (const message of batch.messages) {
           if (!isRunning() || isStale()) break;
           if (message.value) {
-            await this.handle(message.value.toString());
+            await this.handle(message.value.toString(), message.key?.toString());
           }
           resolveOffset(message.offset);
           await heartbeat();
@@ -69,13 +70,14 @@ export class EventPipelineConsumer {
   }
 
   /** Processa uma mensagem crua (passos 2..7). */
-  private async handle(rawValue: string): Promise<void> {
+  private async handle(rawValue: string, correlationId?: string): Promise<void> {
     let event: TruvoEvent;
     try {
       const parsed = eventSchema.safeParse(JSON.parse(rawValue));
       if (!parsed.success) {
         // Dead-letter em vez de perda silenciosa (inspeção/replay depois).
         await deadLetter(`schema_invalido: ${parsed.error.issues[0]?.message ?? 'inválido'}`, rawValue);
+        metrics.increment('ingestion_rejected_total', { reason: 'schema' });
         // eslint-disable-next-line no-console
         console.warn('[truvo/consumer] evento inválido → DLQ');
         return;
@@ -83,6 +85,7 @@ export class EventPipelineConsumer {
       event = parsed.data;
     } catch {
       await deadLetter('payload_nao_json', rawValue);
+      metrics.increment('ingestion_rejected_total', { reason: 'json' });
       // eslint-disable-next-line no-console
       console.warn('[truvo/consumer] payload não-JSON → DLQ');
       return;
@@ -111,6 +114,7 @@ export class EventPipelineConsumer {
 
     // 6. batch insert
     await this.batcher.add(buildRow(event, enriched, isBot));
+    metrics.increment('consumer_events_processed_total', { bot: isBot ? 'true' : 'false' });
 
     // 7. contador mensal — SÓ não-bot conta p/ billing (regra 11)
     if (!isBot) {
@@ -121,7 +125,7 @@ export class EventPipelineConsumer {
     //   M2×M8 → constrói o grafo de identidade a partir do evento;
     //   M2×M9 → encaminha conversões (purchase/lead/…) p/ as plataformas habilitadas.
     if (!isBot) {
-      await Promise.all([forwardIdentity(event), forwardConversion(event)]);
+      await Promise.all([forwardIdentity(event, correlationId ?? event.event_id), forwardConversion(event, correlationId ?? event.event_id)]);
     }
   }
 
@@ -142,11 +146,11 @@ const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET;
  * derruba o pipeline (o merge no Postgres é reconciliável por replay/backfill).
  * Sem `INTERNAL_API_SECRET` no ambiente, o forward fica desligado (dev).
  */
-async function forwardIdentity(event: TruvoEvent): Promise<void> {
+async function forwardIdentity(event: TruvoEvent, correlationId: string): Promise<void> {
   if (!INTERNAL_API_SECRET) return;
   const req = identifyRequestFromEvent(event);
   if (!req) return;
-  await postInternal('/v1/internal/identity/identify', req);
+  await postInternal('/v1/internal/identity/identify', req, correlationId);
 }
 
 /**
@@ -156,26 +160,28 @@ async function forwardIdentity(event: TruvoEvent): Promise<void> {
  * é fail-closed (sem plataforma/consentimento/match key não envia). Sem
  * `INTERNAL_API_SECRET`, o forward fica desligado (dev).
  */
-async function forwardConversion(event: TruvoEvent): Promise<void> {
+async function forwardConversion(event: TruvoEvent, correlationId: string): Promise<void> {
   if (!INTERNAL_API_SECRET) return;
   const input = conversionForwardFromEvent(event);
   if (!input) return;
-  await postInternal('/v1/internal/conversions/forward', input);
+  await postInternal('/v1/internal/conversions/forward', input, correlationId);
 }
 
 /** POST server-to-server best-effort (timeout 4s, segredo interno). Nunca lança. */
-async function postInternal(path: string, body: unknown): Promise<void> {
+async function postInternal(path: string, body: unknown, correlationId: string): Promise<void> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 4000);
     await fetch(`${INTERNAL_API_URL}${path}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-internal-secret': INTERNAL_API_SECRET as string },
+      headers: { 'content-type': 'application/json', 'x-internal-secret': INTERNAL_API_SECRET as string, 'x-request-id': correlationId },
       body: JSON.stringify(body),
       signal: controller.signal,
     });
     clearTimeout(timer);
-  } catch {
-    /* best-effort */
+  } catch (error) {
+    const failure = classifyFailure(error);
+    metrics.increment('connector_failures_total', { module: 'internal_forward', kind: failure.kind });
+    structuredLog('warn', 'internal_forward_failed', { module: 'internal_forward', retryable: failure.kind === 'transient', correlationId });
   }
 }

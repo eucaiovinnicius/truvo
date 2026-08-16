@@ -37,6 +37,9 @@ importers:
       '@truvo/event-schema':
         specifier: workspace:*
         version: link:../../packages/event-schema
+      '@truvo/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
       '@truvo/pixel':
         specifier: workspace:*
         version: link:../../packages/pixel
@@ -98,6 +101,9 @@ importers:
       '@truvo/event-schema':
         specifier: workspace:*
         version: link:../../packages/event-schema
+      '@truvo/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
       dotenv:
         specifier: ^16.4.5
         version: 16.4.5
@@ -222,6 +228,21 @@ importers:
       tsup:
         specifier: ^8.1.0
         version: 8.1.0(typescript@5.4.5)
+      typescript:
+        specifier: ^5.4.5
+        version: 5.4.5
+
+  packages/observability:
+    devDependencies:
+      '@types/node':
+        specifier: ^20.14.0
+        version: 20.14.0
+      tsup:
+        specifier: ^8.1.0
+        version: 8.1.0(typescript@5.4.5)
+      tsx:
+        specifier: ^4.16.2
+        version: 4.16.2
       typescript:
         specifier: ^5.4.5
         version: 5.4.5
