@@ -25,7 +25,15 @@ export class HealthController {
   /** Liveness — o processo está de pé. */
   @Get()
   liveness() {
-    return { status: 'ok', service: 'truvo-api', ts: new Date().toISOString() };
+    return {
+      status: 'ok',
+      service: 'truvo-api',
+      release: {
+        version: process.env.RELEASE_VERSION ?? '0.0.0',
+        commit: process.env.RELEASE_COMMIT ?? 'unknown',
+      },
+      ts: new Date().toISOString(),
+    };
   }
 
   /**

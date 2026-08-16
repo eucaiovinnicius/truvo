@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { readFeatureFlags } from './feature-flags';
 
 /**
  * Validação de ambiente no BOOT (fail-fast). Antes, uma env essencial ausente virava
@@ -41,6 +42,31 @@ export function validateEnv(): void {
       `Env obrigatória(s) ausente(s): ${missing.join(', ')}. Configure-as (ver .env.example) antes de subir a API.`,
     );
     // Fail-fast: melhor não subir do que subir quebrado.
+    process.exit(1);
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    if (!isSet('CORS_ORIGINS')) {
+      missing.push('CORS_ORIGINS (obrigatória em production)');
+    }
+    if (process.env.TRUVO_DEV_AUTH_BYPASS === '1') {
+      missing.push('TRUVO_DEV_AUTH_BYPASS não pode ser 1 em production');
+    }
+  }
+
+  if (missing.length > 0) {
+    logger.error(
+      `Configuração de ambiente insegura: ${missing.join(', ')}. Consulte .env.example e docs/operations/environments-and-release.md.`,
+    );
+    process.exit(1);
+  }
+
+  // Flags são opt-in e fail-closed. JSON inválido não pode resultar em um deploy
+  // parcialmente habilitado, por isso impede o boot antes de tocar em dependências.
+  try {
+    readFeatureFlags();
+  } catch (error) {
+    logger.error(`TRUVO_FEATURE_FLAGS inválida: ${error instanceof Error ? error.message : 'formato inválido'}`);
     process.exit(1);
   }
 

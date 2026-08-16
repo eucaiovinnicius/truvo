@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: lint + typecheck + build + test
+  verify:
+    name: frozen install + lint + typecheck + test + build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -33,14 +33,23 @@ jobs:
       - name: Install (frozen lockfile)
         run: pnpm install --frozen-lockfile
 
+      - name: Validate migration inputs (no migration apply)
+        run: pnpm migration:validate
+
       - name: Lint
         run: pnpm -w run lint
 
       - name: Typecheck
         run: pnpm -w run typecheck
 
+      - name: Test
+        run: pnpm -w run test
+
       - name: Build
         run: pnpm -w run build
 
-      - name: Test
-        run: pnpm turbo run test
+      - name: Release identity
+        env:
+          RELEASE_VERSION: 0.0.0-ci
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: pnpm release:identity
