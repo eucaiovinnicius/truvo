@@ -7,6 +7,7 @@ import { DRIZZLE, type Database } from '../auth/database.provider';
 import { ConnectorConnectionService } from './connector-connection.service';
 import { ConnectorRegistryService } from './connector-registry.service';
 import { CanonicalMappingService } from './canonical-mapping';
+import { readOutcomeMappings } from './crm/crm-write.service';
 import type { SourcePullResult, SyncCheckpoint } from './contracts';
 
 const MAX_ATTEMPTS = Number(process.env.CONNECTOR_SYNC_MAX_ATTEMPTS ?? 5);
@@ -175,7 +176,7 @@ export class ConnectorSyncOrchestratorService {
       return this.handleFailure(workspaceId, connectionId, streamKey, runId, attempt, err);
     }
 
-    const applied = await this.mapping.apply(workspaceId, connectionId, `connector.${connection.provider}`, pullResult.records);
+    const applied = await this.mapping.apply(workspaceId, connectionId, `connector.${connection.provider}`, pullResult.records, readOutcomeMappings(connection.config));
     const finishedAt = new Date();
 
     await this.db

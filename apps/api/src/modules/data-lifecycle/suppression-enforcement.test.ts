@@ -10,6 +10,7 @@ import { closeRedis } from '../identity/identity.infra';
 import { IdentityGraphService, SuppressedIdentifierError } from '../identity/identity-graph.service';
 import { CanonicalMappingService } from '../connectors/canonical-mapping';
 import { CommerceWriteService } from '../connectors/commerce/commerce-write.service';
+import { CrmWriteService } from '../connectors/crm/crm-write.service';
 import { EventProjectionService } from '../customer-context/event-projection.service';
 
 /**
@@ -55,7 +56,7 @@ test('suppression is enforced at synchronizeLegacyIdentity, IdentityGraphService
   const customerContext = new CustomerContextService(db, suppression);
   const identity = new IdentityService(db, customerContext, suppression);
   const identityGraph = new IdentityGraphService(db, customerContext, suppression);
-  const mapping = new CanonicalMappingService(identityGraph, customerContext, new CommerceWriteService(db, customerContext));
+  const mapping = new CanonicalMappingService(identityGraph, customerContext, new CommerceWriteService(db, customerContext), new CrmWriteService(db));
   const projection = new EventProjectionService(db);
   const now = new Date();
 

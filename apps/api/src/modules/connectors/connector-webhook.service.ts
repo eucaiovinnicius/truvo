@@ -7,6 +7,7 @@ import { DRIZZLE, type Database } from '../auth/database.provider';
 import { ConnectorConnectionService } from './connector-connection.service';
 import { ConnectorRegistryService } from './connector-registry.service';
 import { CanonicalMappingService } from './canonical-mapping';
+import { readOutcomeMappings } from './crm/crm-write.service';
 import type { RawWebhookRequest } from './contracts';
 
 export interface ConnectorWebhookResult {
@@ -69,7 +70,7 @@ export class ConnectorWebhookService {
     }
 
     try {
-      const applied = await this.mapping.apply(workspaceId, connectionId, `connector.${connection.provider}`, records);
+      const applied = await this.mapping.apply(workspaceId, connectionId, `connector.${connection.provider}`, records, readOutcomeMappings(connection.config));
       await this.db
         .update(connectorSyncRuns)
         .set({

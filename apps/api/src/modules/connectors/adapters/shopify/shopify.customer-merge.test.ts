@@ -25,6 +25,7 @@ import { ConnectorRegistryService } from '../../connector-registry.service';
 import { ConnectorConnectionService } from '../../connector-connection.service';
 import { CanonicalMappingService } from '../../canonical-mapping';
 import { CommerceWriteService } from '../../commerce/commerce-write.service';
+import { CrmWriteService } from '../../crm/crm-write.service';
 import { ConnectorWebhookService } from '../../connector-webhook.service';
 import { createShopifyAdapter } from './shopify.adapter';
 import type { ShopifyFetch } from './shopify.graphql-client';
@@ -102,7 +103,7 @@ test('Shopify + Identity Graph v2: customer merge convergence (real Postgres, re
   const registry = new ConnectorRegistryService();
   const connections = new ConnectorConnectionService(db, audit, registry);
   const commerce = new CommerceWriteService(db, customerContext);
-  const mapping = new CanonicalMappingService(identityGraph, customerContext, commerce);
+  const mapping = new CanonicalMappingService(identityGraph, customerContext, commerce, new CrmWriteService(db));
   const webhook = new ConnectorWebhookService(db, connections, registry, mapping);
 
   const fetchImpl: ShopifyFetch = (async () => {

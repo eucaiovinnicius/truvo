@@ -20,6 +20,7 @@ import { ConnectorRegistryService } from './connector-registry.service';
 import { ConnectorConnectionService } from './connector-connection.service';
 import { CanonicalMappingService } from './canonical-mapping';
 import { CommerceWriteService } from './commerce/commerce-write.service';
+import { CrmWriteService } from './crm/crm-write.service';
 import { ConnectorSyncOrchestratorService } from './connector-sync-orchestrator.service';
 import { ConnectorDestinationService } from './connector-destination.service';
 import { ConnectorWebhookService } from './connector-webhook.service';
@@ -81,7 +82,7 @@ test('Connector Framework contract kit: fake provider proves the framework end-t
   const identityGraph = new IdentityGraphService(db, customerContext, suppression);
   const registry = new ConnectorRegistryService();
   const connections = new ConnectorConnectionService(db, audit, registry);
-  const mapping = new CanonicalMappingService(identityGraph, customerContext, new CommerceWriteService(db, customerContext));
+  const mapping = new CanonicalMappingService(identityGraph, customerContext, new CommerceWriteService(db, customerContext), new CrmWriteService(db));
   const orchestrator = new ConnectorSyncOrchestratorService(db, connections, registry, mapping);
   const destination = new ConnectorDestinationService(db, connections, registry, audit);
   const webhook = new ConnectorWebhookService(db, connections, registry, mapping);

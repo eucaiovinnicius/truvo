@@ -148,6 +148,23 @@ export class ConnectorConnectionService {
   }
 
   /**
+   * Order 061 §1 — "portal/account identity stored as immutable connection
+   * metadata." Merges into the EXISTING `config` (never replaces wholesale) so
+   * this can be called independently of object/property-selection or outcome-
+   * mapping config (Order 061 §2/§5) already stored there — one connection, one
+   * config bag, every writer only ever adds/overwrites its own keys.
+   */
+  async updateConfig(workspaceId: string, id: string, patch: Record<string, unknown>): Promise<ConnectorConnection> {
+    const existing = await this.findOwnedRaw(workspaceId, id);
+    const [row] = await this.db
+      .update(connectorConnections)
+      .set({ config: { ...(existing.config as Record<string, unknown>), ...patch }, updatedAt: new Date() })
+      .where(and(eq(connectorConnections.workspaceId, workspaceId), eq(connectorConnections.id, id)))
+      .returning();
+    return this.sanitize(row!);
+  }
+
+  /**
    * The ONLY method that writes `credentialStatus`. On success, advances
    * `lifecycleState` to 'connected' — but only from states where that's a genuine
    * forward step (draft/authorizing/error); an already-syncing/healthy connection

@@ -14,6 +14,7 @@ import { ReconciliationService } from '../data-quality/reconciliation.service';
 import { AdsService } from '../creatives/ads/ads.service';
 import { RetentionEnforcementService } from '../data-lifecycle/retention-enforcement.service';
 import { ConnectorConnectionService } from '../connectors/connector-connection.service';
+import { ConnectorRegistryService } from '../connectors/connector-registry.service';
 import { ConnectorSyncOrchestratorService } from '../connectors/connector-sync-orchestrator.service';
 import type { ConnectorLifecycleState } from '@truvo/db';
 
@@ -52,6 +53,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     private readonly retention: RetentionEnforcementService,
     private readonly connectorConnections: ConnectorConnectionService,
     private readonly connectorOrchestrator: ConnectorSyncOrchestratorService,
+    private readonly connectorRegistry: ConnectorRegistryService,
   ) {}
 
   onModuleInit(): void {
@@ -136,10 +138,17 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     for (const connection of connections) {
       if (connection.role === 'destination') continue;
       if (!SchedulerService.POLLABLE_STATES.includes(connection.lifecycleState)) continue;
-      try {
-        await this.connectorOrchestrator.runIncremental(workspaceId, connection.id);
-      } catch (e) {
-        this.logger.warn(`connector-incremental-sync falhou p/ ${workspaceId}/${connection.id}: ${(e as Error).message}`);
+      // Order 061 — a provider (HubSpot) may declare multiple independent
+      // incremental streams (contacts/companies/deals), each with its OWN
+      // checkpoint; Shopify (Order 060) declares none, so it keeps polling the
+      // single 'default' stream exactly as before.
+      const streams = this.connectorRegistry.getDefinition(connection.provider)?.incrementalStreams ?? ['default'];
+      for (const stream of streams) {
+        try {
+          await this.connectorOrchestrator.runIncremental(workspaceId, connection.id, stream);
+        } catch (e) {
+          this.logger.warn(`connector-incremental-sync falhou p/ ${workspaceId}/${connection.id}/${stream}: ${(e as Error).message}`);
+        }
       }
     }
   }

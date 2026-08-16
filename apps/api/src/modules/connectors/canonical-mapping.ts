@@ -3,6 +3,7 @@ import { IdentityGraphService, SuppressedIdentifierError } from '../identity/ide
 import { CustomerContextService } from '../customer-context/customer-context.service';
 import type { TypedTraitValue } from '../customer-context/customer-context.contracts';
 import { CommerceWriteService } from './commerce/commerce-write.service';
+import { CrmWriteService, type CrmOutcomeMapping } from './crm/crm-write.service';
 import type { NormalizedRecord, NormalizedTrait } from './contracts';
 
 /** Narrows the generic `{valueType, value}` shape into the discriminated union
@@ -32,6 +33,10 @@ export interface ApplyRecordsResult {
   suppressed: number;
   /** Order 060: commerce orders written (identified or guest — `customerId: null`). */
   commerceOrdersWritten: number;
+  /** Order 061: CRM accounts/deals written (companies/deals — not customer identity). */
+  crmObjectsWritten: number;
+  /** Order 061: association edges actually resolved+written (both sides already known). */
+  crmAssociationsWritten: number;
 }
 
 /**
@@ -50,21 +55,35 @@ export class CanonicalMappingService {
     @Inject(IdentityGraphService) private readonly identityGraph: IdentityGraphService,
     @Inject(CustomerContextService) private readonly customerContext: CustomerContextService,
     @Inject(CommerceWriteService) private readonly commerce: CommerceWriteService,
+    @Inject(CrmWriteService) private readonly crm: CrmWriteService,
   ) {}
 
   /**
-   * `connectionId` is required only for records carrying a `commerceOrder`
-   * (Order 060) — the FK `commerce_orders.connection_id` needs it; identifier/trait-
-   * only records (Order 050's original shape) never touch it.
+   * `connectionId` is required only for records carrying a `commerceOrder`/CRM
+   * payload (Orders 060/061) — the respective FKs need it; identifier/trait-only
+   * records (Order 050's original shape) never touch it. `outcomeMappings` (Order
+   * 061 §5) is opaque, caller-supplied config — this service never reads
+   * `connector_connections` itself, keeping it DB-dependency-neutral per provider.
    */
-  async apply(workspaceId: string, connectionId: string, sourceNamespace: string, records: NormalizedRecord[]): Promise<ApplyRecordsResult> {
-    const result: ApplyRecordsResult = { customersResolved: 0, identifiersAttached: 0, traitsWritten: 0, conflicts: 0, suppressed: 0, commerceOrdersWritten: 0 };
+  async apply(
+    workspaceId: string,
+    connectionId: string,
+    sourceNamespace: string,
+    records: NormalizedRecord[],
+    outcomeMappings: CrmOutcomeMapping[] = [],
+  ): Promise<ApplyRecordsResult> {
+    const result: ApplyRecordsResult = {
+      customersResolved: 0, identifiersAttached: 0, traitsWritten: 0, conflicts: 0, suppressed: 0,
+      commerceOrdersWritten: 0, crmObjectsWritten: 0, crmAssociationsWritten: 0,
+    };
 
     for (const record of records) {
-      // Order 060 §8 "guest checkout without Shopify customer": a record with NO
-      // identifiers is still worth applying if it carries a commerce order — it
-      // just resolves to no customer (recorded unattached, see CommerceWriteService).
-      if (record.identifiers.length === 0 && !record.commerceOrder) continue;
+      const hasCrmPayload = !!record.crmAccount || !!record.crmDeal || !!record.crmAssociations?.length || !!record.crmDeletion;
+      // Order 060 §8 "guest checkout without Shopify customer" / Order 061 "company
+      // and deal are not people": a record with NO identifiers is still worth
+      // applying if it carries a commerce order or a CRM company/deal/association/
+      // deletion signal — those resolve independently of (or before) any personal identity.
+      if (record.identifiers.length === 0 && !record.commerceOrder && !hasCrmPayload) continue;
 
       const observedAt = new Date(record.observedAt);
       let customerId: string | null = null;
@@ -123,6 +142,27 @@ export class CanonicalMappingService {
         // customer a PREVIOUS sync identified; that customer's derived traits still
         // need recomputing or refund/order-count history would go stale.
         if (upserted.customerId) await this.commerce.recomputeDerivedTraits(workspaceId, upserted.customerId);
+      }
+
+      if (record.crmAccount) {
+        await this.crm.upsertAccount(workspaceId, connectionId, sourceNamespace, record.crmAccount);
+        result.crmObjectsWritten += 1;
+      }
+      if (record.crmDeal) {
+        await this.crm.upsertDeal(workspaceId, connectionId, sourceNamespace, record.crmDeal);
+        result.crmObjectsWritten += 1;
+      }
+      for (const association of record.crmAssociations ?? []) {
+        const { written } = await this.crm.upsertAssociation(workspaceId, connectionId, association);
+        if (written) result.crmAssociationsWritten += 1;
+      }
+      if (record.crmDeal) {
+        // AFTER associations: resolving the deal's primary contact for outcome
+        // mapping needs THIS record's own deal→contact edge to already be written.
+        await this.crm.applyOutcomeMappingIfConfigured(workspaceId, record.crmDeal, sourceNamespace, outcomeMappings);
+      }
+      if (record.crmDeletion) {
+        await this.crm.applyDeletionSignal(workspaceId, record.crmDeletion);
       }
 
       if (customerId) {
