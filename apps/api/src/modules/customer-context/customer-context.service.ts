@@ -73,6 +73,26 @@ export class CustomerContextService {
     };
   }
 
+  /** Uma trait atual (não expirada, não deletada) de uma pessoa por namespace+key.
+   * Base de leitura reusada pela ActivationGuardService (Order 035 §3). */
+  async getTrait(
+    workspaceId: string,
+    customerId: string,
+    traitNamespace: string,
+    traitKey: string,
+  ): Promise<import('@truvo/db').CustomerTrait | null> {
+    const now = new Date();
+    const [trait] = await this.db.select().from(customerTraits).where(and(
+      eq(customerTraits.workspaceId, workspaceId),
+      eq(customerTraits.customerId, customerId),
+      eq(customerTraits.traitNamespace, traitNamespace),
+      eq(customerTraits.traitKey, traitKey),
+      isNull(customerTraits.deletedAt),
+      or(isNull(customerTraits.expiresAt), gt(customerTraits.expiresAt, now)),
+    )).limit(1);
+    return trait ?? null;
+  }
+
   async resolveIdentifier(
     workspaceId: string,
     providerNamespace: string,

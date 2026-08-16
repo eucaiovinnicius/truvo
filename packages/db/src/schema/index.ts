@@ -1,6 +1,8 @@
 // Barrel do schema Postgres (Drizzle). Cada módulo adiciona seu arquivo em schema/<módulo>.ts.
 export * from './auth'; // M1 — users, workspaces, workspace_members
 export * from './customer-context'; // Truvo 4.x - canonical customer context
+export * from './audit'; // Order 035 — audit_log (security/admin change trail)
+export * from './data-lifecycle'; // Order 035 — data_lifecycle_requests (export/deletion orchestration)
 export * from './events'; // M2 — api_keys
 export * from './tracking'; // M3 — tracking_links
 export * from './integrations'; // M4 — integrations, webhook_logs

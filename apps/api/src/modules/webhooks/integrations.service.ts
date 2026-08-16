@@ -15,6 +15,7 @@ import type {
   UpdateIntegrationDto,
 } from './dto/integration.dto';
 import type { Database } from './webhooks.providers';
+import { AuditService } from '../audit/audit.service';
 
 /** Integração sem os campos sensíveis, segura para retornar na API. */
 export type IntegrationPublic = Omit<Integration, 'credentialsEncrypted'> & {
@@ -23,7 +24,10 @@ export type IntegrationPublic = Omit<Integration, 'credentialsEncrypted'> & {
 
 @Injectable()
 export class IntegrationsService {
-  constructor(@Inject(WEBHOOKS_DB) private readonly db: Database) {}
+  constructor(
+    @Inject(WEBHOOKS_DB) private readonly db: Database,
+    private readonly audit: AuditService,
+  ) {}
 
   /** Nunca vaza `credentialsEncrypted` para fora do serviço (regra 7). */
   private sanitize(row: Integration): IntegrationPublic {
@@ -31,7 +35,7 @@ export class IntegrationsService {
     return { ...rest, hasCredentials: Boolean(credentialsEncrypted) };
   }
 
-  async create(workspaceId: string, dto: CreateIntegrationDto): Promise<IntegrationPublic> {
+  async create(workspaceId: string, dto: CreateIntegrationDto, actorUserId?: string): Promise<IntegrationPublic> {
     const id = `int_${ulid()}`;
     const [row] = await this.db
       .insert(integrations)
@@ -46,6 +50,17 @@ export class IntegrationsService {
         status: dto.status ?? 'pending',
       })
       .returning();
+
+    await this.audit.record({
+      workspaceId,
+      category: 'connector',
+      action: 'connector.created',
+      resourceType: 'integration',
+      resourceId: id,
+      actorUserId,
+      metadata: { type: dto.type, name: dto.name },
+    });
+
     return this.sanitize(row!);
   }
 
@@ -83,6 +98,7 @@ export class IntegrationsService {
     workspaceId: string,
     id: string,
     dto: UpdateIntegrationDto,
+    actorUserId?: string,
   ): Promise<IntegrationPublic> {
     await this.findOwned(workspaceId, id); // garante propriedade
 
@@ -98,14 +114,34 @@ export class IntegrationsService {
       .set(patch)
       .where(and(eq(integrations.id, id), eq(integrations.workspaceId, workspaceId)))
       .returning();
+
+    await this.audit.record({
+      workspaceId,
+      category: 'connector',
+      action: 'connector.updated',
+      resourceType: 'integration',
+      resourceId: id,
+      actorUserId,
+      metadata: { fields_changed: Object.keys(dto) },
+    });
+
     return this.sanitize(row!);
   }
 
-  async remove(workspaceId: string, id: string): Promise<void> {
+  async remove(workspaceId: string, id: string, actorUserId?: string): Promise<void> {
     await this.findOwned(workspaceId, id);
     await this.db
       .delete(integrations)
       .where(and(eq(integrations.id, id), eq(integrations.workspaceId, workspaceId)));
+
+    await this.audit.record({
+      workspaceId,
+      category: 'connector',
+      action: 'connector.deleted',
+      resourceType: 'integration',
+      resourceId: id,
+      actorUserId,
+    });
   }
 
   /**

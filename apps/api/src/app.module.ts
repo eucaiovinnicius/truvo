@@ -19,16 +19,20 @@ import { ReportsModule } from './modules/reports/reports.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { SchedulerModule } from './modules/scheduler/scheduler.module';
 import { CustomerContextModule } from './modules/customer-context/customer-context.module';
+import { AuditModule } from './modules/audit/audit.module';
+import { DataLifecycleModule } from './modules/data-lifecycle/data-lifecycle.module';
 
 @Module({
   imports: [
     HealthModule,
     AuthModule,
+    AuditModule, // @Global — registrar cedo (Order 035 §4)
     EventsModule,
     TrackingModule,
     WebhooksModule,
     IdentityModule,
     CustomerContextModule,
+    DataLifecycleModule, // Order 035 §5 — depende de CustomerContextModule
     DataQualityModule,
     FunnelsModule,
     MetricsModule,

@@ -1,49 +1,20 @@
-import { createHash } from 'node:crypto';
 import type { MatchKeyFlags } from '@truvo/db';
+import { sha256Hex, normalizeEmailHash, normalizePhoneHash } from '../../common/pii';
 
 /**
  * M9 — MATCH KEYS (identificadores de correspondência) para envio server-side.
  *
  * As plataformas casam a conversão a um usuário via identificadores hasheados
  * (email/telefone SHA-256) + click ids (fbclid/gclid/ttclid) + external_id + IP +
- * user agent. Aqui normalizamos e hasheamos (regra 4/7). O IP pode ser usado como
- * match key mas NUNCA é persistido (regra 5) — só viaja no request de saída.
+ * user agent. O IP pode ser usado como match key mas NUNCA é persistido (regra 5)
+ * — só viaja no request de saída.
  *
  * Regra Meta/Google/TikTok: email/telefone devem ser SHA-256 (hex) do valor
  * normalizado (lowercase+trim para email; só dígitos com DDI para telefone E.164).
+ * O hashing/normalização em si vive em `common/pii.ts` (Order 035 §2 — fonte única,
+ * reusada também pelo customer-context e demais módulos que lidam com PII).
  */
-
-const HEX_64 = /^[a-f0-9]{64}$/;
-
-/** SHA-256 hex de uma string. */
-export function sha256Hex(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex');
-}
-
-/**
- * Aceita e-mail em claro OU já hasheado. Normaliza (trim+lowercase) e hasheia se
- * ainda não for um SHA-256 hex. `undefined` quando vazio.
- */
-export function normalizeEmailHash(input?: string | null): string | undefined {
-  if (!input) return undefined;
-  const v = input.trim().toLowerCase();
-  if (!v) return undefined;
-  if (HEX_64.test(v)) return v; // já é hash
-  return sha256Hex(v);
-}
-
-/**
- * Telefone: aceita claro ou hash. Normaliza para dígitos (E.164 sem '+') e hasheia.
- * `undefined` quando vazio.
- */
-export function normalizePhoneHash(input?: string | null): string | undefined {
-  if (!input) return undefined;
-  const raw = input.trim().toLowerCase();
-  if (HEX_64.test(raw)) return raw; // já é hash
-  const digits = input.replace(/[^\d]/g, '');
-  if (!digits) return undefined;
-  return sha256Hex(digits);
-}
+export { sha256Hex, normalizeEmailHash, normalizePhoneHash };
 
 /**
  * `fbc` da Meta a partir do fbclid: `fb.1.<timestamp_ms>.<fbclid>`.

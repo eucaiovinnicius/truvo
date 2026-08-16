@@ -12,7 +12,7 @@ import {
 import { ZodValidationPipe } from '../../common/zod-validation.pipe';
 import { SupabaseAuthGuard } from '../auth/guards/supabase-auth.guard';
 import { WorkspaceGuard } from '../auth/guards/workspace.guard';
-import { CurrentWorkspace, Roles } from '../auth/decorators';
+import { CurrentUser, CurrentWorkspace, Roles } from '../auth/decorators';
 import { INTEGRATION_OUT_PLATFORMS, type IntegrationOutPlatform } from '@truvo/db';
 import { IntegrationOutConfigService } from './config.service';
 import { ConversionForwarderService } from './conversion-forwarder.service';
@@ -97,8 +97,9 @@ export class IntegrationsOutController {
     @CurrentWorkspace('id') workspaceId: string,
     @Param(new ZodValidationPipe(platformParamSchema)) params: { platform: IntegrationOutPlatform },
     @Body(new ZodValidationPipe(upsertConfigSchema)) dto: UpsertConfigDto,
+    @CurrentUser() user: { id: string; email?: string },
   ) {
-    return this.configs.upsert(workspaceId, params.platform, dto);
+    return this.configs.upsert(workspaceId, params.platform, dto, user);
   }
 
   /** DELETE /v1/integrations-out/:platform — remove a config da plataforma. */
@@ -107,8 +108,9 @@ export class IntegrationsOutController {
   async remove(
     @CurrentWorkspace('id') workspaceId: string,
     @Param(new ZodValidationPipe(platformParamSchema)) params: { platform: IntegrationOutPlatform },
+    @CurrentUser() user: { id: string; email?: string },
   ) {
-    await this.configs.remove(workspaceId, params.platform);
+    await this.configs.remove(workspaceId, params.platform, user);
     return { ok: true };
   }
 

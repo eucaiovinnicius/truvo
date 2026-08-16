@@ -70,8 +70,8 @@ export class WorkspacesController {
   @Delete(':id')
   @UseGuards(WorkspaceGuard)
   @Roles('owner')
-  remove(@Param('id') id: string) {
-    return this.workspaces.remove(id);
+  remove(@Param('id') id: string, @CurrentUser() user: { id: string; email?: string }) {
+    return this.workspaces.remove(id, user);
   }
 
   // ── Membros ──────────────────────────────────────────────────────────────
@@ -100,14 +100,19 @@ export class WorkspacesController {
     @Param('id') id: string,
     @Param('userId') userId: string,
     @Body(new ZodValidationPipe(updateMemberSchema)) dto: UpdateMemberDto,
+    @CurrentUser() user: { id: string; email?: string },
   ) {
-    return this.workspaces.updateMember(id, userId, dto);
+    return this.workspaces.updateMember(id, userId, dto, user);
   }
 
   @Delete(':id/members/:userId')
   @UseGuards(WorkspaceGuard)
   @Roles('owner', 'admin')
-  removeMember(@Param('id') id: string, @Param('userId') userId: string) {
-    return this.workspaces.removeMember(id, userId);
+  removeMember(
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+    @CurrentUser() user: { id: string; email?: string },
+  ) {
+    return this.workspaces.removeMember(id, userId, user);
   }
 }

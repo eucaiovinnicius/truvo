@@ -15,6 +15,12 @@ import { decryptJson, encryptJson } from './crypto';
 import type { Database } from './integrations-out.providers';
 import type { DecryptedCredentials } from './clients/types';
 import type { UpsertConfigDto } from './dto/integrations-out.dto';
+import { AuditService } from '../audit/audit.service';
+
+export interface ConfigActor {
+  id: string;
+  email?: string;
+}
 
 /** Config sem o blob de credenciais — segura para a API (regra 7). */
 export type IntegrationOutConfigPublic = Omit<IntegrationOutConfig, 'credentialsEncrypted'> & {
@@ -28,7 +34,10 @@ export type IntegrationOutConfigPublic = Omit<IntegrationOutConfig, 'credentials
  */
 @Injectable()
 export class IntegrationOutConfigService {
-  constructor(@Inject(INTEGRATIONS_OUT_DB) private readonly db: Database) {}
+  constructor(
+    @Inject(INTEGRATIONS_OUT_DB) private readonly db: Database,
+    private readonly audit: AuditService,
+  ) {}
 
   private sanitize(row: IntegrationOutConfig): IntegrationOutConfigPublic {
     const { credentialsEncrypted, ...rest } = row;
@@ -90,14 +99,18 @@ export class IntegrationOutConfigService {
     return decryptJson<DecryptedCredentials>(row.credentialsEncrypted);
   }
 
-  /** Upsert idempotente por (workspace, platform). */
+  /** Upsert idempotente por (workspace, platform). CRUD de conector auditado (Order 035 §4) —
+   * NUNCA loga `dto.credentials`/o blob cifrado (regra 4/7). */
   async upsert(
     workspaceId: string,
     platform: IntegrationOutPlatform,
     dto: UpsertConfigDto,
+    actor?: ConfigActor,
   ): Promise<IntegrationOutConfigPublic> {
     const existing = await this.findRaw(workspaceId, platform);
+    const isCreate = !existing;
 
+    let result: IntegrationOutConfigPublic;
     if (!existing) {
       const row = {
         id: `iout_${ulid()}`,
@@ -109,32 +122,45 @@ export class IntegrationOutConfigService {
         status: dto.status ?? 'pending',
       };
       const [created] = await this.db.insert(integrationOutConfigs).values(row).returning();
-      return this.sanitize(created!);
+      result = this.sanitize(created!);
+    } else {
+      const patch: Partial<typeof integrationOutConfigs.$inferInsert> = { updatedAt: new Date() };
+      if (dto.enabled !== undefined) patch.enabled = dto.enabled;
+      if (dto.status !== undefined) patch.status = dto.status;
+      if (dto.credentials !== undefined) patch.credentialsEncrypted = encryptJson(dto.credentials);
+      if (dto.config !== undefined) {
+        // merge raso: preserva chaves não enviadas.
+        patch.config = { ...existing.config, ...(dto.config as IntegrationOutConfigJson) };
+      }
+
+      const [updated] = await this.db
+        .update(integrationOutConfigs)
+        .set(patch)
+        .where(
+          and(
+            eq(integrationOutConfigs.workspaceId, workspaceId),
+            eq(integrationOutConfigs.platform, platform),
+          ),
+        )
+        .returning();
+      result = this.sanitize(updated!);
     }
 
-    const patch: Partial<typeof integrationOutConfigs.$inferInsert> = { updatedAt: new Date() };
-    if (dto.enabled !== undefined) patch.enabled = dto.enabled;
-    if (dto.status !== undefined) patch.status = dto.status;
-    if (dto.credentials !== undefined) patch.credentialsEncrypted = encryptJson(dto.credentials);
-    if (dto.config !== undefined) {
-      // merge raso: preserva chaves não enviadas.
-      patch.config = { ...existing.config, ...(dto.config as IntegrationOutConfigJson) };
-    }
+    await this.audit.record({
+      workspaceId,
+      category: 'connector',
+      action: isCreate ? 'connector.created' : 'connector.updated',
+      resourceType: 'integration_out_config',
+      resourceId: platform,
+      actorUserId: actor?.id,
+      actorEmail: actor?.email,
+      metadata: { platform, enabled: result.enabled, has_credentials: result.hasCredentials },
+    });
 
-    const [updated] = await this.db
-      .update(integrationOutConfigs)
-      .set(patch)
-      .where(
-        and(
-          eq(integrationOutConfigs.workspaceId, workspaceId),
-          eq(integrationOutConfigs.platform, platform),
-        ),
-      )
-      .returning();
-    return this.sanitize(updated!);
+    return result;
   }
 
-  async remove(workspaceId: string, platform: IntegrationOutPlatform): Promise<void> {
+  async remove(workspaceId: string, platform: IntegrationOutPlatform, actor?: ConfigActor): Promise<void> {
     await this.db
       .delete(integrationOutConfigs)
       .where(
@@ -143,6 +169,17 @@ export class IntegrationOutConfigService {
           eq(integrationOutConfigs.platform, platform),
         ),
       );
+
+    await this.audit.record({
+      workspaceId,
+      category: 'connector',
+      action: 'connector.deleted',
+      resourceType: 'integration_out_config',
+      resourceId: platform,
+      actorUserId: actor?.id,
+      actorEmail: actor?.email,
+      metadata: { platform },
+    });
   }
 
   /** Marca o resultado do último envio/teste (status + erro + timestamp). */

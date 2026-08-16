@@ -21,12 +21,12 @@ export class ApiKeysController {
     @Body(new ZodValidationPipe(createApiKeySchema)) dto: CreateApiKeyDto,
     @Req() req: AuthenticatedRequest,
   ) {
-    return this.apiKeys.create(req.workspaceId, dto.name, req.user?.id);
+    return this.apiKeys.create(req.workspaceId, dto.name, req.user?.id, req.user?.email);
   }
 
   @Delete(':id')
   @HttpCode(200)
   revoke(@Param('id') id: string, @Req() req: AuthenticatedRequest) {
-    return this.apiKeys.revoke(req.workspaceId, id);
+    return this.apiKeys.revoke(req.workspaceId, id, req.user);
   }
 }

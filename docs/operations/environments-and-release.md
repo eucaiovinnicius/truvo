@@ -41,6 +41,28 @@ This checkout has no Git remote. Branch protection, required checks, preview dep
 6. Authenticate on staging, switch workspaces, verify live mode has no demo data, and send one authorized tracking event using no production customer data.
 7. Verify CORS from the staging Vercel origin, inspect browser assets for no production secret, and confirm a flagged feature is enabled only for its intended workspace.
 
+## Backup and recovery (Order 035 §6)
+
+Truvo does not run its own backup infrastructure — every stateful store is a managed provider, and backup/retention is that provider's responsibility. This table is the source of truth for who owns what; it does not replace the provider's own documentation.
+
+| Store | Provider | Backup mechanism | Truvo's responsibility |
+|---|---|---|---|
+| Postgres (workspaces, customer context, billing, audit, etc.) | Supabase | Provider-managed automated backups (PITR on paid tiers; daily snapshot otherwise — confirm the actual tier before relying on a specific RPO). | Confirm the project's backup tier in the Supabase dashboard before go-live; never assume PITR without checking. |
+| ClickHouse | Railway (or ClickHouse Cloud) | Provider/volume-level snapshot. Truvo does not run `BACKUP`/`RESTORE` statements itself. | Confirm the hosting choice's snapshot policy; ClickHouse data is also largely re-derivable from the Postgres canonical layer plus re-ingestion where the source system retains history. |
+| Redpanda/Kafka | Railway (or Redpanda Cloud) | Broker-level retention window, not a backup. | Treat the queue as transient — it is not a system of record; do not rely on replaying it as a recovery mechanism. |
+| Redis | Railway (or Upstash) | Provider snapshot (if configured) or none. | Redis holds caches/dedup/rate-limit state only — safe to lose and rebuild; not a backup target. |
+
+### Initial restore procedure — Postgres (transactional store)
+
+This is the **minimum reproducible procedure** required by Order 035 §6. It validates that a Supabase Postgres backup is actually restorable and that Truvo's versioned migration history stays consistent after a restore — it is not a full disaster-recovery runbook.
+
+1. **Never restore into a database with real customer data still attached to it.** Use a disposable Supabase project or a local disposable Postgres for this validation.
+2. In the Supabase dashboard of the source project, trigger a restore (PITR to a timestamp, or the latest daily snapshot) into a **new, disposable** project — do not restore in place onto a production project as a "test".
+3. Point `DATABASE_URL` at the disposable restored project and run `pnpm migration:validate` — it must pass with the same result as against the source project (same schema shape, same migration history tag as of the restore point).
+4. Run `pnpm db:pg` against the restored disposable project — it must be a no-op (already at head) or apply cleanly any migrations that shipped after the backup was taken.
+5. Spot-check row counts on 2–3 core tables (`workspaces`, `customers`, `audit_log`) against the source project at the same point in time; discrepancies mean the backup/restore mechanism itself needs investigation with the provider before it can be trusted.
+6. Tear down the disposable restored project. Record the date of this validation and its result in the release ticket — this is the "reproducible validation/runbook step" this order requires; repeat it periodically (e.g., each time the backup tier or schema changes materially), not only once.
+
 ## Rollback and forward-fix
 
 For application-only defects, redeploy the previous known-good Railway/Vercel commit, confirm `/health` release identity, and repeat smoke checks. Disable a newly released workspace capability by setting its flag to `false` and redeploying the API; flags do not replace rollback for an unflagged defect.

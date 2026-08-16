@@ -11,7 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe';
-import { CurrentWorkspace } from './decorators/current-workspace.decorator';
+import { CurrentUserId, CurrentWorkspace } from './decorators/current-workspace.decorator';
 import {
   createIntegrationSchema,
   listIntegrationsQuerySchema,
@@ -46,8 +46,9 @@ export class IntegrationsController {
   create(
     @CurrentWorkspace() workspaceId: string,
     @Body(new ZodValidationPipe(createIntegrationSchema)) dto: CreateIntegrationDto,
+    @CurrentUserId() userId: string | undefined,
   ) {
-    return this.integrations.create(workspaceId, dto);
+    return this.integrations.create(workspaceId, dto, userId);
   }
 
   @Get(':id')
@@ -60,14 +61,19 @@ export class IntegrationsController {
     @CurrentWorkspace() workspaceId: string,
     @Param('id') id: string,
     @Body(new ZodValidationPipe(updateIntegrationSchema)) dto: UpdateIntegrationDto,
+    @CurrentUserId() userId: string | undefined,
   ) {
-    return this.integrations.update(workspaceId, id, dto);
+    return this.integrations.update(workspaceId, id, dto, userId);
   }
 
   @Delete(':id')
   @HttpCode(204)
-  async remove(@CurrentWorkspace() workspaceId: string, @Param('id') id: string): Promise<void> {
-    await this.integrations.remove(workspaceId, id);
+  async remove(
+    @CurrentWorkspace() workspaceId: string,
+    @Param('id') id: string,
+    @CurrentUserId() userId: string | undefined,
+  ): Promise<void> {
+    await this.integrations.remove(workspaceId, id, userId);
   }
 
   @Post(':id/test')

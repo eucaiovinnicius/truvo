@@ -14,3 +14,14 @@ export const CurrentWorkspace = createParamDecorator(
     return req.workspaceId;
   },
 );
+
+/**
+ * Injeta o `userId` resolvido pelo WorkspaceAuthGuard — usado para atribuir o ator
+ * em auditoria (Order 035 §4) de mudanças de CRUD de conector (M4).
+ */
+export const CurrentUserId = createParamDecorator(
+  (_data: unknown, context: ExecutionContext): string | undefined => {
+    const req = context.switchToHttp().getRequest<{ userId?: string }>();
+    return req.userId;
+  },
+);

@@ -11,20 +11,31 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { users, workspaceMembers, workspaces } from '@truvo/db';
 import { DRIZZLE, type Database } from './database.provider';
 import { SUPABASE_CLIENT } from './supabase.provider';
+import { AuditService } from '../audit/audit.service';
 import type { CreateWorkspaceDto, UpdateWorkspaceDto } from './dto/workspace.dto';
 import type { InviteDto, UpdateMemberDto } from './dto/member.dto';
 import type { WorkspaceRole } from './roles';
+
+export interface ActingUser {
+  id: string;
+  email?: string;
+}
 
 /**
  * Workspaces + membros (PRD §7 M1). Todo acesso é escopado por workspace_id
  * (regra 1); a autorização por papel é feita no WorkspaceGuard (@Roles) e as
  * invariantes de posse (>=1 owner) são garantidas aqui.
+ *
+ * Mudanças de membership/papel e a remoção do workspace são operações auditáveis
+ * (Order 035 §4) — reusa `AuditService` (@Global), best-effort, nunca derruba a
+ * operação primária.
  */
 @Injectable()
 export class WorkspacesService {
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
+    private readonly audit: AuditService,
   ) {}
 
   /** Cria workspace + membership de owner atomicamente. */
@@ -115,9 +126,21 @@ export class WorkspacesService {
     return ws;
   }
 
-  /** Deleta workspace (cascade nos membros). Somente owner (@Roles no controller). */
-  async remove(workspaceId: string) {
+  /** Deleta workspace (cascade nos membros). Somente owner (@Roles no controller).
+   * Operação destrutiva → auditada (Order 035 §4). Para o fluxo retry-safe de
+   * tombstone da customer-context canônica antes da remoção, ver
+   * `POST /v1/workspaces/:id/data-lifecycle/delete` (DataLifecycleController). */
+  async remove(workspaceId: string, actor: ActingUser) {
     await this.db.delete(workspaces).where(eq(workspaces.id, workspaceId));
+    await this.audit.record({
+      workspaceId,
+      category: 'admin_config',
+      action: 'workspace.removed',
+      resourceType: 'workspace',
+      resourceId: workspaceId,
+      actorUserId: actor.id,
+      actorEmail: actor.email,
+    });
     return { success: true };
   }
 
@@ -194,11 +217,21 @@ export class WorkspacesService {
       })
       .returning();
 
+    await this.audit.record({
+      workspaceId,
+      category: 'membership',
+      action: 'membership.invited',
+      resourceType: 'workspace_member',
+      resourceId: targetUserId,
+      actorUserId: invitedBy,
+      metadata: { role: dto.role, freshly_invited: freshlyInvited },
+    });
+
     return member;
   }
 
   /** Altera o papel de um membro. Preserva a invariante de >=1 owner. */
-  async updateMember(workspaceId: string, targetUserId: string, dto: UpdateMemberDto) {
+  async updateMember(workspaceId: string, targetUserId: string, dto: UpdateMemberDto, actor: ActingUser) {
     const target = await this.getMembership(workspaceId, targetUserId);
     if (target.role === 'owner' && dto.role !== 'owner') {
       await this.assertNotLastOwner(workspaceId);
@@ -214,11 +247,23 @@ export class WorkspacesService {
         ),
       )
       .returning();
+
+    await this.audit.record({
+      workspaceId,
+      category: 'membership',
+      action: 'membership.role_changed',
+      resourceType: 'workspace_member',
+      resourceId: targetUserId,
+      actorUserId: actor.id,
+      actorEmail: actor.email,
+      metadata: { from_role: target.role, to_role: dto.role },
+    });
+
     return updated;
   }
 
   /** Remove um membro. Não permite remover o único owner. */
-  async removeMember(workspaceId: string, targetUserId: string) {
+  async removeMember(workspaceId: string, targetUserId: string, actor: ActingUser) {
     const target = await this.getMembership(workspaceId, targetUserId);
     if (target.role === 'owner') {
       await this.assertNotLastOwner(workspaceId);
@@ -232,6 +277,18 @@ export class WorkspacesService {
           eq(workspaceMembers.userId, targetUserId),
         ),
       );
+
+    await this.audit.record({
+      workspaceId,
+      category: 'membership',
+      action: 'membership.removed',
+      resourceType: 'workspace_member',
+      resourceId: targetUserId,
+      actorUserId: actor.id,
+      actorEmail: actor.email,
+      metadata: { removed_role: target.role },
+    });
+
     return { success: true };
   }
 

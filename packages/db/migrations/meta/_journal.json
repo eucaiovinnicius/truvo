@@ -15,6 +15,13 @@
       "when": 1786867668666,
       "tag": "0001_rich_miek",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786869071564,
+      "tag": "0002_slow_kinsey_walden",
+      "breakpoints": true
     }
   ]
 }
