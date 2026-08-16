@@ -126,6 +126,19 @@ export interface ConnectorTestDriver {
   webhookRequest(customerRef: string, opts?: { valid?: boolean; deliveryId?: string }): RawWebhookRequest;
   pullCallCount(): number;
   writeCallCount(): number;
+  /** Order 061 (association contract closure) — how many records a single
+   * backfill/incremental page returns. Lets `proveBackfillCheckpointResume`
+   * (connector-contract-kit.ts) derive its per-page expectations generically
+   * instead of hardcoding the fake provider's own page size, so a REAL adapter's
+   * driver (which may choose a different — or test-overridden — page size) can
+   * share the exact same proof unweakened. */
+  pageSize(): number;
+  /** Order 061 — a driver-appropriate payload for `ConnectorDestinationService.write()`.
+   * The fake destination never validates its payload; a real destination adapter
+   * (e.g. HubSpot's namespaced-property writeback) does, so the kit asks the
+   * driver for a payload its OWN adapter will actually accept — the assertions in
+   * `proveDestinationIdempotencyAndCorrelation` stay identical either way. */
+  destinationWritePayload(): Record<string, unknown>;
 }
 
 export function createFakeDriver(state: FakeProviderState): ConnectorTestDriver {
@@ -148,6 +161,8 @@ export function createFakeDriver(state: FakeProviderState): ConnectorTestDriver 
     }),
     pullCallCount: () => state.pullCallCount,
     writeCallCount: () => state.writeCallCount,
+    pageSize: () => pageSize(),
+    destinationWritePayload: () => ({ any: 'thing' }),
   };
 }
 

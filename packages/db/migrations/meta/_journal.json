@@ -64,6 +64,13 @@
       "when": 1786914258637,
       "tag": "0008_normal_mother_askani",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786916273839,
+      "tag": "0009_easy_kronos",
+      "breakpoints": true
     }
   ]
 }

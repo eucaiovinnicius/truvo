@@ -292,9 +292,15 @@ test('HubSpot adapter: end-to-end proofs against real Postgres (§9 edge cases)'
       await orchestrator.runIncremental(WS, conn.id, 'deals');
 
       const [dealRow] = await db.select().from(crmDeals).where(and(eq(crmDeals.workspaceId, WS), eq(crmDeals.providerObjectId, `d_reassoc_${STAMP}`)));
+      const [oldCoRow] = await db.select().from(crmAccounts).where(and(eq(crmAccounts.workspaceId, WS), eq(crmAccounts.providerObjectId, `co_old_${STAMP}`)));
       const [newCoRow] = await db.select().from(crmAccounts).where(and(eq(crmAccounts.workspaceId, WS), eq(crmAccounts.providerObjectId, `co_new_${STAMP}`)));
       const edges = await db.select().from(crmAssociations).where(and(eq(crmAssociations.workspaceId, WS), eq(crmAssociations.fromObjectType, 'deal'), eq(crmAssociations.fromObjectId, dealRow!.id), eq(crmAssociations.toObjectType, 'company')));
-      assert.ok(edges.some((e) => e.toObjectId === newCoRow!.id), 'the deal must resolve an edge to the NEW company after reassociation');
+      const newEdge = edges.find((e) => e.toObjectId === newCoRow!.id);
+      const oldEdge = edges.find((e) => e.toObjectId === oldCoRow!.id);
+      assert.ok(newEdge, 'the deal must resolve an edge to the NEW company after reassociation');
+      assert.equal(newEdge!.deletedAt, null, 'the new edge must be ACTIVE');
+      assert.ok(oldEdge, 'the OLD edge row is preserved (tombstoned), not dropped');
+      assert.ok(oldEdge!.deletedAt, 'the old edge must be TOMBSTONED — reconciliation converges, it does not accumulate');
     });
 
     await t.test('deleted/restored object is explicit — soft, non-destructive, reversible', async () => {

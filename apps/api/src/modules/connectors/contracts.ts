@@ -179,6 +179,25 @@ export interface NormalizedCrmDeletionSignal {
 }
 
 /**
+ * Order 061 (association + contract closure) — declares that `crmAssociations`
+ * (filtered to `fromObjectType`/one of `toObjectTypes`) represents the COMPLETE
+ * current set of edges the provider reports for this object, as of `observedAt` —
+ * i.e. this came from a full object fetch (backfill/incremental reconciliation),
+ * not a partial webhook update. Only when this is present does
+ * `CrmWriteService` RECONCILE (upsert current + tombstone active edges now
+ * absent) instead of purely additively upserting — a record with associations
+ * but no scope (none currently exist — webhooks never carry associations) stays
+ * additive-only, a safe default for any future partial-association source.
+ */
+export interface NormalizedCrmAssociationScope {
+  providerNamespace: string;
+  fromObjectType: 'contact' | 'company' | 'deal';
+  fromProviderObjectId: string;
+  toObjectTypes: readonly ('contact' | 'company' | 'deal')[];
+  observedAt: string;
+}
+
+/**
  * One provider object translated into canonical shape — the ONLY thing an adapter
  * hands back for identity/trait/commerce/CRM resolution. `identifiers` may be EMPTY
  * for a genuinely anonymous commerce record (Order 060 §8: "guest checkout without
@@ -195,6 +214,7 @@ export interface NormalizedRecord {
   crmAccount?: NormalizedCrmAccount;
   crmDeal?: NormalizedCrmDeal;
   crmAssociations?: NormalizedCrmAssociation[];
+  crmAssociationScope?: NormalizedCrmAssociationScope;
   crmDeletion?: NormalizedCrmDeletionSignal;
   observedAt: string;
 }

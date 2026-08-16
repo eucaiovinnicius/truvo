@@ -24,6 +24,15 @@ import { connectorConnections } from './connectors';
  * again (in any page order, from either side's sync) is a no-op — this is what
  * makes "associations converge independently of page order" (Order 061 §3) true
  * without extra bookkeeping.
+ *
+ * `deleted_at` (Order 061 association+contract closure) makes edge removal
+ * explicit/auditable rather than a hard delete — a full-object reconciliation
+ * sync reports the CURRENT complete association set for one (fromObject,
+ * toObjectType) pair; an edge previously active but now absent from that set is
+ * TOMBSTONED (`deleted_at` set), never dropped, preserving the workspace+provider
+ * provenance/history. `observed_at` doubles as the out-of-order guard: a stale
+ * reconciliation (older `observed_at` than what's already recorded for that
+ * group) is rejected wholesale rather than partially applied.
  */
 export const crmAccounts = pgTable(
   'crm_accounts',
@@ -116,7 +125,9 @@ export const crmAssociations = pgTable(
     associationType: text('association_type').notNull(),
     provenance: jsonb('provenance').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
     observedAt: timestamp('observed_at', { withTimezone: true }).notNull(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
     pk: primaryKey({ columns: [t.workspaceId, t.id] }),
@@ -127,6 +138,7 @@ export const crmAssociations = pgTable(
     }).onDelete('cascade'),
     naturalUq: uniqueIndex('crm_associations_ws_natural_uq').on(t.workspaceId, t.fromObjectType, t.fromObjectId, t.toObjectType, t.toObjectId, t.associationType),
     toIdx: index('crm_associations_ws_to_idx').on(t.workspaceId, t.toObjectType, t.toObjectId),
+    groupIdx: index('crm_associations_ws_from_group_idx').on(t.workspaceId, t.fromObjectType, t.fromObjectId, t.toObjectType),
     typeCheck: check('crm_associations_type_check', sql`${t.fromObjectType} IN ('contact','company','deal') AND ${t.toObjectType} IN ('contact','company','deal')`),
   }),
 );

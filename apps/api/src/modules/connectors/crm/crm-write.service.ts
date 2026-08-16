@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, or, sql } from 'drizzle-orm';
 import {
   crmAccounts,
   crmDeals,
@@ -13,7 +13,7 @@ import {
 } from '@truvo/db';
 import { DRIZZLE, type Database } from '../../auth/database.provider';
 import { SuppressionService } from '../../customer-context/suppression.service';
-import type { NormalizedCrmAccount, NormalizedCrmAssociation, NormalizedCrmDeal, NormalizedCrmDeletionSignal } from '../contracts';
+import type { NormalizedCrmAccount, NormalizedCrmAssociation, NormalizedCrmAssociationScope, NormalizedCrmDeal, NormalizedCrmDeletionSignal } from '../contracts';
 
 /**
  * Order 061 §2/§4/§5 — a workspace-configured, versionable mapping describing which
@@ -76,6 +76,14 @@ export class CrmWriteService {
    * `deleted`/`restored` are non-destructive, visible flags; `privacy_deleted`
    * suppresses the identifier via the EXISTING Order 55 `SuppressionService` so it
    * can never silently reconstruct canonical identity again.
+   *
+   * Association+contract closure — "object deletion/restoration must produce
+   * deliberate association behavior": deleting an object tombstones every
+   * currently-active association touching it (either side); restoring it does
+   * NOT resurrect them automatically — a restored object's association state is
+   * unknown until the next reconciliation pull reports what's currently true, so
+   * guessing here would risk exactly the "resurrect a stale edge" failure mode
+   * the out-of-order guard in `reconcileAssociations` exists to prevent.
    */
   async applyDeletionSignal(workspaceId: string, signal: NormalizedCrmDeletionSignal): Promise<void> {
     if (signal.action === 'privacy_deleted') {
@@ -102,19 +110,34 @@ export class CrmWriteService {
             eq(customerIdentifiers.identifierValue, signal.providerObjectId),
           ),
         );
-      return;
-    }
-    if (signal.objectType === 'company') {
+    } else if (signal.objectType === 'company') {
       await this.db
         .update(crmAccounts)
         .set({ deletedAt, updatedAt: now })
         .where(and(eq(crmAccounts.workspaceId, workspaceId), eq(crmAccounts.providerNamespace, signal.providerNamespace), eq(crmAccounts.providerObjectId, signal.providerObjectId)));
-      return;
+    } else {
+      await this.db
+        .update(crmDeals)
+        .set({ deletedAt, updatedAt: now })
+        .where(and(eq(crmDeals.workspaceId, workspaceId), eq(crmDeals.providerNamespace, signal.providerNamespace), eq(crmDeals.providerObjectId, signal.providerObjectId)));
     }
+
+    if (signal.action !== 'deleted') return; // restore: deliberately does NOT resurrect associations.
+    const localId = await this.resolveLocalId(workspaceId, signal.providerNamespace, signal.objectType, signal.providerObjectId);
+    if (!localId) return;
     await this.db
-      .update(crmDeals)
-      .set({ deletedAt, updatedAt: now })
-      .where(and(eq(crmDeals.workspaceId, workspaceId), eq(crmDeals.providerNamespace, signal.providerNamespace), eq(crmDeals.providerObjectId, signal.providerObjectId)));
+      .update(crmAssociations)
+      .set({ deletedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(crmAssociations.workspaceId, workspaceId),
+          isNull(crmAssociations.deletedAt),
+          or(
+            and(eq(crmAssociations.fromObjectType, signal.objectType), eq(crmAssociations.fromObjectId, localId)),
+            and(eq(crmAssociations.toObjectType, signal.objectType), eq(crmAssociations.toObjectId, localId)),
+          ),
+        ),
+      );
   }
 
   /**
@@ -214,6 +237,83 @@ export class CrmWriteService {
     return { written: true };
   }
 
+  /**
+   * Order 061 (association + contract closure) — AUTHORITATIVE reconciliation:
+   * `currentAssociations` (filtered to `scope.fromObjectType`) is the COMPLETE
+   * current edge set the provider reports for each of `scope.toObjectTypes`, as
+   * of `scope.observedAt`. Upserts/reactivates every edge present; tombstones
+   * (`deletedAt`, never dropped) every previously-active edge in that
+   * (fromObject, toObjectType) group that is now absent — this is what makes a
+   * reassociation converge to `old edge REMOVED, new edge ACTIVE` instead of
+   * accumulating both forever.
+   *
+   * Out-of-order safety: compares `scope.observedAt` against the MOST RECENT
+   * `observedAt` already recorded across ALL rows (active or tombstoned) in that
+   * group. A reconciliation older than what's already known is rejected for that
+   * group WHOLESALE (no partial apply) — a stale snapshot can never resurrect an
+   * edge a newer sync already removed, nor prematurely remove one a newer sync
+   * already confirmed.
+   */
+  async reconcileAssociations(
+    workspaceId: string,
+    connectionId: string,
+    providerNamespace: string,
+    scope: NormalizedCrmAssociationScope,
+    fromProviderObjectId: string,
+    currentAssociations: NormalizedCrmAssociation[],
+  ): Promise<{ active: number; tombstoned: number; staleGroupsSkipped: number }> {
+    const fromId = await this.resolveLocalId(workspaceId, providerNamespace, scope.fromObjectType, fromProviderObjectId);
+    if (!fromId) return { active: 0, tombstoned: 0, staleGroupsSkipped: 0 }; // fromObject not synced yet — self-heals once it is.
+
+    const observedAt = new Date(scope.observedAt);
+    const now = new Date();
+    let active = 0;
+    let tombstoned = 0;
+    let staleGroupsSkipped = 0;
+
+    for (const toType of scope.toObjectTypes) {
+      const currentForType = currentAssociations.filter((a) => a.fromObjectType === scope.fromObjectType && a.toObjectType === toType);
+      const resolvedToIds = new Set<string>();
+      for (const assoc of currentForType) {
+        const toId = await this.resolveLocalId(workspaceId, providerNamespace, toType, assoc.toProviderObjectId);
+        if (toId) resolvedToIds.add(toId); // unresolved side self-heals once THAT object syncs and reports the edge back.
+      }
+
+      const existingRows = await this.db
+        .select()
+        .from(crmAssociations)
+        .where(and(eq(crmAssociations.workspaceId, workspaceId), eq(crmAssociations.fromObjectType, scope.fromObjectType), eq(crmAssociations.fromObjectId, fromId), eq(crmAssociations.toObjectType, toType)));
+
+      const latestKnown = existingRows.reduce<Date>((max, r) => (r.observedAt > max ? r.observedAt : max), new Date(0));
+      if (existingRows.length > 0 && observedAt < latestKnown) {
+        staleGroupsSkipped += 1;
+        continue; // stale reconciliation — never touch this group.
+      }
+
+      for (const toId of resolvedToIds) {
+        const associationType = `${scope.fromObjectType}_to_${toType}`;
+        const id = deterministicId('crmas', workspaceId, scope.fromObjectType, fromId, toType, toId, associationType);
+        await this.db
+          .insert(crmAssociations)
+          .values({ workspaceId, id, connectionId, providerNamespace, fromObjectType: scope.fromObjectType, fromObjectId: fromId, toObjectType: toType, toObjectId: toId, associationType, observedAt })
+          .onConflictDoUpdate({
+            target: [crmAssociations.workspaceId, crmAssociations.fromObjectType, crmAssociations.fromObjectId, crmAssociations.toObjectType, crmAssociations.toObjectId, crmAssociations.associationType],
+            set: { deletedAt: null, observedAt, updatedAt: now },
+          });
+        active += 1;
+      }
+
+      for (const row of existingRows) {
+        if (row.deletedAt === null && !resolvedToIds.has(row.toObjectId)) {
+          await this.db.update(crmAssociations).set({ deletedAt: now, observedAt, updatedAt: now }).where(and(eq(crmAssociations.workspaceId, workspaceId), eq(crmAssociations.id, row.id)));
+          tombstoned += 1;
+        }
+      }
+    }
+
+    return { active, tombstoned, staleGroupsSkipped };
+  }
+
   /** The first customer resolved from a 'deal'→'contact' association — used as the
    * outcome's owner. Documented scope decision (Order 061 handoff): "primary
    * contact" = first association found, not a HubSpot-native primary-contact flag
@@ -222,7 +322,19 @@ export class CrmWriteService {
     const [assoc] = await this.db
       .select({ toObjectId: crmAssociations.toObjectId })
       .from(crmAssociations)
-      .where(and(eq(crmAssociations.workspaceId, workspaceId), eq(crmAssociations.fromObjectType, 'deal'), eq(crmAssociations.fromObjectId, dealLocalId), eq(crmAssociations.toObjectType, 'contact')))
+      .where(
+        and(
+          eq(crmAssociations.workspaceId, workspaceId),
+          eq(crmAssociations.fromObjectType, 'deal'),
+          eq(crmAssociations.fromObjectId, dealLocalId),
+          eq(crmAssociations.toObjectType, 'contact'),
+          // Association+contract closure: a reassociation TOMBSTONES the old edge
+          // rather than deleting it (auditable) — outcome mapping must only ever
+          // consider the CURRENTLY ACTIVE edge, or a reassociated deal's outcome
+          // could attribute to a stale, no-longer-associated contact.
+          isNull(crmAssociations.deletedAt),
+        ),
+      )
       .limit(1);
     return assoc?.toObjectId ?? null;
   }

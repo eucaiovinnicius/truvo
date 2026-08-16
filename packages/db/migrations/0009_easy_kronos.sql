@@ -1,0 +1,3 @@
+ALTER TABLE "crm_associations" ADD COLUMN "deleted_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "crm_associations" ADD COLUMN "updated_at" timestamp with time zone DEFAULT now() NOT NULL;--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "crm_associations_ws_from_group_idx" ON "crm_associations" USING btree ("workspace_id","from_object_type","from_object_id","to_object_type");

@@ -4,11 +4,14 @@ import { HUBSPOT_PROVIDER } from './hubspot.constants';
 import type {
   NormalizedCrmAccount,
   NormalizedCrmAssociation,
+  NormalizedCrmAssociationScope,
   NormalizedCrmDeal,
   NormalizedCrmDeletionSignal,
   NormalizedIdentifier,
   NormalizedRecord,
 } from '../../contracts';
+
+type CrmObjectTypeName = 'contact' | 'company' | 'deal';
 
 /**
  * Order 061 §2/§4 — pure translation from HubSpot's CRM object/webhook shapes into
@@ -64,16 +67,17 @@ function contactIdentifiers(contactId: string, properties: Record<string, string
   return identifiers;
 }
 
-function associationsFrom(fromType: 'contact' | 'company' | 'deal', fromId: string, node: HubspotObjectNode): NormalizedCrmAssociation[] {
+function toTypeFromKey(key: string): CrmObjectTypeName | null {
+  if (key === 'companies' || key === 'company') return 'company';
+  if (key === 'contacts' || key === 'contact') return 'contact';
+  if (key === 'deals' || key === 'deal') return 'deal';
+  return null;
+}
+
+function associationsFrom(fromType: CrmObjectTypeName, fromId: string, node: HubspotObjectNode): NormalizedCrmAssociation[] {
   const out: NormalizedCrmAssociation[] = [];
-  const toType = (key: string): 'contact' | 'company' | 'deal' | null => {
-    if (key === 'companies' || key === 'company') return 'company';
-    if (key === 'contacts' || key === 'contact') return 'contact';
-    if (key === 'deals' || key === 'deal') return 'deal';
-    return null;
-  };
   for (const [key, edge] of Object.entries(node.associations ?? {})) {
-    const t = toType(key);
+    const t = toTypeFromKey(key);
     if (!t || t === fromType) continue;
     for (const result of edge.results) {
       out.push({
@@ -87,15 +91,31 @@ function associationsFrom(fromType: 'contact' | 'company' | 'deal', fromId: stri
   return out;
 }
 
+/**
+ * `requestedAssociationTypes` — EXACTLY what the adapter asked HubSpot for on
+ * this call (its own `associations` search param, e.g. `['companies']` for a
+ * contact) — the scope for reconciliation, not "whatever happened to be
+ * non-empty in the response." A requested type with zero current results is
+ * still authoritative for that type (an empty set IS the current truth), so
+ * `crmAssociationScope` always lists every requested type, independent of
+ * whether `associationsFrom` found any edges for it.
+ */
+function associationScope(fromType: CrmObjectTypeName, fromProviderObjectId: string, requestedAssociationTypes: readonly string[], observedAt: string): NormalizedCrmAssociationScope {
+  const toObjectTypes = requestedAssociationTypes.map(toTypeFromKey).filter((t): t is CrmObjectTypeName => t !== null && t !== fromType);
+  return { providerNamespace: HUBSPOT_PROVIDER, fromObjectType: fromType, fromProviderObjectId, toObjectTypes, observedAt };
+}
+
 /** Full contact object (backfill/incremental search result, or a `contact.creation`
  * webhook payload enriched with properties) → canonical record. */
-export function mapHubspotContact(node: HubspotObjectNode, configured: ConfiguredProperties): NormalizedRecord {
+export function mapHubspotContact(node: HubspotObjectNode, configured: ConfiguredProperties, requestedAssociationTypes: readonly string[] = []): NormalizedRecord {
   const associations = associationsFrom('contact', node.id, node);
+  const observedAt = observedAtFromProperties(node.properties);
   return {
     identifiers: contactIdentifiers(node.id, node.properties),
     traits: pickTraits(node.properties, configured, ['email', 'phone']),
     crmAssociations: associations.length > 0 ? associations : undefined,
-    observedAt: observedAtFromProperties(node.properties),
+    crmAssociationScope: requestedAssociationTypes.length > 0 ? associationScope('contact', node.id, requestedAssociationTypes, observedAt) : undefined,
+    observedAt,
   };
 }
 
@@ -123,7 +143,7 @@ export function mapContactPropertyChangeWebhook(objectId: string, propertyName: 
 }
 
 /** Full company object → canonical record. */
-export function mapHubspotCompany(node: HubspotObjectNode, configured: ConfiguredProperties): NormalizedRecord {
+export function mapHubspotCompany(node: HubspotObjectNode, configured: ConfiguredProperties, requestedAssociationTypes: readonly string[] = []): NormalizedRecord {
   const account: NormalizedCrmAccount = {
     providerNamespace: HUBSPOT_PROVIDER,
     providerObjectId: node.id,
@@ -131,7 +151,14 @@ export function mapHubspotCompany(node: HubspotObjectNode, configured: Configure
     traits: Object.fromEntries(pickTraits(node.properties, configured, ['name']).map((t) => [t.traitKey, t.value])),
   };
   const associations = associationsFrom('company', node.id, node);
-  return { identifiers: [], crmAccount: account, crmAssociations: associations.length > 0 ? associations : undefined, observedAt: observedAtFromProperties(node.properties) };
+  const observedAt = observedAtFromProperties(node.properties);
+  return {
+    identifiers: [],
+    crmAccount: account,
+    crmAssociations: associations.length > 0 ? associations : undefined,
+    crmAssociationScope: requestedAssociationTypes.length > 0 ? associationScope('company', node.id, requestedAssociationTypes, observedAt) : undefined,
+    observedAt,
+  };
 }
 
 /** `company.propertyChange` webhook — same single-property tolerance as contacts;
@@ -152,8 +179,9 @@ export function mapCompanyPropertyChangeWebhook(objectId: string, propertyName: 
 /** Full deal object → canonical record. A deal is NOT a purchase by default —
  * outcome mapping is applied downstream (`CrmWriteService`), driven entirely by
  * workspace config, never inferred here. */
-export function mapHubspotDeal(node: HubspotObjectNode, configured: ConfiguredProperties): NormalizedRecord {
+export function mapHubspotDeal(node: HubspotObjectNode, configured: ConfiguredProperties, requestedAssociationTypes: readonly string[] = []): NormalizedRecord {
   const p = node.properties;
+  const observedAt = observedAtFromProperties(p);
   const deal: NormalizedCrmDeal = {
     providerNamespace: HUBSPOT_PROVIDER,
     providerObjectId: node.id,
@@ -163,11 +191,17 @@ export function mapHubspotDeal(node: HubspotObjectNode, configured: ConfiguredPr
     pipeline: p.pipeline ?? undefined,
     stage: p.dealstage ?? undefined,
     status: p.hs_is_closed_won === 'true' ? 'won' : p.hs_is_closed === 'true' ? 'lost' : 'open',
-    dealTimestamp: observedAtFromProperties(p),
+    dealTimestamp: observedAt,
     traits: Object.fromEntries(pickTraits(p, configured, ['dealname', 'amount', 'deal_currency_code', 'pipeline', 'dealstage']).map((t) => [t.traitKey, t.value])),
   };
   const associations = associationsFrom('deal', node.id, node);
-  return { identifiers: [], crmDeal: deal, crmAssociations: associations.length > 0 ? associations : undefined, observedAt: observedAtFromProperties(p) };
+  return {
+    identifiers: [],
+    crmDeal: deal,
+    crmAssociations: associations.length > 0 ? associations : undefined,
+    crmAssociationScope: requestedAssociationTypes.length > 0 ? associationScope('deal', node.id, requestedAssociationTypes, observedAt) : undefined,
+    observedAt,
+  };
 }
 
 /** `deal.propertyChange` webhook — single-property tolerance; core fields the

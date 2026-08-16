@@ -78,7 +78,7 @@ export class CanonicalMappingService {
     };
 
     for (const record of records) {
-      const hasCrmPayload = !!record.crmAccount || !!record.crmDeal || !!record.crmAssociations?.length || !!record.crmDeletion;
+      const hasCrmPayload = !!record.crmAccount || !!record.crmDeal || !!record.crmAssociations?.length || !!record.crmAssociationScope || !!record.crmDeletion;
       // Order 060 §8 "guest checkout without Shopify customer" / Order 061 "company
       // and deal are not people": a record with NO identifiers is still worth
       // applying if it carries a commerce order or a CRM company/deal/association/
@@ -152,9 +152,22 @@ export class CanonicalMappingService {
         await this.crm.upsertDeal(workspaceId, connectionId, sourceNamespace, record.crmDeal);
         result.crmObjectsWritten += 1;
       }
-      for (const association of record.crmAssociations ?? []) {
-        const { written } = await this.crm.upsertAssociation(workspaceId, connectionId, association);
-        if (written) result.crmAssociationsWritten += 1;
+      if (record.crmAssociationScope) {
+        // Order 061 (association+contract closure) — this record carries the
+        // COMPLETE current edge set for (fromObject, each toObjectType): RECONCILE
+        // (upsert current + tombstone active edges now absent), not just add.
+        const { active } = await this.crm.reconcileAssociations(
+          workspaceId, connectionId, record.crmAssociationScope.providerNamespace, record.crmAssociationScope,
+          record.crmAssociationScope.fromProviderObjectId, record.crmAssociations ?? [],
+        );
+        result.crmAssociationsWritten += active;
+      } else {
+        // No scope declared (no current source emits this) — purely additive
+        // fallback, safe default for a future partial-association source.
+        for (const association of record.crmAssociations ?? []) {
+          const { written } = await this.crm.upsertAssociation(workspaceId, connectionId, association);
+          if (written) result.crmAssociationsWritten += 1;
+        }
       }
       if (record.crmDeal) {
         // AFTER associations: resolving the deal's primary contact for outcome

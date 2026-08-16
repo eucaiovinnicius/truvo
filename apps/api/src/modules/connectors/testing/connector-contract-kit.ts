@@ -85,7 +85,14 @@ export async function proveBackfillCheckpointResume(h: ConnectorContractHarness,
   const conn = await freshConnection(h, 'source');
   await h.connections.setCredentials(h.workspaceId, conn.id, driver.validCredentials());
   const stream = `backfill_${Date.now()}`;
-  const catalog: NormalizedRecord[] = Array.from({ length: 5 }, (_, i) => ({
+
+  // Generic across ANY driver's own page size: 2 full pages + 1 partial page —
+  // the SAME shape the fake provider's hardcoded "5 records / page size 2" used
+  // to assert, just derived instead of fixed, so a real adapter's (possibly
+  // different, possibly test-overridden) page size shares this proof unweakened.
+  const pageSize = driver.pageSize();
+  const catalogSize = pageSize * 2 + 1;
+  const catalog: NormalizedRecord[] = Array.from({ length: catalogSize }, (_, i) => ({
     identifiers: [{ providerNamespace: h.provider, identifierType: 'external_id' as const, identifierValue: `bf_${stream}_${i}` }],
     observedAt: new Date().toISOString(),
   }));
@@ -93,17 +100,17 @@ export async function proveBackfillCheckpointResume(h: ConnectorContractHarness,
 
   const first = await h.orchestrator.runBackfill(h.workspaceId, conn.id, stream);
   assert.equal(first.status, 'succeeded');
-  assert.equal(first.recordsRead, 2, 'primeira página: 2 registros (page size do fake)');
+  assert.equal(first.recordsRead, pageSize, `primeira página: ${pageSize} registros (page size do driver)`);
   assert.equal(first.hasMore, true);
 
   const second = await h.orchestrator.runBackfill(h.workspaceId, conn.id, stream);
   assert.equal(second.status, 'succeeded');
-  assert.equal(second.recordsRead, 2, 'segunda chamada deve RETOMAR do checkpoint, não recomeçar do zero');
+  assert.equal(second.recordsRead, pageSize, 'segunda chamada deve RETOMAR do checkpoint, não recomeçar do zero');
   assert.notEqual(second.nextCursor, first.nextCursor);
 
   const third = await h.orchestrator.runBackfill(h.workspaceId, conn.id, stream);
   assert.equal(third.recordsRead, 1);
-  assert.equal(third.hasMore, false, 'catálogo de 5 em páginas de 2 → 3ª página termina o backfill');
+  assert.equal(third.hasMore, false, `catálogo de ${catalogSize} em páginas de ${pageSize} → última página termina o backfill`);
 
   // idempotent replay: re-running with the checkpoint already at "no more pages"
   // must not re-fetch/re-apply — proven by the SAME final cursor without a 4th read.
@@ -195,7 +202,7 @@ export async function proveDestinationIdempotencyAndCorrelation(h: ConnectorCont
   const conn = await freshConnection(h, 'destination');
   await h.connections.setCredentials(h.workspaceId, conn.id, driver.validCredentials());
   const idempotencyKey = `write_${Date.now()}`;
-  const input = { idempotencyKey, correlationId: `corr_${Date.now()}`, kind: 'profile_upsert', payload: { any: 'thing' } };
+  const input = { idempotencyKey, correlationId: `corr_${Date.now()}`, kind: 'profile_upsert', payload: driver.destinationWritePayload() };
 
   const first = await h.destination.write(h.workspaceId, conn.id, input);
   assert.equal(first.status, 'sent');

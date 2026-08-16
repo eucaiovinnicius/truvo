@@ -135,9 +135,10 @@ async function pullObjectType(
   associations: string[],
   cursor: string | null,
   sinceIso: string | undefined,
+  pageSize: number,
 ): Promise<{ nodes: HubspotObjectNode[]; nextCursor: string | null; hasMore: boolean }> {
   const body: Record<string, unknown> = {
-    limit: HUBSPOT_DEFAULT_PAGE_SIZE,
+    limit: pageSize,
     properties: [...new Set(['hs_lastmodifieddate', 'hs_createdate', ...properties])],
     ...(associations.length > 0 ? { associations } : {}),
     ...(cursor ? { after: cursor } : {}),
@@ -149,7 +150,7 @@ async function pullObjectType(
   return { nodes: response.results, nextCursor: response.paging?.next?.after ?? null, hasMore: !!response.paging?.next?.after };
 }
 
-async function pull(connection: ConnectorConnection, credentials: Record<string, unknown>, checkpoint: SyncCheckpoint, fetchImpl: HubspotFetch, incremental: boolean): Promise<SourcePullResult> {
+async function pull(connection: ConnectorConnection, credentials: Record<string, unknown>, checkpoint: SyncCheckpoint, fetchImpl: HubspotFetch, incremental: boolean, pageSize: number): Promise<SourcePullResult> {
   const client = new HubspotApiClient(credentialsOf(credentials), fetchImpl);
   const selection = objectSelection(connection);
 
@@ -166,9 +167,12 @@ async function pull(connection: ConnectorConnection, credentials: Record<string,
   const after = checkpoint.status === 'running' ? checkpoint.cursor : null;
   const sinceIso = incremental && !after ? (checkpoint.cursor ?? undefined) : undefined;
 
-  const { nodes, nextCursor, hasMore } = await pullObjectType(client, objectType, properties, associations, after, sinceIso);
+  const { nodes, nextCursor, hasMore } = await pullObjectType(client, objectType, properties, associations, after, sinceIso, pageSize);
   const mapper = objectType === 'contacts' ? mapHubspotContact : objectType === 'companies' ? mapHubspotCompany : mapHubspotDeal;
-  const records: NormalizedRecord[] = nodes.map((n) => mapper(n, properties as ConfiguredProperties));
+  // `associations` here is EXACTLY what was requested above — passed through so
+  // the mapper can declare an authoritative `crmAssociationScope` (Order 061
+  // association+contract closure) for reconciliation, not just "whatever was non-empty."
+  const records: NormalizedRecord[] = nodes.map((n) => mapper(n, properties as ConfiguredProperties, associations));
 
   // Order 061 §2 — "missing/renamed custom properties must become visible mapping
   // errors, not silent semantic changes." HubSpot's search API silently omits an
@@ -231,12 +235,16 @@ function dispatchEvent(event: HubspotWebhookEvent, selection: HubspotObjectSelec
   return null;
 }
 
-export function createHubspotAdapter(fetchImpl: HubspotFetch = fetch): SourceAdapter & DestinationAdapter {
+/** `pageSize` is a TESTABILITY knob only (defaults to the real
+ * `HUBSPOT_DEFAULT_PAGE_SIZE`) — lets contract-kit/integration tests exercise
+ * multi-page checkpoint resume with small, fast fixtures instead of needing
+ * hundreds of synthetic records to see a second real HubSpot page. */
+export function createHubspotAdapter(fetchImpl: HubspotFetch = fetch, pageSize: number = HUBSPOT_DEFAULT_PAGE_SIZE): SourceAdapter & DestinationAdapter {
   return {
     definition: DEFINITION,
     testConnection: (connection, credentials) => testConnection(connection, credentials, fetchImpl),
-    initialBackfill: (connection, credentials, checkpoint) => pull(connection, credentials, checkpoint, fetchImpl, false),
-    incrementalPull: (connection, credentials, checkpoint) => pull(connection, credentials, checkpoint, fetchImpl, true),
+    initialBackfill: (connection, credentials, checkpoint) => pull(connection, credentials, checkpoint, fetchImpl, false, pageSize),
+    incrementalPull: (connection, credentials, checkpoint) => pull(connection, credentials, checkpoint, fetchImpl, true, pageSize),
 
     getOAuthAuthorizeUrl: (connection, redirectUri): OAuthAuthorizeUrlResult => {
       const selection = objectSelection(connection);
