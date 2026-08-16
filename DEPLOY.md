@@ -43,10 +43,12 @@ Crie **um projeto** no Railway e adicione 3 serviços a partir dos templates:
 ## Passo 3 — Migrações (rodar UMA vez, e a cada mudança de schema)
 Do seu terminal, com as env de **produção** exportadas (`DATABASE_URL` do Supabase prod + `CLICKHOUSE_URL/USER/PASSWORD/DB` do Railway — exponha o CH temporariamente ou rode via `railway run`):
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 pnpm db:setup     # = drizzle-kit push (Postgres) + ch:migrate (ClickHouse)
 ```
 Alternativa: `railway run --service <clickhouse|api> pnpm db:ch` para rodar dentro da rede do Railway.
+
+> `db:pg` usa `drizzle-kit push` diretamente (não arquivos de migração versionados). Antes de apontar para produção, valide o diff em um Postgres descartável/não produtivo e confirme backup e janela de mudança.
 
 ## Passo 4 — Railway: API + workers
 Crie **3 serviços** apontando para o MESMO repo GitHub; em cada um, defina *Settings → Config-as-code file path*:
@@ -103,4 +105,4 @@ Fonte de verdade: `.env.example`. Onde cada uma vai:
 - **Ordem de boot** — a api valida env no start (`validateEnv`, fail-fast) e conecta Kafka; suba a infra (passo 2) **antes** da api/consumer.
 - **Migrações em ClickHouse já populado** — o `ch:migrate` é idempotente (`IF NOT EXISTS`), mas mudanças de schema em tabelas com dados podem exigir `ALTER`/backfill manual.
 - **Persistência** — CH/Redpanda no Railway servem para começar; para produção séria com backup/retention, considere ClickHouse Cloud, Redpanda Cloud e Upstash Redis (só troque as URLs nas envs).
-- **CI** — `.github/workflows/ci.yml` roda typecheck+build+test em push/PR; configure o repo no GitHub para exigir o check verde antes de merge.
+- **CI** — `.github/workflows/ci.yml` roda lint+typecheck+build+test em push/PR; configure o repo no GitHub para exigir o check verde antes de merge.
