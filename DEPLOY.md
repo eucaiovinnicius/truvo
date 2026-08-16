@@ -40,15 +40,20 @@ Crie **um projeto** no Railway e adicione 3 serviços a partir dos templates:
 
 > Use **private networking** (`*.railway.internal`) entre os serviços — não exponha CH/Kafka/Redis à internet.
 
-## Passo 3 — Migrações (rodar UMA vez, e a cada mudança de schema)
+## Passo 3 — Migrações versionadas (a cada release com mudança de schema)
 Do seu terminal, com as env de **produção** exportadas (`DATABASE_URL` do Supabase prod + `CLICKHOUSE_URL/USER/PASSWORD/DB` do Railway — exponha o CH temporariamente ou rode via `railway run`):
 ```bash
 pnpm install --frozen-lockfile
-pnpm db:setup     # = drizzle-kit push (Postgres) + ch:migrate (ClickHouse)
+pnpm migration:validate
+pnpm db:setup     # = runner versionado Postgres + migrations ClickHouse
 ```
 Alternativa: `railway run --service <clickhouse|api> pnpm db:ch` para rodar dentro da rede do Railway.
 
-> `db:pg` usa `drizzle-kit push` diretamente (não arquivos de migração versionados). Antes de apontar para produção, valide o diff em um Postgres descartável/não produtivo e confirme backup e janela de mudança.
+> Staging e produção usam exclusivamente `pnpm db:pg`, que aplica os artefatos SQL versionados sob advisory lock e registra o histórico em `drizzle.__drizzle_migrations`. `drizzle-kit push` é permitido somente em bancos locais descartáveis.
+
+Para um banco v3.2 existente que já possua exatamente o schema baseline auditado, execute uma única vez `pnpm db:pg:adopt-baseline`. A adoção compara tabelas, colunas, tipos, nullability, defaults, PKs, FKs e índices antes de gravar o histórico; qualquer divergência falha sem alterar o banco. Registre a evidência no ticket de release. Nunca use adoção para contornar uma migration pendente.
+
+Rollback de schema não é automático: faça backup e valide em ambiente descartável antes do deploy. Prefira uma migration aditiva de forward-fix. Não edite nem remova linhas do histórico Drizzle manualmente.
 
 ## Passo 4 — Railway: API + workers
 Crie **3 serviços** apontando para o MESMO repo GitHub; em cada um, defina *Settings → Config-as-code file path*:
