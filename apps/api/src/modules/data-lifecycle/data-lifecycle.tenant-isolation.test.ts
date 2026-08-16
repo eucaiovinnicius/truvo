@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import postgres from 'postgres';
 import { eq, isNull } from 'drizzle-orm';
-import { createDb, customers, customerIdentifiers, customerTraits, dataLifecycleRequests } from '@truvo/db';
+import { createDb, closeDb, customers, customerIdentifiers, customerTraits, dataLifecycleRequests } from '@truvo/db';
 import { DataLifecycleService } from './data-lifecycle.service';
 import { CustomerContextService } from '../customer-context/customer-context.service';
 import { AuditService } from '../audit/audit.service';
@@ -94,6 +94,9 @@ test('requestWorkspaceDeletion tombstones only the target workspace, retry-safel
     await db.delete(customers).where(eq(customers.workspaceId, WS_TARGET)).catch(() => undefined);
     await db.delete(customers).where(eq(customers.workspaceId, WS_OTHER)).catch(() => undefined);
     await db.delete(dataLifecycleRequests).where(eq(dataLifecycleRequests.workspaceId, WS_TARGET)).catch(() => undefined);
+    // Sem isto, o pool de conexões mantém o event loop vivo e `pnpm test` nunca
+    // sai sozinho (achado da verificação em runtime do Order 035).
+    await closeDb(db).catch(() => undefined);
   }
 });
 
@@ -126,5 +129,6 @@ test('requestSubjectDeletion is idempotent (isNull guard) and workspace-scoped',
   } finally {
     await db.delete(customers).where(eq(customers.workspaceId, ws)).catch(() => undefined);
     await db.delete(dataLifecycleRequests).where(eq(dataLifecycleRequests.workspaceId, ws)).catch(() => undefined);
+    await closeDb(db).catch(() => undefined);
   }
 });

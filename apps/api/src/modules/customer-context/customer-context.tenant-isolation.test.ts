@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import postgres from 'postgres';
 import { eq } from 'drizzle-orm';
-import { createDb, customers } from '@truvo/db';
+import { createDb, closeDb, customers } from '@truvo/db';
 import { CustomerContextService } from './customer-context.service';
 
 /**
@@ -97,5 +97,8 @@ test('workspace A cannot read/mutate a same-id customer row owned by workspace B
   } finally {
     await db.delete(customers).where(eq(customers.workspaceId, WS_A)).catch(() => undefined);
     await db.delete(customers).where(eq(customers.workspaceId, WS_B)).catch(() => undefined);
+    // Sem isto, o pool de conexões mantém o event loop vivo e `pnpm test` nunca
+    // sai sozinho (achado da verificação em runtime do Order 035).
+    await closeDb(db).catch(() => undefined);
   }
 });
