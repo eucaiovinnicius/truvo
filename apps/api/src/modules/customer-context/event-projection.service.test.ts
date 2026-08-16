@@ -1,34 +1,37 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { customers, customerOutcomes } from '@truvo/db';
 import { EventProjectionService } from './event-projection.service';
 import type { Database } from '../auth/database.provider';
 
 /** Fake mínimo do driver Drizzle cobrindo os padrões usados por EventProjectionService:
- * select(...).from().where().limit() — Order 055's "customer não está suprimido/
- * tombstoned" guard, roda ANTES de tudo; por padrão simula um customer VIVO
- * (deletedAt: null) para que os testes pré-existentes continuem exercitando o MESMO
- * caminho de antes — e insert(table).values(v).onConflictDoNothing(opts) — awaited
- * direto (sem .returning()) OU .returning(sel) — usado no insert de
- * customer_outcomes p/ detectar dedupe. */
+ * select(...).from(table).where().limit() — usado tanto pelo guard de supressão de
+ * Order 055 (from(customers)) quanto pela pré-checagem de existência do outcome
+ * (Order 040 closure — from(customerOutcomes), ver EventProjectionService#project) —
+ * e insert(table).values(v).onConflictDoNothing()/.onConflictDoUpdate(), ambas
+ * awaited direto (nenhum caminho usa .returning() mais). */
 function fakeDb(opts: {
   onInsert?: (table: unknown, values: Record<string, unknown>) => void;
-  /** linhas simuladas de retorno do INSERT de customer_outcomes — [] simula onConflict (dedupe). */
-  outcomeReturning?: unknown[];
   /** simula o customer encontrado pelo guard de supressão — [{deletedAt: null}] (vivo) por padrão. */
   customerRows?: unknown[];
+  /** simula uma linha JÁ existente de customer_outcomes para a natural key — [] (nenhuma) por padrão → deduped=false. */
+  existingOutcomeRows?: unknown[];
 } = {}) {
-  const outcomeReturning = opts.outcomeReturning ?? [{ id: 'row_1' }];
   const customerRows = opts.customerRows ?? [{ deletedAt: null }];
+  const existingOutcomeRows = opts.existingOutcomeRows ?? [];
   return {
-    select: () => ({ from: () => ({ where: () => ({ limit: async () => customerRows }) }) }),
+    select: () => ({
+      from: (table: unknown) => ({
+        where: () => ({
+          limit: async () => (table === customerOutcomes ? existingOutcomeRows : customerRows),
+        }),
+      }),
+    }),
     insert: (table: unknown) => ({
       values: (values: Record<string, unknown>) => {
         opts.onInsert?.(table, values);
-        const chain = {
-          returning: async () => outcomeReturning,
-          then: (resolve: (v: undefined) => unknown) => Promise.resolve(undefined).then(resolve),
-        };
-        return { onConflictDoNothing: () => chain };
+        const chain = { then: (resolve: (v: undefined) => unknown) => Promise.resolve(undefined).then(resolve) };
+        return { onConflictDoNothing: () => chain, onConflictDoUpdate: () => chain };
       },
     }),
   } as unknown as Database;
@@ -75,8 +78,8 @@ test('purchase sem order_id: dedupeKey cai para event_id', async () => {
   assert.equal(inserts[1]!.values.dedupeKey, 'evt_2');
 });
 
-test('replay do mesmo evento é idempotente: id determinístico + onConflictDoNothing → deduped=true, sem duplicar', async () => {
-  const db = fakeDb({ outcomeReturning: [] }); // simula a unique index rejeitando o insert duplicado
+test('replay do mesmo evento é idempotente: id determinístico + upsert de atribuição → deduped=true, sem duplicar', async () => {
+  const db = fakeDb({ existingOutcomeRows: [{ id: 'row_1' }] }); // simula uma linha já existente para a natural key
   const svc = new EventProjectionService(db);
 
   const result = await svc.project('ws_1', 'usr_abc', {

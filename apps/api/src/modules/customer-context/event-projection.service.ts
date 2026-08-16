@@ -104,7 +104,27 @@ export class EventProjectionService {
     const value = asNumber(event.properties[rule.valueProperty]);
     const currency = asString(event.properties[rule.currencyProperty]);
 
-    const inserted = await this.db
+    // Order 040 (closure) — pre-check whether a row for this natural key already
+    // exists, so `deduped` keeps its ORIGINAL meaning ("this call did not create a
+    // new row") even though the write below is no longer a pure onConflictDoNothing.
+    // Best-effort (not transactionally locked): `deduped` is informational only —
+    // the upsert's own atomicity is what guarantees no duplicate row / correct
+    // attribution regardless of a race here.
+    const [existing] = await this.db
+      .select({ id: customerOutcomes.id })
+      .from(customerOutcomes)
+      .where(
+        and(
+          eq(customerOutcomes.workspaceId, workspaceId),
+          eq(customerOutcomes.outcomeNamespace, rule.outcomeNamespace),
+          eq(customerOutcomes.outcomeKey, rule.outcomeKey),
+          eq(customerOutcomes.dedupeKey, dedupeKey),
+        ),
+      )
+      .limit(1);
+
+    const now = new Date();
+    await this.db
       .insert(customerOutcomes)
       .values({
         workspaceId,
@@ -121,16 +141,26 @@ export class EventProjectionService {
         provenance: { source_record_id: event.event_id } as ContextProvenance,
         observedAt,
       })
-      .onConflictDoNothing({
+      // `canonicalId` is always the CALLER's freshly-resolved identity for this
+      // event (never client-supplied — resolved by identify()/Identity Graph
+      // before this method runs), so on conflict it already reflects any
+      // IdentityGraphService.mergeCustomers that happened since the outcome was
+      // first projected. Advancing customerId here is what makes an outcome
+      // projected under a since-merged customer A converge onto the surviving
+      // customer B on the next replay, instead of staying pinned to A forever.
+      // Every other field (value/currency/eventId/observedAt/provenance) is
+      // intentionally left untouched — this is an identity-attribution fix only,
+      // not a resync of the economic facts themselves.
+      .onConflictDoUpdate({
         target: [
           customerOutcomes.workspaceId,
           customerOutcomes.outcomeNamespace,
           customerOutcomes.outcomeKey,
           customerOutcomes.dedupeKey,
         ],
-      })
-      .returning({ id: customerOutcomes.id });
+        set: { customerId: canonicalId, updatedAt: now },
+      });
 
-    return { projected: true, outcomeId, deduped: inserted.length === 0 };
+    return { projected: true, outcomeId, deduped: existing !== undefined };
   }
 }
