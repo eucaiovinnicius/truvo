@@ -8,6 +8,7 @@ import { incrementMonthlyCounter } from './billing-counter';
 import { getRedis } from './redis';
 import { identifyRequestFromEvent } from './identity/event-hook';
 import { conversionForwardFromEvent } from './conversion-hook';
+import { buildProjectionRequest } from './context-projection-hook';
 import { deadLetter } from './dlq';
 import { classifyFailure, metrics, structuredLog } from '@truvo/observability';
 
@@ -121,11 +122,15 @@ export class EventPipelineConsumer {
       await incrementMonthlyCounter(event);
     }
 
-    // 8/9. wirings server-to-server (só não-bot, best-effort, em paralelo):
-    //   M2×M8 → constrói o grafo de identidade a partir do evento;
-    //   M2×M9 → encaminha conversões (purchase/lead/…) p/ as plataformas habilitadas.
+    // 8/9/10. wirings server-to-server (só não-bot, best-effort):
+    //   M2×M8 → constrói o grafo de identidade a partir do evento (roda primeiro:
+    //     Order 040 precisa do canonical_id resolvido antes de projetar);
+    //   M2×M9 → encaminha conversões (purchase/lead/…) p/ as plataformas habilitadas;
+    //   M2×Order 30 → projeta o evento em outcome/trait canônico, quando há regra.
     if (!isBot) {
-      await Promise.all([forwardIdentity(event, correlationId ?? event.event_id), forwardConversion(event, correlationId ?? event.event_id)]);
+      const cid = correlationId ?? event.event_id;
+      const canonicalId = await forwardIdentity(event, cid);
+      await Promise.all([forwardConversion(event, cid), forwardProjection(event, canonicalId, cid)]);
     }
   }
 
@@ -145,12 +150,34 @@ const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET;
  * Drizzle) para construir/atualizar o grafo de identidade. Best-effort — nunca
  * derruba o pipeline (o merge no Postgres é reconciliável por replay/backfill).
  * Sem `INTERNAL_API_SECRET` no ambiente, o forward fica desligado (dev).
+ *
+ * Devolve o `canonical_id` resolvido (Order 040 §3: `identify()` já espelha o
+ * resultado em `customers` via `synchronizeLegacyIdentity` antes de responder —
+ * por isso a projeção que roda em seguida pode confiar que a linha existe).
  */
-async function forwardIdentity(event: TruvoEvent, correlationId: string): Promise<void> {
-  if (!INTERNAL_API_SECRET) return;
+async function forwardIdentity(event: TruvoEvent, correlationId: string): Promise<string | undefined> {
+  if (!INTERNAL_API_SECRET) return undefined;
   const req = identifyRequestFromEvent(event);
+  if (!req) return undefined;
+  const res = await postInternalJson<{ canonical_id: string }>(
+    '/v1/internal/identity/identify',
+    req,
+    correlationId,
+  );
+  return res?.canonical_id;
+}
+
+/**
+ * Fecha o wiring M2×Order 30: projeta o evento (quando há regra conhecida — ver
+ * `outcome-projection.registry.ts` na API) em outcome/trait canônico. Best-effort,
+ * mesmo padrão dos demais forwards internos; sem `canonical_id` resolvido (identify
+ * falhou/não se aplicou), não há em que anexar o outcome — no-op silencioso.
+ */
+async function forwardProjection(event: TruvoEvent, canonicalId: string | undefined, correlationId: string): Promise<void> {
+  if (!INTERNAL_API_SECRET) return;
+  const req = buildProjectionRequest(event, canonicalId);
   if (!req) return;
-  await postInternal('/v1/internal/identity/identify', req, correlationId);
+  await postInternal('/v1/internal/context/project', req, correlationId, 'context_projection');
 }
 
 /**
@@ -167,8 +194,14 @@ async function forwardConversion(event: TruvoEvent, correlationId: string): Prom
   await postInternal('/v1/internal/conversions/forward', input, correlationId);
 }
 
-/** POST server-to-server best-effort (timeout 4s, segredo interno). Nunca lança. */
-async function postInternal(path: string, body: unknown, correlationId: string): Promise<void> {
+/**
+ * POST server-to-server best-effort (timeout 4s, segredo interno). Nunca lança.
+ * `module` rotula a métrica/log (default preserva o rótulo original dos forwards
+ * de identity/conversion já existentes); `reason` (Order 040 §4: falha observável
+ * com motivo/correlação/workspace) foi adicionado ao log — só enriquece o schema,
+ * nenhum campo existente muda de forma ou é removido.
+ */
+async function postInternal(path: string, body: unknown, correlationId: string, module = 'internal_forward'): Promise<void> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 4000);
@@ -181,7 +214,35 @@ async function postInternal(path: string, body: unknown, correlationId: string):
     clearTimeout(timer);
   } catch (error) {
     const failure = classifyFailure(error);
+    metrics.increment('connector_failures_total', { module, kind: failure.kind });
+    structuredLog('warn', 'internal_forward_failed', { module, retryable: failure.kind === 'transient', correlationId, reason: failure.reason });
+  }
+}
+
+/**
+ * Variante de `postInternal` que devolve o corpo (JSON) da resposta em vez de
+ * descartá-lo — só usada por `forwardIdentity`, que precisa do `canonical_id`
+ * resolvido para encadear a projeção (Order 040 §3). Resposta não-2xx devolve
+ * `undefined` sem log (mesmo comportamento pré-existente de `postInternal`, que
+ * nunca checava `res.ok`); falha de rede é classificada/logada como antes.
+ */
+async function postInternalJson<T>(path: string, body: unknown, correlationId: string): Promise<T | undefined> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    const res = await fetch(`${INTERNAL_API_URL}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-internal-secret': INTERNAL_API_SECRET as string, 'x-request-id': correlationId },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) return undefined;
+    return (await res.json()) as T;
+  } catch (error) {
+    const failure = classifyFailure(error);
     metrics.increment('connector_failures_total', { module: 'internal_forward', kind: failure.kind });
-    structuredLog('warn', 'internal_forward_failed', { module: 'internal_forward', retryable: failure.kind === 'transient', correlationId });
+    structuredLog('warn', 'internal_forward_failed', { module: 'internal_forward', retryable: failure.kind === 'transient', correlationId, reason: failure.reason });
+    return undefined;
   }
 }
