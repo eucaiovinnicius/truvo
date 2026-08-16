@@ -9,6 +9,7 @@ import {
   identityLinks,
   identityConflicts,
   identityMergeEvents,
+  commerceOrders,
   type IdentityMergeEvidence,
 } from '@truvo/db';
 import type { Database } from '../../auth/database.provider';
@@ -173,6 +174,25 @@ export const eraseClickHouseEventsAndTouchpoints: StoreErasureHandler = async (c
   return ok(values.length + canonicalIds.length);
 };
 
+/** Order 060 — provider-neutral commerce orders (`commerce_orders`,
+ * `packages/db/src/schema/commerce.ts`) are genuinely subject-owned once attached
+ * to a customer. There is no `deletedAt` column on this table (unlike the Order 30
+ * stores above) — the order itself is a Shopify-side economic record the workspace
+ * still legitimately needs for accounting/reconciliation, so it is NOT tombstoned;
+ * only the link identifying WHO placed it is severed, the same way a Shopify
+ * customer merge/guest-checkout already leaves `customer_id` nullable. Naturally
+ * idempotent: once nulled, a rerun's `WHERE customer_id = ctx.customerId` matches
+ * nothing further. */
+export const eraseCommerceOrderAttribution: StoreErasureHandler = async (ctx) => {
+  const now = new Date();
+  const updated = await ctx.db
+    .update(commerceOrders)
+    .set({ customerId: null, updatedAt: now })
+    .where(and(eq(commerceOrders.workspaceId, ctx.workspaceId), eq(commerceOrders.customerId, ctx.customerId)))
+    .returning({ id: commerceOrders.id });
+  return ok(updated.length);
+};
+
 /** Order 055 §2 "Derived / ML artifacts" — explicitly enumerated: `user_profiles`
  * (M15) is a lazily-recomputed cache (regenerates from source on next read, per
  * `DATA_LIFECYCLE_LINEAGE.md`) and the ClickHouse materialized views (`*_daily`,
@@ -185,4 +205,5 @@ export const SUBJECT_ERASURE_STORES: ReadonlyArray<{ store: string; handler: Sto
   { store: 'identity_v1', handler: eraseIdentityV1 },
   { store: 'identity_graph_v2_evidence', handler: redactIdentityGraphV2Evidence },
   { store: 'clickhouse_events_touchpoints', handler: eraseClickHouseEventsAndTouchpoints },
+  { store: 'commerce_order_attribution', handler: eraseCommerceOrderAttribution },
 ];

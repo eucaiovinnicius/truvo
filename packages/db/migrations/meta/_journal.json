@@ -50,6 +50,13 @@
       "when": 1786903273081,
       "tag": "0006_easy_ultimates",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786906053839,
+      "tag": "0007_futuristic_lady_vermin",
+      "breakpoints": true
     }
   ]
 }

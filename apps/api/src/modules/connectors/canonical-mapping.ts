@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { IdentityGraphService, SuppressedIdentifierError } from '../identity/identity-graph.service';
 import { CustomerContextService } from '../customer-context/customer-context.service';
 import type { TypedTraitValue } from '../customer-context/customer-context.contracts';
+import { CommerceWriteService } from './commerce/commerce-write.service';
 import type { NormalizedRecord, NormalizedTrait } from './contracts';
 
 /** Narrows the generic `{valueType, value}` shape into the discriminated union
@@ -29,6 +30,8 @@ export interface ApplyRecordsResult {
   /** Order 055 §3: records whose identifier belonged to a deleted, suppressed
    * subject — skipped (not applied), never a batch-wide failure. */
   suppressed: number;
+  /** Order 060: commerce orders written (identified or guest — `customerId: null`). */
+  commerceOrdersWritten: number;
 }
 
 /**
@@ -46,69 +49,95 @@ export class CanonicalMappingService {
   constructor(
     @Inject(IdentityGraphService) private readonly identityGraph: IdentityGraphService,
     @Inject(CustomerContextService) private readonly customerContext: CustomerContextService,
+    @Inject(CommerceWriteService) private readonly commerce: CommerceWriteService,
   ) {}
 
-  async apply(workspaceId: string, sourceNamespace: string, records: NormalizedRecord[]): Promise<ApplyRecordsResult> {
-    const result: ApplyRecordsResult = { customersResolved: 0, identifiersAttached: 0, traitsWritten: 0, conflicts: 0, suppressed: 0 };
+  /**
+   * `connectionId` is required only for records carrying a `commerceOrder`
+   * (Order 060) — the FK `commerce_orders.connection_id` needs it; identifier/trait-
+   * only records (Order 050's original shape) never touch it.
+   */
+  async apply(workspaceId: string, connectionId: string, sourceNamespace: string, records: NormalizedRecord[]): Promise<ApplyRecordsResult> {
+    const result: ApplyRecordsResult = { customersResolved: 0, identifiersAttached: 0, traitsWritten: 0, conflicts: 0, suppressed: 0, commerceOrdersWritten: 0 };
 
     for (const record of records) {
-      if (record.identifiers.length === 0) continue;
+      // Order 060 §8 "guest checkout without Shopify customer": a record with NO
+      // identifiers is still worth applying if it carries a commerce order — it
+      // just resolves to no customer (recorded unattached, see CommerceWriteService).
+      if (record.identifiers.length === 0 && !record.commerceOrder) continue;
+
       const observedAt = new Date(record.observedAt);
-      const [primary, ...rest] = record.identifiers;
+      let customerId: string | null = null;
 
-      let customerId: string;
-      try {
-        const resolved = await this.identityGraph.resolveOrCreateCustomer({
-          workspaceId,
-          providerNamespace: primary!.providerNamespace,
-          identifierType: primary!.identifierType,
-          identifierValue: primary!.identifierValue,
-          sourceNamespace,
-          observedAt,
-        });
-        customerId = resolved.customerId;
-      } catch (err) {
-        if (err instanceof SuppressedIdentifierError) {
-          result.suppressed += 1;
-          continue; // skip this ENTIRE record — no owner to attach the rest of its identifiers/traits to.
-        }
-        throw err;
-      }
-      result.customersResolved += 1;
-
-      for (const identifier of rest) {
+      if (record.identifiers.length > 0) {
+        const [primary, ...rest] = record.identifiers;
         try {
-          const attach = await this.identityGraph.attachIdentifier({
+          const resolved = await this.identityGraph.resolveOrCreateCustomer({
             workspaceId,
-            customerId,
-            providerNamespace: identifier.providerNamespace,
-            identifierType: identifier.identifierType,
-            identifierValue: identifier.identifierValue,
+            providerNamespace: primary!.providerNamespace,
+            identifierType: primary!.identifierType,
+            identifierValue: primary!.identifierValue,
             sourceNamespace,
             observedAt,
           });
-          if (attach.status === 'conflict') result.conflicts += 1;
-          else result.identifiersAttached += 1;
+          customerId = resolved.customerId;
+          result.customersResolved += 1;
         } catch (err) {
-          if (err instanceof SuppressedIdentifierError) {
-            result.suppressed += 1;
-            continue; // this ONE identifier is skipped; the record's primary customer/traits still apply.
+          if (!(err instanceof SuppressedIdentifierError)) throw err;
+          result.suppressed += 1;
+          // primary identifier suppressed — no owner to attach anything else to,
+          // but a commerce order can still be recorded unattached (customerId stays null).
+        }
+
+        if (customerId) {
+          for (const identifier of rest) {
+            try {
+              const attach = await this.identityGraph.attachIdentifier({
+                workspaceId,
+                customerId,
+                providerNamespace: identifier.providerNamespace,
+                identifierType: identifier.identifierType,
+                identifierValue: identifier.identifierValue,
+                sourceNamespace,
+                observedAt,
+              });
+              if (attach.status === 'conflict') result.conflicts += 1;
+              else result.identifiersAttached += 1;
+            } catch (err) {
+              if (err instanceof SuppressedIdentifierError) {
+                result.suppressed += 1;
+                continue; // this ONE identifier is skipped; the record's primary customer/traits still apply.
+              }
+              throw err;
+            }
           }
-          throw err;
         }
       }
 
-      for (const trait of record.traits ?? []) {
-        await this.customerContext.upsertTrait({
-          ...toTypedTraitValue(trait),
-          workspaceId,
-          customerId,
-          traitNamespace: trait.traitNamespace,
-          traitKey: trait.traitKey,
-          sourceNamespace,
-          observedAt,
-        });
-        result.traitsWritten += 1;
+      if (record.commerceOrder) {
+        const upserted = await this.commerce.upsertOrder(workspaceId, connectionId, customerId, sourceNamespace, record.commerceOrder);
+        result.commerceOrdersWritten += 1;
+        // Use the order's ACTUAL post-upsert customerId, not this record's own
+        // (possibly null) `customerId` — a refund/partial-update webhook carries no
+        // identifiers of its own, but the order it touches may already belong to a
+        // customer a PREVIOUS sync identified; that customer's derived traits still
+        // need recomputing or refund/order-count history would go stale.
+        if (upserted.customerId) await this.commerce.recomputeDerivedTraits(workspaceId, upserted.customerId);
+      }
+
+      if (customerId) {
+        for (const trait of record.traits ?? []) {
+          await this.customerContext.upsertTrait({
+            ...toTypedTraitValue(trait),
+            workspaceId,
+            customerId,
+            traitNamespace: trait.traitNamespace,
+            traitKey: trait.traitKey,
+            sourceNamespace,
+            observedAt,
+          });
+          result.traitsWritten += 1;
+        }
       }
     }
 

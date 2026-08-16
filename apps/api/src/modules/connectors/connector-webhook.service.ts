@@ -69,7 +69,7 @@ export class ConnectorWebhookService {
     }
 
     try {
-      const applied = await this.mapping.apply(workspaceId, `connector.${connection.provider}`, records);
+      const applied = await this.mapping.apply(workspaceId, connectionId, `connector.${connection.provider}`, records);
       await this.db
         .update(connectorSyncRuns)
         .set({

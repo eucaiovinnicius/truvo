@@ -80,11 +80,51 @@ export interface NormalizedTrait {
   value: unknown;
 }
 
-/** One provider object translated into canonical shape — the ONLY thing an adapter
- * hands back for identity/trait resolution. `identifiers` must be non-empty. */
+/** Order 060 — provider-neutral commerce order (see `packages/db/src/schema/commerce.ts`).
+ * `providerLineItemId`/`providerRefundId` are the idempotency keys for their own
+ * rows — the SAME order re-synced (backfill replay, webhook redelivery, an edited
+ * order) upserts in place rather than duplicating. */
+export interface NormalizedCommerceLineItem {
+  providerLineItemId: string;
+  providerProductId?: string;
+  providerVariantId?: string;
+  name: string;
+  quantity: number;
+  price: number;
+  currency: string;
+}
+
+export interface NormalizedCommerceRefund {
+  providerRefundId: string;
+  amount: number;
+  currency: string;
+  refundedAt: string;
+  reason?: string;
+}
+
+export interface NormalizedCommerceOrder {
+  providerNamespace: string;
+  providerOrderId: string;
+  financialStatus: string;
+  currency: string;
+  totalAmount: number;
+  orderTimestamp: string;
+  lineItems: NormalizedCommerceLineItem[];
+  refunds?: NormalizedCommerceRefund[];
+}
+
+/**
+ * One provider object translated into canonical shape — the ONLY thing an adapter
+ * hands back for identity/trait/commerce resolution. `identifiers` may be EMPTY
+ * for a genuinely anonymous commerce record (Order 060 §8: "guest checkout without
+ * Shopify customer") — the order still gets recorded, unattached
+ * (`commerce_orders.customer_id IS NULL`), until a later signal identifies the
+ * guest and the SAME order (matched by `providerOrderId`) gets re-attached.
+ */
 export interface NormalizedRecord {
   identifiers: NormalizedIdentifier[];
   traits?: NormalizedTrait[];
+  commerceOrder?: NormalizedCommerceOrder;
   observedAt: string;
 }
 

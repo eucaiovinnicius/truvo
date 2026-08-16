@@ -175,7 +175,7 @@ export class ConnectorSyncOrchestratorService {
       return this.handleFailure(workspaceId, connectionId, streamKey, runId, attempt, err);
     }
 
-    const applied = await this.mapping.apply(workspaceId, `connector.${connection.provider}`, pullResult.records);
+    const applied = await this.mapping.apply(workspaceId, connectionId, `connector.${connection.provider}`, pullResult.records);
     const finishedAt = new Date();
 
     await this.db

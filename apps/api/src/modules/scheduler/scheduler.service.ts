@@ -13,6 +13,9 @@ import { CreativeAlertsService } from '../creatives/creative-alerts.service';
 import { ReconciliationService } from '../data-quality/reconciliation.service';
 import { AdsService } from '../creatives/ads/ads.service';
 import { RetentionEnforcementService } from '../data-lifecycle/retention-enforcement.service';
+import { ConnectorConnectionService } from '../connectors/connector-connection.service';
+import { ConnectorSyncOrchestratorService } from '../connectors/connector-sync-orchestrator.service';
+import type { ConnectorLifecycleState } from '@truvo/db';
 
 interface Job {
   name: string;
@@ -47,6 +50,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     private readonly reconciliation: ReconciliationService,
     private readonly ads: AdsService,
     private readonly retention: RetentionEnforcementService,
+    private readonly connectorConnections: ConnectorConnectionService,
+    private readonly connectorOrchestrator: ConnectorSyncOrchestratorService,
   ) {}
 
   onModuleInit(): void {
@@ -63,6 +68,12 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       // Order 055 §5 — retention enforcement: skips a workspace entirely when it
       // has no configured tombstone_purge_after_days (fail-safe, no default).
       { name: 'retention-purge', intervalMs: 24 * HOUR, lockKey: 'truvo:cron:retention-purge', run: () => this.sweepPerWorkspace(async (ws) => { await this.retention.sweepWorkspace(ws); }) },
+      // Order 060 §7 — closes Order 050's deferred scheduler decision: incremental
+      // sync for every ACTIVE source connection, workspace/connection scoped,
+      // checkpointed by the orchestrator itself. Deliberately does NOT touch
+      // 'disconnected'/'error'/'draft'/'authorizing' connections (an error state
+      // needs a deliberate re-test, not blind repeated polling).
+      { name: 'connector-incremental-sync', intervalMs: 15 * 60_000, lockKey: 'truvo:cron:connector-incremental-sync', run: () => this.sweepPerWorkspace((ws) => this.syncConnectorsForWorkspace(ws)) },
     ];
     for (const job of jobs) this.schedule(job);
     this.logger.log(`scheduler ligado: ${jobs.map((j) => j.name).join(', ')}`);
@@ -109,6 +120,26 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         await fn(ws);
       } catch (e) {
         this.logger.warn(`sweep falhou p/ workspace ${ws}: ${(e as Error).message}`);
+      }
+    }
+  }
+
+  /** Lifecycle states worth polling — a connection actively syncing or already
+   * healthy/degraded. Explicitly excludes 'draft'/'authorizing' (credentials not
+   * yet proven), 'error' (needs a deliberate re-test before resuming), and
+   * 'disconnected' (user turned it off) — polling those would silently retry a
+   * state a human/operator needs to resolve first. */
+  private static readonly POLLABLE_STATES: ConnectorLifecycleState[] = ['connected', 'syncing', 'healthy', 'degraded'];
+
+  private async syncConnectorsForWorkspace(workspaceId: string): Promise<void> {
+    const connections = await this.connectorConnections.list(workspaceId);
+    for (const connection of connections) {
+      if (connection.role === 'destination') continue;
+      if (!SchedulerService.POLLABLE_STATES.includes(connection.lifecycleState)) continue;
+      try {
+        await this.connectorOrchestrator.runIncremental(workspaceId, connection.id);
+      } catch (e) {
+        this.logger.warn(`connector-incremental-sync falhou p/ ${workspaceId}/${connection.id}: ${(e as Error).message}`);
       }
     }
   }
