@@ -34,6 +34,8 @@ function deterministicId(prefix: string, ...parts: string[]): string {
 
 export interface UpsertOrderResult {
   orderId: string;
+  /** True whenever the purchase outcome row exists after this call — a fresh
+   * insert OR an update (e.g. `customerId` advanced onto a post-merge owner). */
   purchaseOutcomeWritten: boolean;
   /** The order's customerId AFTER this upsert (post-COALESCE) — may be non-null
    * even when this call's own `customerId` argument was null (e.g. a refund-only
@@ -157,8 +159,16 @@ export class CommerceWriteService {
           provenance: { source_record_id: order.providerOrderId } as ContextProvenance,
           observedAt: new Date(order.orderTimestamp),
         })
-        .onConflictDoNothing({
+        // `resolvedCustomerId` is always freshly derived from IdentityGraphService's
+        // CURRENT identifier ownership (never client-supplied), so it already
+        // reflects any merge that happened since this outcome was first written —
+        // advancing customerId on conflict is what makes a purchase outcome created
+        // under a since-merged customer A converge onto the surviving customer B on
+        // the next resync, instead of staying pinned to A forever (mergeCustomers
+        // itself only moves customer_identifiers, not customer_outcomes rows).
+        .onConflictDoUpdate({
           target: [customerOutcomes.workspaceId, customerOutcomes.outcomeNamespace, customerOutcomes.outcomeKey, customerOutcomes.dedupeKey],
+          set: { customerId: resolvedCustomerId, updatedAt: now },
         })
         .returning({ id: customerOutcomes.id });
       purchaseOutcomeWritten = inserted.length > 0;
