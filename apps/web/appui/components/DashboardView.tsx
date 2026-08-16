@@ -25,6 +25,8 @@ import {
 } from 'recharts';
 import { Funnel } from '../types';
 import { useLive } from '@/lib/live';
+import { LiveDataBoundary } from '@/lib/live-ui';
+import { selectLiveData } from '@/lib/live-state';
 
 interface DashboardViewProps {
   funnels: Funnel[];
@@ -87,7 +89,7 @@ function periodFromRange(dateRange: string): string {
 export default function DashboardView({ funnels, setView, dateRange }: DashboardViewProps) {
   const period = periodFromRange(dateRange);
 
-  // Live (API real) — em modo demo useLive retorna null → cai no mock abaixo.
+  // O hook distingue demo dos estados live; mocks só são selecionados em demo.
   const kpisLive = useLive<KpisResponse>(`/v1/metrics/kpis?period=${period}`, [period]);
   const tsLive = useLive<TimeseriesResponse>(
     `/v1/metrics/timeseries?metric=revenue&granularity=day&period=${period}`,
@@ -109,7 +111,15 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
     { name: 'July 7', Spend: 350, Revenue: 1312, Conversions: 29 },
   ];
 
-  const MOCK_TRAFFIC_SOURCES = [
+  const MOCK_TRAFFIC_SOURCES: Array<{
+    source: string;
+    revenue: number;
+    conversions: number | null;
+    roas: string;
+    quality: string;
+    status: string;
+    statusColor: string;
+  }> = [
     { source: 'meta / cpc', revenue: 2185.20, conversions: 54, roas: '3.08x', quality: '9.2', status: 'Syncing', statusColor: 'text-teal-600 bg-teal-50' },
     { source: 'google / search', revenue: 1240.50, conversions: 28, roas: '3.52x', quality: '8.8', status: 'Syncing', statusColor: 'text-teal-600 bg-teal-50' },
     { source: 'tiktok / spark', revenue: 310.00, conversions: 7, roas: '0.91x', quality: '6.5', status: 'Error', statusColor: 'text-rose-600 bg-rose-50' },
@@ -118,43 +128,49 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
   ];
 
   // adapt(): mapeia o JSON da API para a MESMA forma que o JSX já consome.
-  const chartData = tsLive.data
-    ? tsLive.data.series.map((s) => ({
+  const chartData = selectLiveData(tsLive, MOCK_CHART_DATA, [], (data) =>
+    data.series.map((s) => ({
         name: s.bucket,
         Revenue: s.value ?? 0,
         Spend: 0,
         Conversions: 0,
-      }))
-    : MOCK_CHART_DATA;
+      })),
+  );
 
-  const trafficSources = srcLive.data
-    ? srcLive.data.rows.map((r) => ({
+  const trafficSources = selectLiveData(srcLive, MOCK_TRAFFIC_SOURCES, [], (data) =>
+    data.rows.map((r) => ({
         source: r.dimension || '(direto)',
         revenue: r.value ?? 0,
-        conversions: 0,
+        conversions: null,
         roas: '—',
         quality: '—',
-        status: 'Active',
+        status: 'API',
         statusColor: 'text-slate-600 bg-slate-50',
-      }))
-    : MOCK_TRAFFIC_SOURCES;
+      })),
+  );
 
-  // KPI cards — valor real com fallback ao literal mock. Sparklines/deltas ficam hardcoded.
-  const kpis = kpisLive.data;
-  const revenueDisplay = kpis ? fmtUSD(kpis.totals?.revenue ?? 0) : '$4,103.50';
+  // KPIs, deltas e sparklines sintéticos ficam restritos ao modo demo.
+  const kpis = kpisLive.status === 'success' ? kpisLive.data : null;
+  const isDemo = kpisLive.status === 'demo';
+  const revenueDisplay = kpis ? fmtUSD(kpis.totals?.revenue ?? 0) : isDemo ? '$4,103.50' : '$0.00';
   const roasDisplay = kpis
     ? kpis.kpis?.roas != null
       ? `${kpis.kpis.roas.toFixed(2)}x`
       : '—'
-    : '3.38x';
+    : isDemo ? '3.38x' : '—';
   const cacDisplay = kpis
     ? kpis.kpis?.cac != null
       ? fmtUSD(kpis.kpis.cac)
       : '—'
-    : '$13.25';
-  const shareDisplay = kpis && kpis.kpis?.cvr != null ? `${kpis.kpis.cvr}%` : '84.6%';
+    : isDemo ? '$13.25' : '—';
+  const shareDisplay = kpis && kpis.kpis?.cvr != null ? `${kpis.kpis.cvr}%` : isDemo ? '84.6%' : '—';
 
   return (
+    <LiveDataBoundary
+      states={[kpisLive, tsLive, srcLive]}
+      empty={chartData.length === 0 && trafficSources.length === 0 && (kpis?.totals?.revenue ?? 0) === 0}
+      label="Dashboard"
+    >
     <div id="dashboard-view-container" className="space-y-6">
       {/* KPI Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -162,10 +178,10 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
         <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-xs flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500 font-mono uppercase tracking-wider">Attributed Revenue</span>
-            <span className="flex items-center gap-0.5 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">
+            {isDemo && <span className="flex items-center gap-0.5 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">
               <ArrowUpRight className="w-3 h-3" />
               18.4%
-            </span>
+            </span>}
           </div>
           <div className="mt-3">
             <h3 className="text-2xl font-bold text-slate-900 tracking-tight">{revenueDisplay}</h3>
@@ -174,7 +190,7 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
               Model-attributable sales
             </p>
           </div>
-          <div className="mt-4 h-10 w-full">
+          {isDemo && <div className="mt-4 h-10 w-full">
             {/* Elegant Vector Micro Sparkline */}
             <svg className="w-full h-full text-teal-500 overflow-visible" viewBox="0 0 120 40" preserveAspectRatio="none">
               <defs>
@@ -186,17 +202,17 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
               <path d="M 0 32 C 20 28, 40 12, 60 18 C 80 24, 100 8, 120 10 L 120 40 L 0 40 Z" fill="url(#grad-revenue)" />
               <path d="M 0 32 C 20 28, 40 12, 60 18 C 80 24, 100 8, 120 10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
-          </div>
+          </div>}
         </div>
 
         {/* Card 2: Blended ROAS */}
         <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-xs flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500 font-mono uppercase tracking-wider">Blended ROAS</span>
-            <span className="flex items-center gap-0.5 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">
+            {isDemo && <span className="flex items-center gap-0.5 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">
               <ArrowUpRight className="w-3 h-3" />
               4.2%
-            </span>
+            </span>}
           </div>
           <div className="mt-3">
             <h3 className="text-2xl font-bold text-slate-900 tracking-tight">{roasDisplay}</h3>
@@ -205,7 +221,7 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
               Revenue / Ad Spend ratio
             </p>
           </div>
-          <div className="mt-4 h-10 w-full">
+          {isDemo && <div className="mt-4 h-10 w-full">
             <svg className="w-full h-full text-emerald-500 overflow-visible" viewBox="0 0 120 40" preserveAspectRatio="none">
               <defs>
                 <linearGradient id="grad-roas" x1="0" y1="0" x2="0" y2="1">
@@ -216,17 +232,17 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
               <path d="M 0 34 C 20 30, 40 32, 60 22 C 80 12, 100 14, 120 8 L 120 40 L 0 40 Z" fill="url(#grad-roas)" />
               <path d="M 0 34 C 20 30, 40 32, 60 22 C 80 12, 100 14, 120 8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
-          </div>
+          </div>}
         </div>
 
         {/* Card 3: Blended CAC */}
         <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-xs flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500 font-mono uppercase tracking-wider">Blended CAC</span>
-            <span className="flex items-center gap-0.5 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">
+            {isDemo && <span className="flex items-center gap-0.5 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">
               <ArrowDownRight className="w-3 h-3" />
               8.6%
-            </span>
+            </span>}
           </div>
           <div className="mt-3">
             <h3 className="text-2xl font-bold text-slate-900 tracking-tight">{cacDisplay}</h3>
@@ -235,7 +251,7 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
               Ad spend per acquisition
             </p>
           </div>
-          <div className="mt-4 h-10 w-full">
+          {isDemo && <div className="mt-4 h-10 w-full">
             <svg className="w-full h-full text-teal-600 overflow-visible" viewBox="0 0 120 40" preserveAspectRatio="none">
               <defs>
                 <linearGradient id="grad-cac" x1="0" y1="0" x2="0" y2="1">
@@ -246,17 +262,17 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
               <path d="M 0 12 C 20 14, 40 18, 60 16 C 80 14, 100 28, 120 30 L 120 40 L 0 40 Z" fill="url(#grad-cac)" />
               <path d="M 0 12 C 20 14, 40 18, 60 16 C 80 14, 100 28, 120 30" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
-          </div>
+          </div>}
         </div>
 
         {/* Card 4: New Customer Share */}
         <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-xs flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500 font-mono uppercase tracking-wider">New Customer Share</span>
-            <span className="flex items-center gap-0.5 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">
+            {isDemo && <span className="flex items-center gap-0.5 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">
               <ArrowUpRight className="w-3 h-3" />
               1.8%
-            </span>
+            </span>}
           </div>
           <div className="mt-3">
             <h3 className="text-2xl font-bold text-slate-900 tracking-tight font-sans">{shareDisplay}</h3>
@@ -265,7 +281,7 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
               First-purchase transaction share
             </p>
           </div>
-          <div className="mt-4 h-10 w-full">
+          {isDemo && <div className="mt-4 h-10 w-full">
             <svg className="w-full h-full text-indigo-500 overflow-visible" viewBox="0 0 120 40" preserveAspectRatio="none">
               <defs>
                 <linearGradient id="grad-share" x1="0" y1="0" x2="0" y2="1">
@@ -276,7 +292,7 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
               <path d="M 0 30 C 20 28, 40 24, 60 25 C 80 26, 100 14, 120 12 L 120 40 L 0 40 Z" fill="url(#grad-share)" />
               <path d="M 0 30 C 20 28, 40 24, 60 25 C 80 26, 100 14, 120 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
-          </div>
+          </div>}
         </div>
       </div>
 
@@ -292,10 +308,10 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
               <span className="w-3 h-3 bg-teal-500 rounded-xs" />
               <span className="text-slate-600 font-medium">Verified Sales ($)</span>
             </div>
-            <div className="flex items-center gap-1.5">
+            {isDemo && <div className="flex items-center gap-1.5">
               <span className="w-3 h-1.5 bg-slate-800 rounded-full inline-block" />
               <span className="text-slate-600 font-medium">Ad Spend ($)</span>
-            </div>
+            </div>}
           </div>
         </div>
 
@@ -347,7 +363,7 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
                 }}
               />
               <Bar yAxisId="left" dataKey="Revenue" fill="#14b8a6" fillOpacity={0.85} radius={[6, 6, 0, 0]} barSize={35} name="Attributed Sales" />
-              <Line yAxisId="left" type="monotone" dataKey="Spend" stroke="#0f172a" strokeWidth={2.5} dot={{ r: 3, fill: '#0f172a', strokeWidth: 0 }} activeDot={{ r: 5 }} name="Ad Spend" />
+              {isDemo && <Line yAxisId="left" type="monotone" dataKey="Spend" stroke="#0f172a" strokeWidth={2.5} dot={{ r: 3, fill: '#0f172a', strokeWidth: 0 }} activeDot={{ r: 5 }} name="Ad Spend" />}
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -392,7 +408,7 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
                       </span>
                     </td>
                     <td className="py-3.5 text-right font-semibold text-slate-900">${t.revenue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                    <td className="py-3.5 text-right font-mono font-medium">{t.conversions}</td>
+                    <td className="py-3.5 text-right font-mono font-medium">{t.conversions ?? '—'}</td>
                     <td className="py-3.5 text-right font-semibold text-emerald-600">{t.roas}</td>
                     <td className="py-3.5 text-right">
                       {t.quality !== '--' ? (
@@ -492,5 +508,6 @@ export default function DashboardView({ funnels, setView, dateRange }: Dashboard
         </div>
       </div>
     </div>
+    </LiveDataBoundary>
   );
 }

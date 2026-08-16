@@ -40,6 +40,7 @@ import {
   Cell,
 } from 'recharts';
 import { useLive } from '@/lib/live';
+import { LiveDataBoundary } from '@/lib/live-ui';
 import { useSession } from '@/lib/session';
 
 // ----------------------------------------------------------------------------
@@ -130,21 +131,25 @@ const brl = (n: number): string =>
 
 const num = (n: number): string => n.toLocaleString('pt-BR');
 
-const fmtDateTime = (iso: string): string =>
-  new Date(iso).toLocaleString('pt-BR', {
+const fmtDateTime = (iso: string): string => {
+  if (!iso || Number.isNaN(new Date(iso).getTime())) return '—';
+  return new Date(iso).toLocaleString('pt-BR', {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
   });
+};
 
-const fmtDate = (iso: string): string =>
-  new Date(iso).toLocaleDateString('pt-BR', {
+const fmtDate = (iso: string): string => {
+  if (!iso || Number.isNaN(new Date(iso).getTime())) return '—';
+  return new Date(iso).toLocaleDateString('pt-BR', {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
   });
+};
 
 // ----------------------------------------------------------------------------
 // Metadados por tipo de evento (label + ícone + tom de cor)
@@ -368,6 +373,29 @@ const MOCK_PROFILE: CustomerProfile = {
   ],
 };
 
+const EMPTY_PROFILE: CustomerProfile = {
+  name: '—',
+  initials: '—',
+  canonicalId: '—',
+  emailMasked: '—',
+  phoneMasked: '—',
+  devices: 0,
+  firstTouch: '',
+  lastTouch: '',
+  status: 'novo',
+  ltv: 0,
+  orders: 0,
+  avgTicket: 0,
+  sessions: 0,
+  events: 0,
+  daysSinceFirstTouch: 0,
+  tags: [],
+  channels: [],
+  deviceList: [],
+  weekly: [],
+  timeline: [],
+};
+
 const SEARCH_TYPES: { value: SearchType; label: string; placeholder: string }[] = [
   { value: 'email', label: 'E-mail', placeholder: 'ex.: marina@gmail.com' },
   { value: 'telefone', label: 'Telefone', placeholder: 'ex.: +55 11 98888-4472' },
@@ -426,8 +454,7 @@ const shortHash = (h: string | null | undefined): string =>
 
 /**
  * Mapeia um ProfileCandidate da API para a MESMA forma (CustomerProfile) que o
- * JSX já consome. Só o cabeçalho de identidade e a KPI row vêm do real; canais,
- * dispositivos, atividade e timeline seguem no mock. // TODO(live)
+ * JSX já consome. Campos que o endpoint não fornece permanecem vazios.
  */
 function adaptCandidate(c: ApiProfileCandidate): CustomerProfile {
   const m = c.metrics;
@@ -445,8 +472,8 @@ function adaptCandidate(c: ApiProfileCandidate): CustomerProfile {
     emailMasked: shortHash(c.email_hash),
     phoneMasked: shortHash(c.phone_hash),
     devices: c.anonymous_ids_count ?? 0,
-    firstTouch: c.first_seen_at ?? MOCK_PROFILE.firstTouch,
-    lastTouch: c.last_seen_at ?? MOCK_PROFILE.lastTouch,
+    firstTouch: c.first_seen_at ?? '',
+    lastTouch: c.last_seen_at ?? '',
     status: identified ? 'ativo' : 'novo',
     ltv: m?.ltv ?? 0,
     orders: m?.orders_count ?? 0,
@@ -455,11 +482,10 @@ function adaptCandidate(c: ApiProfileCandidate): CustomerProfile {
     events: m?.events_count ?? 0,
     daysSinceFirstTouch: m?.days_since_first_touch ?? 0,
     tags,
-    // Rail lateral + timeline ainda sem endpoint neste contrato → mock. // TODO(live)
-    channels: MOCK_PROFILE.channels,
-    deviceList: MOCK_PROFILE.deviceList,
-    weekly: MOCK_PROFILE.weekly,
-    timeline: MOCK_PROFILE.timeline,
+    channels: [],
+    deviceList: [],
+    weekly: [],
+    timeline: [],
   };
 }
 
@@ -526,18 +552,22 @@ export default function ProfilesView() {
     };
   }, []);
 
-  // Live (API real). Em demo (ou antes de submeter) useLive retorna null → mock.
+  // Live usa apenas o resultado submetido; demo seleciona o perfil sintético explicitamente.
   const livePath = submitted
     ? `/v1/profiles/search?q=${encodeURIComponent(submitted.q)}&type=${API_SEARCH_TYPE[submitted.type]}`
     : null;
   const search = useLive<ApiProfileSearchResponse>(livePath, [submitted?.q, submitted?.type]);
 
-  const candidate = isLive ? (search.data?.results?.[0] ?? null) : null;
-  const profile = candidate ? adaptCandidate(candidate) : MOCK_PROFILE;
+  const candidate = isLive && search.status === 'success' ? (search.data?.results?.[0] ?? null) : null;
+  const profile = search.status === 'demo'
+    ? MOCK_PROFILE
+    : candidate
+      ? adaptCandidate(candidate)
+      : EMPTY_PROFILE;
 
   // Gating do render: em 'live' derivado do fetch; em demo, da simulação.
-  const liveLoading = !!submitted && (search.loading || (!search.data && !search.error));
-  const liveHasResult = !!(search.data?.results && search.data.results.length > 0);
+  const liveLoading = !!submitted && search.status === 'loading';
+  const liveHasResult = search.status === 'success' && !!search.data?.results?.length;
   const loading = isLive ? liveLoading : demoLoading;
   const hasResult = isLive ? liveHasResult && !liveLoading : demoHasResult;
 
@@ -600,6 +630,11 @@ export default function ProfilesView() {
   const status = STATUS_META[profile.status];
 
   return (
+    <LiveDataBoundary
+      states={submitted ? [search] : []}
+      empty={!!submitted && search.status === 'success' && !candidate}
+      label="Busca de perfil"
+    >
     <div className="space-y-6">
       {/* Toolbar de busca */}
       <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-xs">
@@ -1036,5 +1071,6 @@ export default function ProfilesView() {
         </div>
       )}
     </div>
+    </LiveDataBoundary>
   );
 }

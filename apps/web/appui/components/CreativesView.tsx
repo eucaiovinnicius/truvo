@@ -27,6 +27,8 @@ import {
   Tooltip,
 } from 'recharts';
 import { useLive } from '@/lib/live';
+import { LiveDataBoundary } from '@/lib/live-ui';
+import { selectLiveData } from '@/lib/live-state';
 
 // ---- Domínio ----
 type Platform = 'Meta' | 'Google' | 'TikTok';
@@ -319,15 +321,15 @@ export default function CreativesView(): React.ReactElement {
   const live = useLive<CreativesApiResponse>(livePath, [platform, period]);
 
   const filtered = useMemo<Creative[]>(() => {
-    if (live.data) return adaptCreatives(live.data.items); // já filtrado pela API
-    return platform === 'Todas' ? CREATIVES : CREATIVES.filter((c) => c.platform === platform);
-  }, [live.data, platform]);
+    const demo = platform === 'Todas' ? CREATIVES : CREATIVES.filter((c) => c.platform === platform);
+    return selectLiveData(live, demo, [], (data) => adaptCreatives(data.items));
+  }, [live, platform]);
 
   // ---- KPIs agregados ----
   // Em 'live': direto de totals (ROAS = receita/investimento ponderado).
   // Em demo: agregação ponderada dos mocks (inalterada).
   const kpis = useMemo(() => {
-    if (live.data) {
+    if (live.status === 'success' && live.data) {
       const t = live.data.totals;
       const totalSpend = t?.spend ?? 0;
       const reportedRevenue = t?.reported_revenue ?? 0;
@@ -356,7 +358,7 @@ export default function CreativesView(): React.ReactElement {
       roasReal,
       gapPct,
     };
-  }, [live.data, filtered]);
+  }, [live.status, live.data, filtered]);
 
   const maxRoas = useMemo(
     () => Math.max(...filtered.flatMap((c) => [c.roasReported, c.roasReal]), 1),
@@ -376,6 +378,7 @@ export default function CreativesView(): React.ReactElement {
   const overreported = filtered.filter((c) => verdictOf(c.roasReported, c.roasReal) === 'superestimado').length;
 
   return (
+    <LiveDataBoundary states={[live]} empty={filtered.length === 0} label="Criativos">
     <div id="creatives-view-container" className="space-y-6">
       {/* Header + Toolbar */}
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
@@ -728,5 +731,6 @@ export default function CreativesView(): React.ReactElement {
         </div>
       </div>
     </div>
+    </LiveDataBoundary>
   );
 }

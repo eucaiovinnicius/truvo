@@ -20,6 +20,7 @@ import {
 import { Integration, ApiKey } from '../types';
 import { useSession } from '@/lib/session';
 import { useLive } from '@/lib/live';
+import { LiveDataBoundary } from '@/lib/live-ui';
 import { api } from '@/lib/api';
 
 interface TrackingViewProps {
@@ -196,14 +197,21 @@ export default function TrackingView({
 
   // Em 'live' semeamos uma cópia local mutável (create/revoke atualizam sem
   // re-fetch); em demo (liveKeys === null) caímos nas props do pai, intactas.
-  const [liveKeys, setLiveKeys] = useState<ApiKey[] | null>(null);
+  const [liveKeys, setLiveKeys] = useState<ApiKey[]>([]);
   useEffect(() => {
-    if (keysLive.data) setLiveKeys(adaptApiKeys(keysLive.data));
-  }, [keysLive.data]);
+    if (keysLive.status === 'success') setLiveKeys(adaptApiKeys(keysLive.data ?? { apiKeys: [] }));
+    else setLiveKeys([]);
+  }, [keysLive.status, keysLive.data]);
 
-  const apiKeys: ApiKey[] = liveKeys ?? propApiKeys;
-  const liveIntegrations = adaptIntegrations(intInLive.data, intOutLive.data);
-  const integrations: Integration[] = liveIntegrations ?? propIntegrations;
+  const apiKeys: ApiKey[] = isLive ? liveKeys : propApiKeys;
+  const liveIntegrations =
+    intInLive.status === 'success' && intOutLive.status === 'success'
+      ? adaptIntegrations(intInLive.data, intOutLive.data) ?? []
+      : [];
+  const integrations: Integration[] = isLive ? liveIntegrations : propIntegrations;
+  const pixelKey = isLive
+    ? revealedKey?.key ?? '<YOUR_PUBLIC_KEY>'
+    : 'pk_live_68798e98b7a9f2';
 
   // Copied Animation
   const handleCopy = () => {
@@ -215,7 +223,7 @@ export default function TrackingView({
   var a=r.getElementsByTagName("script")[0];
   a.parentNode.insertBefore(e,a)}(window,document,"https://cdn.truvo.ai/pixel.js","tr");
   
-  tr('init', 'pk_live_68798e98b7a9f2');
+  tr('init', '${pixelKey}');
   tr('track', 'PageView');
 </script>`);
     setCopied(true);
@@ -256,7 +264,7 @@ export default function TrackingView({
           key: `${res.prefix ?? ''}••••••`,
           status: res.status === 'revoked' ? 'inactive' : 'active',
         },
-        ...(prev ?? []),
+        ...prev,
       ]);
       setNewKeyLabel('');
       setShowAddKey(false);
@@ -273,7 +281,7 @@ export default function TrackingView({
           ? { ...k, status: k.status === 'active' ? ('inactive' as const) : ('active' as const) }
           : k,
       );
-    if (isLive) setLiveKeys((prev) => flip(prev ?? []));
+    if (isLive) setLiveKeys((prev) => flip(prev));
     else setApiKeys(flip(apiKeys));
   };
 
@@ -286,7 +294,7 @@ export default function TrackingView({
     setKeyError(null);
     try {
       await api(`/v1/api-keys/${keyId}`, { method: 'DELETE' });
-      setLiveKeys((prev) => (prev ?? []).filter((k) => k.id !== keyId));
+      setLiveKeys((prev) => prev.filter((k) => k.id !== keyId));
     } catch {
       setKeyError('Não foi possível revogar a chave. Tente novamente.');
     }
@@ -325,6 +333,7 @@ export default function TrackingView({
   };
 
   return (
+    <LiveDataBoundary states={[keysLive, intInLive, intOutLive]} empty={isLive && !wid} label="SDK e integrações">
     <div id="tracking-view-container" className="grid grid-cols-1 lg:grid-cols-12 gap-6">
       {/* Left Column: SDK Code & API Keys - Span 7 */}
       <div className="lg:col-span-7 space-y-6">
@@ -363,7 +372,7 @@ export default function TrackingView({
   var a=r.getElementsByTagName("script")[0];
   a.parentNode.insertBefore(e,a)}(window,document,"https://cdn.truvo.ai/pixel.js","tr");
   
-  tr('init', 'pk_live_68798e98b7a9f2');
+  tr('init', '${pixelKey}');
   tr('track', 'PageView');
 </script>`}
             </pre>
@@ -573,5 +582,6 @@ export default function TrackingView({
         </div>
       </div>
     </div>
+    </LiveDataBoundary>
   );
 }

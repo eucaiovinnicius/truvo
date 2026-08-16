@@ -17,6 +17,7 @@ import {
 import { WorkspaceConfig, ProfileConfig } from '../types';
 import { useSession } from '@/lib/session';
 import { useLive } from '@/lib/live';
+import { LiveDataBoundary } from '@/lib/live-ui';
 import { api } from '@/lib/api';
 
 /** Papel legível (form) → enum de convite da API (owner não é convidável). */
@@ -74,11 +75,12 @@ export default function SettingsView({
   const [saveError, setSaveError] = useState<string | null>(null);
 
   // Teams list state (semeado pela API em 'live'; mock em demo)
-  const [teamMembers, setTeamMembers] = useState<TeamMemberRow[]>([
+  const DEMO_MEMBERS: TeamMemberRow[] = [
     { id: 1, name: 'Alex Mercer', email: 'alex@truvo.ai', role: 'Owner', status: 'Active' },
     { id: 2, name: 'Samantha Cole', email: 'sam@truvo.ai', role: 'Growth Marketer', status: 'Active' },
     { id: 3, name: 'John Sterling', email: 'john@truvo.ai', role: 'Lead Developer', status: 'Pending Invite' }
-  ]);
+  ];
+  const [teamMembers, setTeamMembers] = useState<TeamMemberRow[]>([]);
 
   const [inviteName, setInviteName] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
@@ -92,8 +94,11 @@ export default function SettingsView({
   const membersPath = wid ? `/v1/workspaces/${wid}/members` : null;
   const liveMembers = useLive<ApiMember[]>(membersPath, [wid]);
   useEffect(() => {
-    if (liveMembers.data) setTeamMembers(adaptMembers(liveMembers.data));
-  }, [liveMembers.data]);
+    if (liveMembers.status === 'demo') setTeamMembers(DEMO_MEMBERS);
+    else if (liveMembers.status === 'success') setTeamMembers(adaptMembers(liveMembers.data ?? []));
+    else setTeamMembers([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveMembers.status, liveMembers.data]);
 
   const flashSuccess = () => {
     setSaveError(null);
@@ -103,6 +108,10 @@ export default function SettingsView({
 
   const handleProfileSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLive) {
+      setSaveError('A edição do perfil ao vivo ainda não está disponível. Nenhuma alteração foi salva.');
+      return;
+    }
     // TODO(live): PATCH /v1/users/me (perfil) — mantido local nesta fase.
     flashSuccess();
   };
@@ -181,6 +190,11 @@ export default function SettingsView({
   };
 
   return (
+    <LiveDataBoundary
+      states={activeTab === 'team' ? [liveMembers] : []}
+      empty={activeTab === 'team' && teamMembers.length === 0}
+      label="Configurações da equipe"
+    >
     <div id="settings-view-container" className="bg-white rounded-2xl border border-slate-100 shadow-xs overflow-hidden">
       {/* Settings layout with side navigation tab list */}
       <div className="flex flex-col md:flex-row min-h-[500px]">
@@ -300,7 +314,7 @@ export default function SettingsView({
           {/* TODO(live): GET /v1/workspaces → achar id=wid e semear name/slug/timezone/currency.
               Mantido no mock: inputs são controlados por props do parent (workspace/setWorkspace);
               semear defaults exigiria effect com guarda p/ não sobrescrever edições. */}
-          {activeTab === 'workspace' && (
+          {activeTab === 'workspace' && !isLive && (
             <form onSubmit={handleWorkspaceSubmit} className="space-y-4">
               <div>
                 <h3 className="text-sm font-bold text-slate-800 tracking-tight">Workspace & Localization Config</h3>
@@ -372,6 +386,11 @@ export default function SettingsView({
                 </button>
               </div>
             </form>
+          )}
+          {activeTab === 'workspace' && isLive && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-700">
+              A edição completa do workspace ao vivo ainda não está disponível nesta tela. O workspace ativo é <b>{session.workspace?.name || session.workspace?.id || 'não identificado'}</b>.
+            </div>
           )}
 
           {/* TAB 3: Team Members */}
@@ -470,7 +489,7 @@ export default function SettingsView({
           )}
 
           {/* TAB 4: Billing & Meter */}
-          {activeTab === 'billing' && (
+          {activeTab === 'billing' && !isLive && (
             <div className="space-y-4">
               <div>
                 <h3 className="text-sm font-bold text-slate-800 tracking-tight">Active Plan & Transactions Quota</h3>
@@ -526,8 +545,14 @@ export default function SettingsView({
               </div>
             </div>
           )}
+          {activeTab === 'billing' && isLive && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900">
+              Os dados de cobrança ao vivo estão disponíveis na tela Billing &amp; Plans. Nenhum dado de exemplo é exibido aqui.
+            </div>
+          )}
         </div>
       </div>
     </div>
+    </LiveDataBoundary>
   );
 }

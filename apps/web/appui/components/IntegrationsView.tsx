@@ -29,6 +29,8 @@ import {
   Tooltip,
 } from 'recharts';
 import { useLive } from '@/lib/live';
+import { LiveDataBoundary } from '@/lib/live-ui';
+import { selectLiveData } from '@/lib/live-state';
 import { useSession } from '@/lib/session';
 import { api } from '@/lib/api';
 
@@ -48,8 +50,8 @@ interface InboundIntegration {
   initials: string;
   status: InboundStatus;
   lastSync: string;
-  eventsToday: number;
-  revenueToday: number; // BRL
+  eventsToday: number | null;
+  revenueToday: number | null; // BRL
 }
 
 interface OutboundIntegration {
@@ -281,8 +283,8 @@ function adaptInbound(rows: InboundApiItem[]): InboundIntegration[] {
       initials: meta.initials,
       status: mapInboundStatus(r?.status),
       lastSync: relTimePt(r?.lastEventAt),
-      eventsToday: 0, // TODO(live): a lista não expõe volume/receita
-      revenueToday: 0, // TODO(live): idem
+      eventsToday: null,
+      revenueToday: null,
     };
   });
 }
@@ -440,20 +442,18 @@ export default function IntegrationsView(): React.ReactElement {
   const outboundLive = useLive<OutboundStatusResponse>('/v1/integrations-out/status', []);
 
   // Entrada: real quando 'live' (e não-vazio); senão o mock existente.
-  const inbound: InboundIntegration[] =
-    inboundLive.data && inboundLive.data.length > 0 ? adaptInbound(inboundLive.data) : INBOUND;
+  const inbound: InboundIntegration[] = selectLiveData(inboundLive, INBOUND, [], adaptInbound);
 
   const { isLive } = useSession();
-  const [outbound, setOutbound] = useState<OutboundIntegration[]>(OUTBOUND_SEED);
+  const [outbound, setOutbound] = useState<OutboundIntegration[]>([]);
   const [outError, setOutError] = useState<string | null>(null);
 
   // Saída: quando o live chega, hidrata o estado (preserva o toggle otimista local).
   useEffect(() => {
-    const platforms = outboundLive.data?.platforms;
-    if (platforms && platforms.length > 0) {
-      setOutbound(adaptOutbound(platforms));
-    }
-  }, [outboundLive.data]);
+    if (outboundLive.status === 'demo') setOutbound(OUTBOUND_SEED);
+    else if (outboundLive.status === 'success') setOutbound(adaptOutbound(outboundLive.data?.platforms ?? []));
+    else setOutbound([]);
+  }, [outboundLive.status, outboundLive.data]);
 
   // Toggle — demo: só local; live: PUT /v1/integrations-out/:platform { enabled }.
   // Hoje isso falha-fechado sem INTEGRATIONS_ENCRYPTION_KEY → revertemos e avisamos.
@@ -493,6 +493,11 @@ export default function IntegrationsView(): React.ReactElement {
   const totalFailed = outbound.reduce((acc, o) => acc + o.failed, 0);
 
   return (
+    <LiveDataBoundary
+      states={[inboundLive, outboundLive]}
+      empty={inbound.length === 0 && outbound.length === 0}
+      label="Integrações"
+    >
     <div id="integrations-view-container" className="space-y-6">
       {/* Header row */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -672,7 +677,7 @@ export default function IntegrationsView(): React.ReactElement {
                       Eventos hoje
                     </span>
                     <span className="text-sm font-bold text-slate-800 font-mono">
-                      {fmtInt(it.eventsToday)}
+                      {it.eventsToday === null ? '—' : fmtInt(it.eventsToday)}
                     </span>
                   </div>
                   <div className="bg-slate-50/70 rounded-xl border border-slate-100/70 p-2.5">
@@ -680,7 +685,7 @@ export default function IntegrationsView(): React.ReactElement {
                       Receita hoje
                     </span>
                     <span className="text-sm font-bold text-slate-800 font-mono">
-                      {it.revenueToday > 0 ? fmtBRL(it.revenueToday) : '—'}
+                      {it.revenueToday !== null && it.revenueToday > 0 ? fmtBRL(it.revenueToday) : '—'}
                     </span>
                   </div>
                 </div>
@@ -945,5 +950,6 @@ export default function IntegrationsView(): React.ReactElement {
         </div>
       </div>
     </div>
+    </LiveDataBoundary>
   );
 }

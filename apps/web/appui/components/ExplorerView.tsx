@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Database,
   Sigma,
@@ -37,6 +37,8 @@ import {
   Cell,
 } from 'recharts';
 import { useLive } from '@/lib/live';
+import { LiveDataBoundary } from '@/lib/live-ui';
+import { selectLiveData } from '@/lib/live-state';
 import { useSession } from '@/lib/session';
 import { api } from '@/lib/api';
 
@@ -531,14 +533,23 @@ export default function ExplorerView(): React.ReactElement {
   const [copied, setCopied] = useState<boolean>(false);
 
   // ---- Ligação API real (M16) ----
-  const { isLive } = useSession();
-  // (1) Insights salvos: GET /v1/insights (só busca em 'live'; demo → null → mock).
+  const { isLive, workspace } = useSession();
+  // (1) Insights salvos: API em live; coleção determinística apenas em demo.
   const insightsLive = useLive<ApiInsight[]>('/v1/insights', []);
-  const savedRows: SavedInsight[] = Array.isArray(insightsLive.data)
-    ? insightsLive.data.map(adaptInsight)
-    : saved;
-  // (2) Resultado da execução ao vivo (null → cai no mock runQuery abaixo).
-  const [liveResults, setLiveResults] = useState<ResultRow[] | null>(null);
+  const savedRows: SavedInsight[] = selectLiveData(
+    insightsLive,
+    saved,
+    [],
+    (rows) => rows.map(adaptInsight),
+  );
+  // (2) Resultado da execução ao vivo, com estados próprios de loading/error.
+  const [liveResults, setLiveResults] = useState<ResultRow[]>([]);
+  const [queryStatus, setQueryStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+
+  useEffect(() => {
+    setLiveResults([]);
+    setQueryStatus('idle');
+  }, [isLive, workspace?.id]);
 
   const draftSpec: QuerySpec = useMemo(
     () => ({ source, measure, dimensions, filters, dateRange }),
@@ -550,8 +561,11 @@ export default function ExplorerView(): React.ReactElement {
     [draftSpec, runSpec],
   );
 
-  // Live quando a execução real preencheu liveResults; senão o mock (fallback demo).
-  const results = useMemo(() => liveResults ?? runQuery(runSpec), [liveResults, runSpec]);
+  // O gerador local é usado exclusivamente no modo demo.
+  const results = useMemo(
+    () => (isLive ? liveResults : runQuery(runSpec)),
+    [isLive, liveResults, runSpec],
+  );
 
   const chartData: ChartDatum[] = useMemo(
     () =>
@@ -603,20 +617,29 @@ export default function ExplorerView(): React.ReactElement {
     setRunSpec(spec);
     // Demo → não busca; a tabela usa o mock runQuery (fallback).
     if (!isLive) {
-      setLiveResults(null);
+      setQueryStatus('success');
       return;
     }
     // Live → POST /v1/explorer/query com o spec do construtor. useLive só faz GET,
-    // então usamos api() direto. Erro/aborted/503 → volta ao mock (gracioso).
+    // então usamos api() direto. Falhas ficam explícitas e limpam resultados antigos.
+    setLiveResults([]);
+    setQueryStatus('loading');
     void api<ExplorerQueryResponse>('/v1/explorer/query', {
       method: 'POST',
       body: JSON.stringify(buildExplorerBody(spec)),
     })
       .then((res) => {
-        setLiveResults(res?.status === 'ok' ? adaptResults(res) : null);
+        if (res?.status === 'ok') {
+          setLiveResults(adaptResults(res));
+          setQueryStatus('success');
+        } else {
+          setLiveResults([]);
+          setQueryStatus('error');
+        }
       })
       .catch(() => {
-        setLiveResults(null);
+        setLiveResults([]);
+        setQueryStatus('error');
       });
   };
 
@@ -674,6 +697,7 @@ export default function ExplorerView(): React.ReactElement {
     'w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:ring-1 focus:ring-teal-500 focus:border-teal-500 outline-none';
 
   return (
+    <LiveDataBoundary states={[insightsLive]} empty={false} label="Explorador de dados">
     <div id="explorer-view-container" className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -704,6 +728,17 @@ export default function ExplorerView(): React.ReactElement {
           </button>
         </div>
       </div>
+
+      {isLive && queryStatus === 'loading' && (
+        <div aria-live="polite" className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
+          Executando consulta com dados ao vivo deste workspace…
+        </div>
+      )}
+      {isLive && queryStatus === 'error' && (
+        <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
+          A consulta ao vivo falhou. Nenhum resultado de demonstração foi usado.
+        </div>
+      )}
 
       {/* Grid principal */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -1191,5 +1226,6 @@ export default function ExplorerView(): React.ReactElement {
         </div>
       </div>
     </div>
+    </LiveDataBoundary>
   );
 }

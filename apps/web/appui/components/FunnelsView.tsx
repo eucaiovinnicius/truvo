@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { Funnel } from '../types';
 import { useLive } from '@/lib/live';
+import { LiveDataBoundary } from '@/lib/live-ui';
 import { useSession } from '@/lib/session';
 import { api } from '@/lib/api';
 
@@ -537,11 +538,11 @@ export default function FunnelsView({
   // grid e as mutações locais (toggle/delete/create) seguem lendo `funnels` intactos.
   const funnelsLive = useLive<FunnelViewApi[]>('/v1/funnels', [workspaceId]);
   useEffect(() => {
-    if (funnelsLive.data) {
-      setFunnels(adaptFunnels(funnelsLive.data));
+    if (funnelsLive.status === 'success') {
+      setFunnels(adaptFunnels(funnelsLive.data ?? []));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [funnelsLive.data]);
+  }, [funnelsLive.status, funnelsLive.data]);
 
   // Stats do funil aberto: GET /v1/funnels/{id}/stats → reach/conversão reais.
   const statsPath = selectedPerformanceFunnelId
@@ -641,13 +642,15 @@ export default function FunnelsView({
   // Calculate high-level totals
   const totalFunnels = funnels.length;
   const activeFunnels = funnels.filter(f => f.status === 'active').length;
-  const averageConversion = funnels.filter(f => f.status === 'active').length > 0 
+  const averageConversion = isLive
+    ? '—'
+    : funnels.filter(f => f.status === 'active').length > 0
     ? (funnels.filter(f => f.status === 'active').reduce((acc, curr) => acc + curr.conversionRate, 0) / activeFunnels).toFixed(1)
     : '0.0';
 
   // Find currently selected performance funnel (com reach/conversão reais quando 'live').
   const baseFunnel = funnels.find(f => f.id === selectedPerformanceFunnelId);
-  const performanceFunnel = baseFunnel && statsLive.data
+  const performanceFunnel = baseFunnel && statsLive.status === 'success' && statsLive.data
     ? applyFunnelStats(baseFunnel, statsLive.data)
     : baseFunnel;
 
@@ -678,6 +681,7 @@ export default function FunnelsView({
     }
 
     return (
+      <LiveDataBoundary states={[funnelsLive, statsLive]} empty={false} label="Desempenho do funil">
       <div id="funnel-performance-detail" className="space-y-6 animate-fadeIn">
         
         {/* Navigation Breadcrumb & Back action */}
@@ -988,6 +992,7 @@ export default function FunnelsView({
             </div>
 
             {/* Attribution Window and Filters Context Panel */}
+            {!isLive && (
             <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-2xs space-y-3">
               <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider font-mono flex items-center gap-1.5">
                 <Info className="w-4 h-4 text-slate-400" />
@@ -1011,12 +1016,19 @@ export default function FunnelsView({
                 </div>
               </div>
             </div>
+            )}
 
           </div>
 
         </div>
 
         {/* Attribution Analyzer Section */}
+        {isLive ? (
+          <div className="mt-6 rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-700">
+            O detalhamento por canal, campanha e criativo ainda não está disponível para este funil ao vivo. Os números acima vêm exclusivamente do endpoint de estatísticas do funil.
+          </div>
+        ) : (
+        <>
         <div id="attribution-analyzer-card" className="bg-white rounded-2xl border border-slate-100 p-6 shadow-2xs space-y-6 mt-6">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 border-b border-slate-50 pb-5">
             <div>
@@ -1895,12 +1907,16 @@ export default function FunnelsView({
             </div>
           );
         })()}
+        </>
+        )}
 
       </div>
+      </LiveDataBoundary>
     );
   }
 
   return (
+    <LiveDataBoundary states={[funnelsLive]} empty={funnels.length === 0} label="Funis">
     <div id="funnels-view-container" className="space-y-6">
       {/* Page Header Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -1948,7 +1964,7 @@ export default function FunnelsView({
           </div>
           <div>
             <span className="text-[10px] text-slate-400 font-mono uppercase font-semibold">Média de Conversão Ativa</span>
-            <h4 className="text-lg font-bold text-slate-800">{averageConversion}%</h4>
+            <h4 className="text-lg font-bold text-slate-800">{averageConversion}{isLive ? '' : '%'}</h4>
           </div>
         </div>
       </div>
@@ -2044,11 +2060,11 @@ export default function FunnelsView({
                     <div className="space-y-1">
                       <div className="flex justify-between">
                         <span>Origem: <b className="text-slate-800 font-semibold">{startStep.name}</b></span>
-                        <span className="font-mono text-[10px]">{reachStart.toLocaleString()} visitors</span>
+                        <span className="font-mono text-[10px]">{isLive ? '—' : `${reachStart.toLocaleString()} visitors`}</span>
                       </div>
                       <div className="flex justify-between">
                         <span>Sucesso: <b className="text-slate-800 font-semibold">{endStep.name}</b></span>
-                        <span className="font-mono text-[10px] text-teal-700">{reachEnd.toLocaleString()} purchases</span>
+                        <span className="font-mono text-[10px] text-teal-700">{isLive ? '—' : `${reachEnd.toLocaleString()} purchases`}</span>
                       </div>
                     </div>
                   ) : (
@@ -2062,7 +2078,7 @@ export default function FunnelsView({
                 <div>
                   <span className="text-[10px] font-mono text-slate-400 uppercase font-semibold">Taxa de Conversão</span>
                   <div className="text-base font-bold text-slate-800 font-mono mt-0.5">
-                    {conversionPercent}%
+                    {isLive ? '—' : `${conversionPercent}%`}
                   </div>
                 </div>
 
@@ -2123,5 +2139,6 @@ export default function FunnelsView({
         </button>
       </div>
     </div>
+    </LiveDataBoundary>
   );
 }

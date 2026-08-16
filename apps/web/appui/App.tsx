@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
 import DashboardView from './components/DashboardView';
@@ -30,6 +30,8 @@ export default function App() {
   const [currentView, setView] = useState<ViewState>('dashboard');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshSuccess, setRefreshSuccess] = useState(false);
+  const [refreshError, setRefreshError] = useState(false);
+  const [onboardingUnavailable, setOnboardingUnavailable] = useState(false);
   const [dateRange, setDateRange] = useState('Last 7 Days');
 
   // Core business configurations
@@ -56,10 +58,10 @@ export default function App() {
     };
   });
 
-  const handleLoginSuccess = (newProfile: ProfileConfig) => {
+  const handleLoginSuccess = (newProfile: ProfileConfig, mode: 'live' | 'demo') => {
     setProfile(newProfile);
     localStorage.setItem('truvo_profile', JSON.stringify(newProfile));
-    setView('onboarding');
+    setView(mode === 'live' ? 'dashboard' : 'onboarding');
   };
 
   const handleLogout = () => {
@@ -69,14 +71,35 @@ export default function App() {
   };
 
   // Business metrics lists
-  const [funnels, setFunnels] = useState<Funnel[]>(initialFunnels);
-  const [campaigns, setCampaigns] = useState<CampaignRow[]>(initialCampaigns);
-  const [integrations, setIntegrations] = useState<Integration[]>(initialIntegrations);
-  const [apiKeys, setApiKeys] = useState<ApiKey[]>(initialApiKeys);
-  const [selectedFunnelId, setSelectedFunnelId] = useState<string | null>('ecommerce-main');
+  const [funnels, setFunnels] = useState<Funnel[]>([]);
+  const [campaigns, setCampaigns] = useState<CampaignRow[]>([]);
+  const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
+  const [selectedFunnelId, setSelectedFunnelId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (session.mode === 'demo') {
+      setFunnels(initialFunnels);
+      setCampaigns(initialCampaigns);
+      setIntegrations(initialIntegrations);
+      setApiKeys(initialApiKeys);
+      setSelectedFunnelId('ecommerce-main');
+      return;
+    }
+    setFunnels([]);
+    setCampaigns([]);
+    setIntegrations([]);
+    setApiKeys([]);
+    setSelectedFunnelId(null);
+  }, [session.mode, session.workspace?.id]);
 
   // Launch onboarding wizard trigger
   const handleStartOnboarding = () => {
+    if (session.isLive) {
+      setOnboardingUnavailable(true);
+      setTimeout(() => setOnboardingUnavailable(false), 3000);
+      return;
+    }
     setView('onboarding');
   };
 
@@ -88,6 +111,12 @@ export default function App() {
 
   // Pipeline refresh simulation
   const handleRefreshAll = () => {
+    if (session.isLive) {
+      setRefreshSuccess(false);
+      setRefreshError(true);
+      setTimeout(() => setRefreshError(false), 3000);
+      return;
+    }
     setIsRefreshing(true);
     setTimeout(() => {
       setIsRefreshing(false);
@@ -136,16 +165,43 @@ export default function App() {
     return <LoginView onLoginSuccess={handleLoginSuccess} />;
   }
 
+  const demoWorkspaces = [
+    { id: 'truvo-global', name: 'Truvo Global Store' },
+    { id: 'alpha-electronics', name: 'Alpha Electronics' },
+    { id: 'beta-cosmetics', name: 'BETA Cosmetics' },
+  ];
+  const visibleWorkspace = session.isLive
+    ? { id: session.workspace?.id ?? '', name: session.workspace?.name || 'Workspace' }
+    : { id: workspace.slug, name: workspace.name };
+  const visibleWorkspaces = session.isLive ? session.workspaces : demoWorkspaces;
+  const visibleProfile: ProfileConfig = session.isLive
+    ? {
+        fullName: session.user?.name || session.user?.email || 'Usuário',
+        email: session.user?.email || '',
+        avatarUrl: session.user?.avatar_url || '',
+      }
+    : profile;
+
   return (
     <div className="min-h-screen bg-slate-50/50 flex font-sans antialiased text-slate-900 selection:bg-teal-500/15 selection:text-teal-900">
       {/* Sidebar Navigation */}
       <Sidebar 
         currentView={currentView} 
         setView={setView} 
-        workspaceName={workspace.name} 
-        setWorkspaceName={(name) => setWorkspace(prev => ({ ...prev, name }))}
+        workspaceName={visibleWorkspace.name}
+        workspaceId={visibleWorkspace.id}
+        workspaces={visibleWorkspaces}
+        setWorkspace={(id) => {
+          if (session.isLive) {
+            session.selectWorkspace(id);
+            return;
+          }
+          const selected = demoWorkspaces.find((candidate) => candidate.id === id);
+          if (selected) setWorkspace(prev => ({ ...prev, name: selected.name, slug: selected.id }));
+        }}
+        mode={session.mode}
         onStartOnboarding={handleStartOnboarding}
-        profile={profile}
+        profile={visibleProfile}
         onLogout={handleLogout}
       />
 
@@ -158,6 +214,7 @@ export default function App() {
           setDateRange={setDateRange}
           onRefreshAll={handleRefreshAll}
           isRefreshing={isRefreshing}
+          mode={session.mode}
         />
 
         {/* Global Pipeline Refresh Indicator Toast */}
@@ -165,6 +222,16 @@ export default function App() {
           <div className="fixed top-20 right-8 z-50 bg-slate-900 border border-slate-800 text-white text-xs px-4 py-2.5 rounded-xl shadow-xl flex items-center gap-2 animate-fadeIn font-sans">
             <Check className="w-4 h-4 text-teal-400 shrink-0" />
             <span>Ad spends and Shopify purchase logs re-synced successfully.</span>
+          </div>
+        )}
+        {refreshError && (
+          <div role="alert" className="fixed top-20 right-8 z-50 bg-amber-50 border border-amber-200 text-amber-900 text-xs px-4 py-2.5 rounded-xl shadow-xl flex items-center gap-2">
+            A atualização manual ao vivo ainda não está conectada. Nenhum dado foi alterado.
+          </div>
+        )}
+        {onboardingUnavailable && (
+          <div role="alert" className="fixed top-20 right-8 z-50 bg-amber-50 border border-amber-200 text-amber-900 text-xs px-4 py-2.5 rounded-xl shadow-xl">
+            O assistente de onboarding ao vivo ainda não está conectado. Nenhuma integração foi simulada.
           </div>
         )}
 
@@ -198,13 +265,20 @@ export default function App() {
               />
             )}
 
-            {currentView === 'funnel-builder' && (
+            {currentView === 'funnel-builder' && funnels.length > 0 && (
               <FunnelBuilderView 
                 funnels={funnels}
                 selectedFunnelId={selectedFunnelId}
                 onSaveFunnel={handleSaveFunnel}
                 setView={setView}
               />
+            )}
+
+            {currentView === 'funnel-builder' && funnels.length === 0 && (
+              <section className="rounded-xl border border-slate-200 bg-white p-10 text-center">
+                <h2 className="text-base font-semibold text-slate-900">Nenhum funil disponível</h2>
+                <p className="mt-1 text-sm text-slate-500">Carregue ou crie um funil antes de abrir o construtor.</p>
+              </section>
             )}
 
             {currentView === 'attribution' && (
@@ -226,9 +300,11 @@ export default function App() {
 
             {currentView === 'settings' && (
               <SettingsView
-                profile={profile}
+                profile={visibleProfile}
                 setProfile={setProfile}
-                workspace={workspace}
+                workspace={session.isLive
+                  ? { ...workspace, name: visibleWorkspace.name, slug: visibleWorkspace.id }
+                  : workspace}
                 setWorkspace={setWorkspace}
               />
             )}

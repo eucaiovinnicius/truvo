@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useLive } from '@/lib/live';
+import { LiveDataBoundary } from '@/lib/live-ui';
 import { useSession } from '@/lib/session';
 import { api } from '@/lib/api';
 
@@ -54,7 +55,7 @@ interface DashboardApiItem {
 // ---------------------------------------------------------------------------
 type ReportType = 'Performance' | 'Attribution' | 'Criativos' | 'Executivo';
 type Frequency = 'Diário' | 'Semanal' | 'Mensal';
-type ReportFormat = 'PDF' | 'CSV' | 'Slack';
+type ReportFormat = 'PDF' | 'CSV' | 'Slack' | '—';
 type ReportStatus = 'ativo' | 'pausado';
 type StatusFilter = 'todos' | 'ativo' | 'pausado';
 
@@ -106,6 +107,7 @@ const FORMAT_META: Record<ReportFormat, { icon: LucideIcon; badge: string }> = {
   PDF: { icon: FileText, badge: 'bg-rose-100 text-rose-700 border-rose-200' },
   CSV: { icon: FileSpreadsheet, badge: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
   Slack: { icon: MessageSquare, badge: 'bg-violet-100 text-violet-700 border-violet-200' },
+  '—': { icon: FileText, badge: 'bg-slate-100 text-slate-600 border-slate-200' },
 };
 
 const AVATAR_TINTS: string[] = [
@@ -267,8 +269,7 @@ const nextSendFromFrequency: Record<Frequency, string> = {
 
 // ---------------------------------------------------------------------------
 // Live wiring (GET /v1/reports) — fallback demo.
-// Em modo demo useLive retorna null → a tela usa INITIAL_REPORTS (mock) intacto.
-// Só em 'live' o adapt() abaixo mapeia o JSON real para ScheduledReport.
+// INITIAL_REPORTS é selecionado apenas no estado demo; live mapeia o JSON real.
 // Contrato (ARRAY BARE): o flag é "enabled" (booleano, NÃO "status"); datas são
 // "next_run_at"/"last_run_at"; "format" NÃO vem no item da lista → default 'PDF'.
 // ---------------------------------------------------------------------------
@@ -339,7 +340,7 @@ function adaptReports(items: ReportApiItem[]): ScheduledReport[] {
       name: r?.name ?? 'Relatório sem título',
       type: mapReportType(r?.template),
       frequency: mapFrequency(r?.frequency),
-      format: 'PDF', // TODO(live): "format" não vem no item da lista de /v1/reports.
+      format: '—',
       recipients: mapRecipients(r?.recipients),
       lastSent: fmtDateTime(r?.last_run_at),
       nextSend: enabled ? fmtDateTime(r?.next_run_at) : 'Pausado',
@@ -386,21 +387,23 @@ function RecipientAvatars({ recipients }: { recipients: Recipient[] }) {
 // Componente principal
 // ---------------------------------------------------------------------------
 export default function ReportsView() {
-  const [reports, setReports] = useState<ScheduledReport[]>(INITIAL_REPORTS);
+  const { isLive } = useSession();
+  const [reports, setReports] = useState<ScheduledReport[]>([]);
   const [filter, setFilter] = useState<StatusFilter>('todos');
   const [toast, setToast] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
 
-  // Live (API real) — em modo demo useLive retorna null → mantém INITIAL_REPORTS.
+  // Live substitui o estado local mesmo quando a resposta é uma lista vazia.
   // Quando 'live', a resposta (array bare) substitui o mock via adapt(). As ações
   // locais (enviar/pausar/editar) continuam operando sobre esse estado.
   const reportsLive = useLive<ReportApiItem[]>('/v1/reports');
   useEffect(() => {
-    if (reportsLive.data) setReports(adaptReports(reportsLive.data));
-  }, [reportsLive.data]);
+    if (reportsLive.status === 'demo') setReports(INITIAL_REPORTS);
+    else if (reportsLive.status === 'success') setReports(adaptReports(reportsLive.data ?? []));
+    else setReports([]);
+  }, [reportsLive.status, reportsLive.data]);
 
   // Escrita: criar exige um dashboard_id (M13) → usamos o 1º dashboard do workspace.
-  const { isLive } = useSession();
   const dashboardsLive = useLive<DashboardApiItem[]>('/v1/dashboards');
   const defaultDashboardId = Array.isArray(dashboardsLive.data)
     ? dashboardsLive.data[0]?.id ?? null
@@ -417,52 +420,67 @@ export default function ReportsView() {
 
   // Enviar agora — demo: só local; live: POST /v1/reports/:id/send { format:'web' }.
   const handleSendNow = (report: ScheduledReport): void => {
-    setReports((prev) =>
-      prev.map((r) => (r.id === report.id ? { ...r, lastSent: 'Agora mesmo' } : r)),
-    );
-    notify(`Relatório "${report.name}" enviado agora.`, report.id);
-    if (isLive) {
-      void api(`/v1/reports/${report.id}/send`, {
-        method: 'POST',
-        body: JSON.stringify({ format: 'web' }),
-      }).catch(() =>
+    const markSent = () => {
+      setReports((prev) =>
+        prev.map((r) => (r.id === report.id ? { ...r, lastSent: 'Agora mesmo' } : r)),
+      );
+      notify(`Relatório "${report.name}" enviado agora.`, report.id);
+    };
+    if (!isLive) {
+      markSent();
+      return;
+    }
+    void api(`/v1/reports/${report.id}/send`, {
+      method: 'POST',
+      body: JSON.stringify({ format: 'web' }),
+    })
+      .then(markSent)
+      .catch(() =>
         notify(`Falha ao enviar "${report.name}". Verifique a configuração de envio.`, report.id),
       );
-    }
   };
 
   const handleEdit = (report: ScheduledReport): void => {
-    // TODO(live): abrir editor + PATCH /v1/reports/:id (form de edição ainda não existe).
-    notify(`Editando "${report.name}"…`, report.id);
+    notify(
+      isLive
+        ? 'A edição ao vivo ainda não está disponível. Nenhuma alteração foi feita.'
+        : `Editando "${report.name}"…`,
+      report.id,
+    );
   };
 
   // Pausar/ativar — demo: só local; live: PATCH /v1/reports/:id { enabled }.
   const handleToggle = (report: ScheduledReport): void => {
     const nextStatus: ReportStatus = report.status === 'ativo' ? 'pausado' : 'ativo';
-    setReports((prev) =>
-      prev.map((r) =>
-        r.id !== report.id
-          ? r
-          : {
-              ...r,
-              status: nextStatus,
-              nextSend:
-                nextStatus === 'pausado' ? 'Pausado' : nextSendFromFrequency[r.frequency],
-            },
-      ),
-    );
-    notify(
-      report.status === 'ativo'
-        ? `Relatório "${report.name}" pausado.`
-        : `Relatório "${report.name}" reativado.`,
-      report.id,
-    );
-    if (isLive) {
-      void api(`/v1/reports/${report.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ enabled: nextStatus === 'ativo' }),
-      }).catch(() => notify('Não foi possível atualizar o relatório na API.', report.id));
+    const applyToggle = () => {
+      setReports((prev) =>
+        prev.map((r) =>
+          r.id !== report.id
+            ? r
+            : {
+                ...r,
+                status: nextStatus,
+                nextSend: nextStatus === 'pausado' ? 'Pausado' : nextSendFromFrequency[r.frequency],
+              },
+        ),
+      );
+      notify(
+        report.status === 'ativo'
+          ? `Relatório "${report.name}" pausado.`
+          : `Relatório "${report.name}" reativado.`,
+        report.id,
+      );
+    };
+    if (!isLive) {
+      applyToggle();
+      return;
     }
+    void api(`/v1/reports/${report.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled: nextStatus === 'ativo' }),
+    })
+      .then(applyToggle)
+      .catch(() => notify('Não foi possível atualizar o relatório na API.', report.id));
   };
 
   // Criar a partir de um modelo — demo: local; live: POST /v1/reports.
@@ -566,6 +584,7 @@ export default function ReportsView() {
   ];
 
   return (
+    <LiveDataBoundary states={[reportsLive, dashboardsLive]} empty={reports.length === 0} label="Relatórios">
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -896,5 +915,6 @@ export default function ReportsView() {
         </div>
       )}
     </div>
+    </LiveDataBoundary>
   );
 }

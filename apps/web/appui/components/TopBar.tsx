@@ -12,6 +12,7 @@ import {
   Info
 } from 'lucide-react';
 import { ViewState } from '../types';
+import type { SessionMode } from '@/lib/session';
 
 interface TopBarProps {
   currentView: ViewState;
@@ -19,6 +20,7 @@ interface TopBarProps {
   setDateRange: (range: string) => void;
   onRefreshAll: () => void;
   isRefreshing: boolean;
+  mode: SessionMode;
 }
 
 export default function TopBar({ 
@@ -26,7 +28,8 @@ export default function TopBar({
   dateRange, 
   setDateRange,
   onRefreshAll,
-  isRefreshing 
+  isRefreshing,
+  mode,
 }: TopBarProps) {
   const [showNotificationDropdown, setShowNotificationDropdown] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -49,7 +52,7 @@ export default function TopBar({
     settings: 'Workspace Settings'
   };
 
-  const notifications = [
+  const notifications = mode === 'demo' ? [
     {
       id: 'n-1',
       type: 'error',
@@ -71,7 +74,7 @@ export default function TopBar({
       message: 'Server-side purchase webhook streaming live transactions.',
       time: 'Just now'
     }
-  ];
+  ] : [];
 
   const dateRanges = ['Today', 'Yesterday', 'Last 7 Days', 'Last 30 Days', 'This Month', 'Custom Range'];
 
@@ -84,9 +87,9 @@ export default function TopBar({
             {viewTitles[currentView]}
           </h1>
           <div className="flex items-center gap-1.5 mt-0.5">
-            <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full sync-pulse" />
+            <span className={`w-1.5 h-1.5 rounded-full ${mode === 'live' ? 'bg-emerald-500' : 'bg-indigo-500'}`} />
             <span className="text-[10px] font-medium text-slate-500 font-mono uppercase tracking-wider">
-              All Pipelines Synced (Live UTC)
+              {mode === 'live' ? 'Modo ao vivo' : 'Modo demonstração — dados sintéticos'}
             </span>
           </div>
         </div>
@@ -140,7 +143,7 @@ export default function TopBar({
         {/* Info/Support pill */}
         <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-100 rounded-lg px-2.5 py-1 text-[11px] font-semibold text-slate-600">
           <Info className="w-3.5 h-3.5 text-slate-400" />
-          <span className="font-mono">IP: Server-Direct</span>
+          <span className="font-mono">{mode === 'live' ? 'Workspace real' : 'Cenário sintético'}</span>
         </div>
 
         {/* Notifications center */}
@@ -151,14 +154,14 @@ export default function TopBar({
             className="relative p-2 rounded-lg border border-slate-100 bg-white hover:bg-slate-50 text-slate-500 hover:text-slate-800 transition-all"
           >
             <Bell className="w-4 h-4" />
-            <span className="absolute top-1 right-1 w-2 h-2 bg-rose-500 rounded-full border border-white" />
+            {notifications.length > 0 && <span className="absolute top-1 right-1 w-2 h-2 bg-rose-500 rounded-full border border-white" />}
           </button>
 
           {showNotificationDropdown && (
             <div className="absolute top-full right-0 mt-1.5 w-80 bg-white border border-slate-100 rounded-lg shadow-xl z-50 overflow-hidden">
               <div className="p-3 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
                 <span className="text-xs font-bold text-slate-800">System Notifications</span>
-                <span className="text-[10px] font-mono text-rose-500 font-semibold uppercase">3 Alerts</span>
+                <span className="text-[10px] font-mono text-slate-500 font-semibold uppercase">{notifications.length} alertas</span>
               </div>
               <div className="divide-y divide-slate-50 max-h-80 overflow-y-auto">
                 {notifications.map((notif) => (
@@ -175,6 +178,9 @@ export default function TopBar({
                     </div>
                   </div>
                 ))}
+                {notifications.length === 0 && (
+                  <div className="p-5 text-center text-xs text-slate-500">Nenhuma notificação ao vivo disponível.</div>
+                )}
               </div>
             </div>
           )}

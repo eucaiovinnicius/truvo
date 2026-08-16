@@ -20,6 +20,8 @@ import {
   Gauge,
 } from 'lucide-react';
 import { useLive } from '@/lib/live';
+import { LiveDataBoundary } from '@/lib/live-ui';
+import { selectLiveData } from '@/lib/live-state';
 import { useSession } from '@/lib/session';
 import { api } from '@/lib/api';
 
@@ -312,23 +314,28 @@ export default function BillingView() {
   const subLive = useLive<SubscriptionResponse>('/v1/billing/subscription', []);
 
   // Grade de planos: real quando 'live', senão o mock existente (fallback demo).
-  const plans: Plan[] = plansLive.data ? adaptPlans(plansLive.data) : PLANS;
+  const plans: Plan[] = selectLiveData(plansLive, PLANS, [], adaptPlans);
   const planOrder: PlanId[] = plans.map((p) => p.id);
+  const isDemo = plansLive.status === 'demo';
 
   // Plano atual vem da assinatura (fallback ao mock CURRENT_PLAN).
-  const sub = subLive.data;
-  const currentPlanId: PlanId = sub?.plan && isPlanId(sub.plan) ? sub.plan : CURRENT_PLAN;
+  const sub = subLive.status === 'success' ? subLive.data : null;
+  const currentPlanId: PlanId = sub?.plan && isPlanId(sub.plan)
+    ? sub.plan
+    : isDemo
+      ? CURRENT_PLAN
+      : plans[0]?.id ?? 'free';
 
   // Medidor de uso — usage.* é camelCase. Fallback aos números mock.
-  const usageUsed = sub?.usage?.eventsUsed ?? USAGE_USED;
-  const usageLimit = sub?.usage?.eventsIncluded ?? USAGE_LIMIT;
+  const usageUsed = sub?.usage?.eventsUsed ?? (isDemo ? USAGE_USED : 0);
+  const usageLimit = sub?.usage?.eventsIncluded ?? (isDemo ? USAGE_LIMIT : 0);
   const usagePct = sub?.usage?.usagePct ?? (usageLimit > 0 ? (usageUsed / usageLimit) * 100 : 0);
   const usageRemaining = Math.max(0, usageLimit - usageUsed);
 
   // Renovação (current_period_end) com fallback ao mock.
   const renewal = fmtRenewal(sub?.current_period_end);
-  const renewalDate = renewal?.date ?? RENEWAL_DATE;
-  const renewalDays = renewal?.days ?? RENEWAL_DAYS;
+  const renewalDate = renewal?.date ?? (isDemo ? RENEWAL_DATE : '—');
+  const renewalDays = renewal?.days ?? (isDemo ? RENEWAL_DAYS : 0);
 
   const tone: 'good' | 'warn' | 'danger' =
     usagePct >= 90 ? 'danger' : usagePct >= 70 ? 'warn' : 'good';
@@ -342,13 +349,15 @@ export default function BillingView() {
 
   const currentPlan = plans.find((p) => p.id === currentPlanId) ?? plans[0] ?? PLANS[0];
   const CurrentPlanIcon = currentPlan.icon;
-  const nextPaidInvoice = INVOICES.find((i) => i.status === 'pago');
-  const pendingTotal = INVOICES.filter((i) => i.status === 'pendente').reduce(
+  const invoices = isDemo ? INVOICES : [];
+  const nextPaidInvoice = invoices.find((i) => i.status === 'pago');
+  const pendingTotal = invoices.filter((i) => i.status === 'pendente').reduce(
     (acc, i) => acc + i.amount,
     0,
   );
 
   return (
+    <LiveDataBoundary states={[plansLive, subLive]} empty={plans.length === 0} label="Cobrança">
     <div id="billing-view-container" className="space-y-6">
       {/* Cabeçalho */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -768,7 +777,7 @@ export default function BillingView() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {INVOICES.map((inv) => (
+              {invoices.map((inv) => (
                 <tr
                   key={inv.id}
                   className="hover:bg-slate-50/50 transition-colors text-xs font-sans text-slate-700"
@@ -811,5 +820,6 @@ export default function BillingView() {
         </div>
       </div>
     </div>
+    </LiveDataBoundary>
   );
 }

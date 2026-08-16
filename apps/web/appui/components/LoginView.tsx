@@ -22,7 +22,7 @@ import { useSession } from '@/lib/session';
 import Logo from './Logo';
 
 interface LoginViewProps {
-  onLoginSuccess: (profile: ProfileConfig) => void;
+  onLoginSuccess: (profile: ProfileConfig, mode: 'live' | 'demo') => void;
 }
 
 export default function LoginView({ onLoginSuccess }: LoginViewProps) {
@@ -42,10 +42,10 @@ export default function LoginView({ onLoginSuccess }: LoginViewProps) {
   const [oauthProvider, setOauthProvider] = useState<string | null>(null);
 
   // Entra no app após sucesso (real ou demo), mantendo o flash de sucesso.
-  const enter = (name: string) => {
+  const enter = (name: string, mode: 'live' | 'demo') => {
     setSuccess(true);
     setTimeout(() => {
-      onLoginSuccess({ fullName: name, email: email || 'demo@truvo.ai', avatarUrl: '' });
+      onLoginSuccess({ fullName: name, email: email || 'demo@truvo.ai', avatarUrl: '' }, mode);
     }, 600);
   };
 
@@ -72,57 +72,28 @@ export default function LoginView({ onLoginSuccess }: LoginViewProps) {
     const displayName = isRegister ? fullName : email.split('@')[0].toUpperCase() || 'Usuário';
 
     if (result.ok) {
-      enter(displayName);
+      enter(displayName, 'live');
     } else if (result.reason === 'invalid') {
       setError('Credenciais inválidas. Verifique e tente novamente.');
     } else if (result.reason === 'confirm') {
       setError('Conta criada! Confirme seu e-mail e faça login para entrar.');
     } else {
-      // API indisponível → abre em modo demonstração (dados de exemplo).
-      session.demo();
-      enter(displayName || 'Demonstração');
+      // Falha live permanece observável; demo exige ação explícita separada.
+      setError('O serviço de autenticação está indisponível. Tente novamente mais tarde ou entre explicitamente na demonstração.');
     }
   };
 
   const handleOAuthLogin = (provider: 'google' | 'github' | 'shopify') => {
-    setError(null);
     setOauthProvider(provider);
-    setIsLoading(true);
-
-    // OAuth social ainda não conectado ao backend → entra em modo demonstração.
-    setTimeout(() => {
-      setIsLoading(false);
-      setSuccess(true);
-      setOauthProvider(null);
-
-      const names = {
-        google: 'Guilherme Silva (Google)',
-        github: 'GuiRodrigues (GitHub)',
-        shopify: 'Truvo Admin (Shopify)'
-      };
-
-      const emails = {
-        google: 'guilherme.silva@gmail.com',
-        github: 'guirodrigues@github.com',
-        shopify: 'loja-shopify@truvo.ai'
-      };
-
-      session.demo();
-      setTimeout(() => {
-        onLoginSuccess({
-          fullName: names[provider],
-          email: emails[provider],
-          avatarUrl: ''
-        });
-      }, 900);
-    }, 1200);
+    setError('Login social ainda não está disponível. Use suas credenciais ou entre na demonstração.');
+    setOauthProvider(null);
   };
 
   // Helper to fill pre-defined demo login credentials
-  const fillDemoCredentials = () => {
-    setEmail('demonstracao@truvo.ai');
-    setPassword('senha123');
-    setFullName('Demonstração Truvo');
+  const enterDemo = () => {
+    setError(null);
+    session.demo();
+    enter('Demonstração Truvo', 'demo');
   };
 
   return (
@@ -190,10 +161,10 @@ export default function LoginView({ onLoginSuccess }: LoginViewProps) {
                 {isRegister ? 'Crie sua conta Truvo' : 'Acesse seu painel'}
               </h1>
               <button 
-                onClick={fillDemoCredentials}
+                onClick={enterDemo}
                 className="text-[11px] font-semibold text-teal-400 hover:text-teal-300 transition-colors bg-teal-500/10 px-2 py-1 rounded-lg border border-teal-500/20"
               >
-                Preencher Demo
+                Entrar na demonstração
               </button>
             </div>
             <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">

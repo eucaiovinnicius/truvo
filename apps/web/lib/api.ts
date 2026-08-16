@@ -1,5 +1,16 @@
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3333';
 
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly path: string,
+    statusText: string,
+  ) {
+    super(`API ${status} ${statusText} em ${path}`);
+    this.name = 'ApiError';
+  }
+}
+
 /** Headers de auth (JWT do Supabase + workspace atual) a partir do localStorage. */
 function authHeaders(): Record<string, string> {
   if (typeof window === 'undefined') return {};
@@ -22,7 +33,7 @@ export async function api<T = unknown>(path: string, init?: RequestInit): Promis
     },
   });
   if (!res.ok) {
-    throw new Error(`API ${res.status} ${res.statusText} em ${path}`);
+    throw new ApiError(res.status, path, res.statusText);
   }
   const contentType = res.headers.get('content-type') ?? '';
   return (contentType.includes('application/json') ? res.json() : res.text()) as Promise<T>;

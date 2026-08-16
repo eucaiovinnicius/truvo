@@ -31,6 +31,8 @@ import {
   Tooltip,
 } from 'recharts';
 import { useLive } from '@/lib/live';
+import { LiveDataBoundary } from '@/lib/live-ui';
+import { selectLiveData } from '@/lib/live-state';
 import { useSession } from '@/lib/session';
 import { api } from '@/lib/api';
 
@@ -427,19 +429,29 @@ export default function AiView(): React.ReactElement {
   const mockCfg = OBJECTIVES.find((o) => o.id === active) ?? OBJECTIVES[0];
   // Real quando 'live'; senão o mock existente. A narrativa (headline/ações do
   // card escuro) fica no mock — o contrato não devolve texto gerado. // TODO(live)
-  const cfg: ObjectiveConfig = live.data
-    ? {
+  const emptyCfg: ObjectiveConfig = { ...mockCfg, recon: 0, journeys: [] };
+  const cfg: ObjectiveConfig = selectLiveData(
+    live,
+    mockCfg,
+    emptyCfg,
+    (data) => ({
         id: mockCfg.id,
         label: mockCfg.label,
         short: mockCfg.short,
         metric: mockCfg.metric,
-        recon: reconPct(live.data.reconciliation),
-        journeys: adaptChannels(live.data),
-      }
-    : mockCfg;
+        recon: reconPct(data.reconciliation),
+        journeys: adaptChannels(data),
+      }),
+  );
 
-  const insight = AI_INSIGHT[cfg.id];
-  const topJourney = live.data ? adaptTopJourney(live.data) : cfg.journeys[0];
+  const topJourney = live.status === 'success' && live.data ? adaptTopJourney(live.data) : cfg.journeys[0];
+  const insight: AiInsight = live.status === 'demo'
+    ? AI_INSIGHT[cfg.id]
+    : {
+        headline: topJourney ? 'Jornada de melhor desempenho nos dados observados' : 'Sem jornadas observadas',
+        narrative: 'Resumo calculado exclusivamente com os dados reconciliados deste workspace.',
+        actions: [],
+      };
   const confident = cfg.recon >= 90;
 
   const channelCount = useMemo(() => {
@@ -509,6 +521,7 @@ export default function AiView(): React.ReactElement {
   const headCls = (k: MetricKey): string => (cfg.metric === k ? 'text-teal-600' : '');
 
   return (
+    <LiveDataBoundary states={[live]} empty={cfg.journeys.length === 0} label="Jornadas de IA">
     <div className="space-y-6">
       {/* Toolbar */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -941,5 +954,6 @@ export default function AiView(): React.ReactElement {
         </div>
       </div>
     </div>
+    </LiveDataBoundary>
   );
 }

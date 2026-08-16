@@ -33,6 +33,9 @@ import {
 } from 'recharts';
 import { CampaignRow } from '../types';
 import { useLive } from '@/lib/live';
+import { LiveDataBoundary } from '@/lib/live-ui';
+import { selectLiveData } from '@/lib/live-state';
+import { useSession } from '@/lib/session';
 
 interface AttributionViewProps {
   campaigns: CampaignRow[];
@@ -45,6 +48,7 @@ export default function AttributionView({
   setCampaigns, 
   dateRange 
 }: AttributionViewProps) {
+  const { isLive } = useSession();
   const [selectedModel, setSelectedModel] = useState<'first' | 'last' | 'linear' | 'position' | 'truvo_ai'>('truvo_ai');
   const [lookbackWindow, setLookbackWindow] = useState<1 | 7 | 30 | 90>(30);
   const [expandedCampaigns, setExpandedCampaigns] = useState<Record<string, boolean>>({
@@ -125,9 +129,12 @@ export default function AttributionView({
   }
 
   // Real quando 'live'; senão o mock existente (fallback demo).
-  const channelData: FunnelChannelPerformance[] = attributionLive.data
-    ? adaptChannels(attributionLive.data)
-    : getChannelData(selectedModel);
+  const channelData: FunnelChannelPerformance[] = selectLiveData(
+    attributionLive,
+    getChannelData(selectedModel),
+    [],
+    adaptChannels,
+  );
 
   interface FunnelChannelPerformance {
     channel: string;
@@ -487,6 +494,7 @@ export default function AttributionView({
   ];
 
   return (
+    <LiveDataBoundary states={[attributionLive]} empty={channelData.length === 0} label="Atribuição">
     <div id="attribution-view-container" className="space-y-6">
       {/* Overview Block */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -676,11 +684,12 @@ export default function AttributionView({
                     <tr 
                       key={ch.channel} 
                       onClick={() => {
+                        if (isLive) return;
                         setSelectedChannel(ch.channel);
                         setExpandedCampaign(null);
                         setExpandedAdSet(null);
                       }}
-                      className="hover:bg-slate-50/70 transition-colors cursor-pointer group text-slate-700"
+                      className={`hover:bg-slate-50/70 transition-colors group text-slate-700 ${isLive ? '' : 'cursor-pointer'}`}
                     >
                       {/* Channel Column */}
                       <td className="py-3.5 font-bold text-slate-800 flex items-center gap-2.5 pl-2">
@@ -705,7 +714,7 @@ export default function AttributionView({
                             <ArrowUpRight className="w-3 h-3 text-slate-400 opacity-0 group-hover:opacity-100 transition-all transform translate-x-[-4px] group-hover:translate-x-0" />
                           </div>
                           <span className="text-[9px] text-slate-400 font-mono font-medium uppercase block mt-0.5">
-                            {hasSpend ? 'PAID CHANNEL' : 'ORGANIC SOURCE'}
+                            {isLive ? 'CANAL ATRIBUÍDO' : hasSpend ? 'PAID CHANNEL' : 'ORGANIC SOURCE'}
                           </span>
                         </div>
                       </td>
@@ -717,7 +726,7 @@ export default function AttributionView({
 
                       {/* Visitantes */}
                       <td className="py-3.5 text-right font-mono text-slate-600">
-                        {ch.visitors.toLocaleString()}
+                        {isLive ? '—' : ch.visitors.toLocaleString()}
                       </td>
 
                       {/* Conversões */}
@@ -727,12 +736,12 @@ export default function AttributionView({
 
                       {/* Taxa de Conversão */}
                       <td className="py-3.5 text-right font-mono text-slate-600">
-                        {ch.convRate}%
+                        {isLive ? '—' : `${ch.convRate}%`}
                       </td>
 
                       {/* CPA / CAC */}
                       <td className="py-3.5 text-right font-mono text-slate-700">
-                        {hasSpend ? `$${ch.cpa.toFixed(2)}` : <span className="text-emerald-600 font-semibold text-[11px]">Orgânico</span>}
+                        {isLive ? '—' : hasSpend ? `$${ch.cpa.toFixed(2)}` : <span className="text-emerald-600 font-semibold text-[11px]">Orgânico</span>}
                       </td>
 
                       {/* ROAS Declarado */}
@@ -1509,5 +1518,6 @@ export default function AttributionView({
         );
       })()}
     </div>
+    </LiveDataBoundary>
   );
 }

@@ -1,49 +1,71 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { api } from './api';
+import { api, ApiError } from './api';
+import {
+  classifyLiveFailure,
+  reconcileLiveContext,
+  stateForContext,
+  type LiveState,
+} from './live-state';
 import { useSession } from './session';
 
-export interface LiveState<T> {
-  data: T | null;
-  loading: boolean;
-  error: string | null;
-}
+export type { LiveFailure, LiveState, LiveStatus } from './live-state';
 
 /**
- * Busca `path` na API **apenas quando a sessão é 'live'**. Em modo demo (ou
- * `path === null`) não busca — o componente deve usar seus dados mock como
- * fallback (`live.data ?? MOCK`). Refaz a busca quando `deps` mudam.
- *
- * Enquanto a infra não sobe, a sessão fica em 'demo' e nada é buscado, então
- * as telas continuam com o visual/dados de exemplo intactos.
+ * Busca `path` apenas em sessão live. O estado retornado distingue demo,
+ * carregamento, sucesso e falha; dados de uma requisição anterior nunca são
+ * mantidos quando path, modo ou workspace mudam.
  */
 export function useLive<T = unknown>(path: string | null, deps: unknown[] = []): LiveState<T> {
-  const { isLive } = useSession();
-  const active = isLive && !!path;
-  const [state, setState] = useState<LiveState<T>>({ data: null, loading: active, error: null });
+  const { mode, workspace } = useSession();
+  const workspaceId = workspace?.id;
+  const active = mode === 'live' && !!path;
+  const [state, setState] = useState<LiveState<T>>(() => stateForContext(mode, workspaceId, path));
 
   useEffect(() => {
     if (!active || !path) {
-      setState({ data: null, loading: false, error: null });
+      setState(stateForContext(mode, workspaceId, path));
       return;
     }
     let alive = true;
-    setState((s) => ({ ...s, loading: true, error: null }));
+    const loadingState = stateForContext<T>(mode, workspaceId, path);
+    setState(loadingState);
     api<T>(path)
       .then((data) => {
-        if (alive) setState({ data, loading: false, error: null });
+        if (alive) {
+          setState({
+            data,
+            loading: false,
+            error: null,
+            status: 'success',
+            requestKey: loadingState.requestKey,
+          });
+        }
       })
       .catch((e: unknown) => {
         if (alive) {
-          setState({ data: null, loading: false, error: e instanceof Error ? e.message : 'erro' });
+          const error = classifyLiveFailure(e, path);
+          console.error('[live-data] request failed', {
+            path: error.path,
+            status: e instanceof ApiError ? e.status : undefined,
+            kind: error.kind,
+          });
+          setState({
+            data: null,
+            loading: false,
+            error,
+            status: 'error',
+            requestKey: loadingState.requestKey,
+          });
         }
       });
     return () => {
       alive = false;
     };
+    // deps intentionally let callers invalidate a stable path.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, path, ...deps]);
+  }, [active, mode, path, workspaceId, ...deps]);
 
-  return state;
+  return reconcileLiveContext(state, mode, workspaceId, path);
 }

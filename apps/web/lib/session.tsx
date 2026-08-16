@@ -52,6 +52,7 @@ interface SessionState {
   login: (email: string, password: string) => Promise<AuthResult>;
   signup: (email: string, password: string, name?: string) => Promise<AuthResult>;
   demo: () => void;
+  selectWorkspace: (workspaceId: string) => void;
   logout: () => void;
 }
 
@@ -105,6 +106,35 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setReady(true);
   }, []);
 
+  // Reidrata a lista real para que o seletor nunca invente workspaces locais.
+  useEffect(() => {
+    if (!ready || mode !== 'live' || workspaces.length > 0) return;
+    let alive = true;
+    const savedWorkspaceId = localStorage.getItem(WS_KEY);
+    void api<MeResponse>('/v1/users/me')
+      .then((me) => {
+        if (!alive) return;
+        const list = me.workspaces ?? [];
+        setWorkspaces(list);
+        const selected = list.find((candidate) => candidate.id === savedWorkspaceId) ?? list[0] ?? null;
+        if (selected) {
+          localStorage.setItem(WS_KEY, selected.id);
+          setWorkspace(selected);
+        }
+        const resolvedUser = { id: me.id, email: me.email, name: me.name, avatar_url: me.avatar_url };
+        setUser(resolvedUser);
+        localStorage.setItem(USER_KEY, JSON.stringify(resolvedUser));
+      })
+      .catch((error: unknown) => {
+        console.error('[session] failed to refresh live workspace context', {
+          message: error instanceof Error ? error.message : 'unknown error',
+        });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [mode, ready, workspaces.length]);
+
   /** Guarda token, resolve workspace via /v1/users/me e marca sessão como live. */
   const finishLive = useCallback(async (accessToken: string, fallbackUser: SessionUser) => {
     localStorage.setItem(TOKEN_KEY, accessToken);
@@ -119,8 +149,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         localStorage.setItem(WS_KEY, ws.id);
         setWorkspace(ws);
       }
-    } catch {
-      /* sem /me (ex.: sem workspace ainda) — segue só com o token */
+    } catch (error: unknown) {
+      console.error('[session] login succeeded but workspace context could not be loaded', {
+        message: error instanceof Error ? error.message : 'unknown error',
+      });
     }
     setUser(resolvedUser);
     localStorage.setItem(USER_KEY, JSON.stringify(resolvedUser));
@@ -171,9 +203,23 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const demo = useCallback(() => {
     setMode('demo');
     setUser({ id: 'demo', email: 'demo@truvo.ai', name: 'Demonstração' });
+    setWorkspace(null);
+    setWorkspaces([]);
     localStorage.setItem(MODE_KEY, 'demo');
     localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(WS_KEY);
+    localStorage.removeItem(USER_KEY);
   }, []);
+
+  const selectWorkspace = useCallback(
+    (workspaceId: string) => {
+      const next = workspaces.find((candidate) => candidate.id === workspaceId);
+      if (!next || mode !== 'live') return;
+      localStorage.setItem(WS_KEY, next.id);
+      setWorkspace(next);
+    },
+    [mode, workspaces],
+  );
 
   const logout = useCallback(() => {
     [TOKEN_KEY, WS_KEY, MODE_KEY, USER_KEY].forEach((k) => localStorage.removeItem(k));
@@ -193,6 +239,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     login,
     signup,
     demo,
+    selectWorkspace,
     logout,
   };
 

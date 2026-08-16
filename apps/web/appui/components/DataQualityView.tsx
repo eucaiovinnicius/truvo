@@ -28,6 +28,8 @@ import {
   Legend,
 } from 'recharts';
 import { useLive } from '@/lib/live';
+import { LiveDataBoundary } from '@/lib/live-ui';
+import { selectLiveData } from '@/lib/live-state';
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -55,7 +57,7 @@ interface BotReason {
   category: 'user-agent' | 'datacenter-ip' | 'rate';
   count: number;
   /** Tendência vs período anterior (%). Positivo = mais eventos filtrados. */
-  trend: number;
+  trend: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -229,8 +231,7 @@ function adaptBotReasons(api: BotReportApi): BotReason[] {
     rule: u?.user_agent ?? '(desconhecido)',
     category: 'user-agent' as const,
     count: u?.events ?? 0,
-    // TODO(live): o contrato não expõe tendência por regra → 0 (sem histórico).
-    trend: 0,
+    trend: null,
   }));
 }
 
@@ -294,8 +295,8 @@ export default function DataQualityView(): React.ReactElement {
 
   // Reconciliação: real quando 'live', senão o mock existente (RAW_RECON classificado).
   const rows: ReconRow[] = useMemo(
-    () => (reconLive.data ? adaptReconRows(reconLive.data) : RAW_RECON.map(classify)),
-    [reconLive.data],
+    () => selectLiveData(reconLive, RAW_RECON.map(classify), [], adaptReconRows),
+    [reconLive],
   );
 
   // Agregados a partir de rows — fallback demo dos KPIs.
@@ -322,7 +323,7 @@ export default function DataQualityView(): React.ReactElement {
   }, [rows]);
 
   // KPIs: summary real quando 'live' (period_gap é razão → ×100); senão o mock.
-  const summary = reconLive.data?.summary;
+  const summary = reconLive.status === 'success' ? reconLive.data?.summary : undefined;
   const totalTruvo = summary?.period_truvo_revenue ?? aggFromRows.totalTruvo;
   const totalGateway = summary?.period_gateway_revenue ?? aggFromRows.totalGateway;
   const globalGapPct = summary ? (summary.period_gap ?? 0) * 100 : aggFromRows.globalGapPct;
@@ -346,11 +347,12 @@ export default function DataQualityView(): React.ReactElement {
 
   // Bots: totals reais quando 'live'; senão o mock. by_reason NÃO existe no
   // contrato → a tabela de "motivos" usa top_bot_user_agents (adaptBotReasons).
-  const botTotals = botLive.data?.totals;
-  const TOTAL_EVENTS = botTotals?.events ?? MOCK_TOTAL_EVENTS;
-  const BOT_EVENTS = botTotals?.bots ?? MOCK_BOT_EVENTS;
-  const HUMAN_EVENTS = botTotals?.humans ?? MOCK_HUMAN_EVENTS;
-  const BOT_REASONS: BotReason[] = botLive.data ? adaptBotReasons(botLive.data) : MOCK_BOT_REASONS;
+  const botTotals = botLive.status === 'success' ? botLive.data?.totals : undefined;
+  const isDemo = botLive.status === 'demo';
+  const TOTAL_EVENTS = botTotals?.events ?? (isDemo ? MOCK_TOTAL_EVENTS : 0);
+  const BOT_EVENTS = botTotals?.bots ?? (isDemo ? MOCK_BOT_EVENTS : 0);
+  const HUMAN_EVENTS = botTotals?.humans ?? (isDemo ? MOCK_HUMAN_EVENTS : 0);
+  const BOT_REASONS: BotReason[] = selectLiveData(botLive, MOCK_BOT_REASONS, [], adaptBotReasons);
 
   const botPct = TOTAL_EVENTS > 0 ? (BOT_EVENTS / TOTAL_EVENTS) * 100 : 0;
   const humanPct = TOTAL_EVENTS > 0 ? (HUMAN_EVENTS / TOTAL_EVENTS) * 100 : 0;
@@ -364,6 +366,11 @@ export default function DataQualityView(): React.ReactElement {
   ];
 
   return (
+    <LiveDataBoundary
+      states={[reconLive, botLive]}
+      empty={rows.length === 0 && TOTAL_EVENTS === 0}
+      label="Qualidade de dados"
+    >
     <div id="data-quality-view-container" className="space-y-6">
       {/* ---- Header ---- */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -890,7 +897,9 @@ export default function DataQualityView(): React.ReactElement {
                       {pct(shareOfBots)}
                     </td>
                     <td className="py-3.5 text-right">
-                      <span
+                      {b.trend === null ? (
+                        <span className="font-mono text-slate-400">—</span>
+                      ) : <span
                         className={`inline-flex items-center gap-0.5 font-mono font-semibold ${
                           b.trend >= 0 ? 'text-emerald-600' : 'text-rose-500'
                         }`}
@@ -901,7 +910,7 @@ export default function DataQualityView(): React.ReactElement {
                           <ArrowDownRight className="w-3 h-3" />
                         )}
                         {pct(Math.abs(b.trend))}
-                      </span>
+                      </span>}
                     </td>
                   </tr>
                 );
@@ -911,5 +920,6 @@ export default function DataQualityView(): React.ReactElement {
         </div>
       </div>
     </div>
+    </LiveDataBoundary>
   );
 }
