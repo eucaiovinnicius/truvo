@@ -10,8 +10,7 @@ import {
 } from '@truvo/db';
 import { DRIZZLE, type Database } from '../auth/database.provider';
 import { sha256 } from '../events/crypto.util';
-import { getClickHouse, getRedis } from './identity.infra';
-import { IDENTITY_STITCH_STREAM, type StitchJob } from './identity.constants';
+import { getClickHouse, enqueueRetroStitch } from './identity.infra';
 import type { IdentifierType, IdentifyDto, MergesQueryDto } from './dto/identity.dto';
 import { CustomerContextService } from '../customer-context/customer-context.service';
 
@@ -209,7 +208,7 @@ export class IdentityService {
 
     // 3. stitching retroativo: só quando algo foi fundido (recompute é caro — PRD §15).
     if (losers.length > 0) {
-      await this.enqueueRetroStitch({
+      await enqueueRetroStitch({
         workspace_id: workspaceId,
         canonical_id: target,
         merged_from: losers,
@@ -311,35 +310,6 @@ export class IdentityService {
     }
   }
 
-  // ─────────────────────────── retro fila ───────────────────────────
-
-  /**
-   * Enfileira o job de stitching retroativo num Redis STREAM (consumer group +
-   * checkpoints no worker). Best-effort no producer: se o Redis piscar, logamos —
-   * o merge no Postgres já está persistido e um replay/backfill pode reprocessar.
-   */
-  private async enqueueRetroStitch(job: StitchJob) {
-    try {
-      const redis = getRedis();
-      await redis.xadd(
-        IDENTITY_STITCH_STREAM,
-        '*',
-        'workspace_id',
-        job.workspace_id,
-        'canonical_id',
-        job.canonical_id,
-        'merged_from',
-        JSON.stringify(job.merged_from),
-        'reason',
-        job.reason,
-        'enqueued_at',
-        job.enqueued_at,
-      );
-    } catch (err) {
-      // TODO(live): fallback durável (outbox no Postgres) se o Redis estiver fora.
-      this.logger.warn(`falha ao enfileirar stitch retroativo: ${(err as Error).message}`);
-    }
-  }
 }
 
 /**

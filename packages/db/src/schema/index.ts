@@ -2,6 +2,7 @@
 export * from './auth'; // M1 — users, workspaces, workspace_members
 export * from './customer-context'; // Truvo 4.x - canonical customer context
 export * from './customer-outcomes'; // Order 040 — observed outcomes (event→context projection)
+export * from './identity-graph'; // Order 045 — identity conflicts + auditable/reversible merge events
 export * from './audit'; // Order 035 — audit_log (security/admin change trail)
 export * from './data-lifecycle'; // Order 035 — data_lifecycle_requests (export/deletion orchestration)
 export * from './events'; // M2 — api_keys

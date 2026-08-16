@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { IdentityController } from './identity.controller';
 import { IdentityInternalController } from './identity-internal.controller';
 import { IdentityService } from './identity.service';
+import { IdentityGraphService } from './identity-graph.service';
 import { InternalAuthGuard } from './guards/internal-auth.guard';
 import { CustomerContextModule } from '../customer-context/customer-context.module';
 
@@ -19,7 +20,7 @@ import { CustomerContextModule } from '../customer-context/customer-context.modu
 @Module({
   imports: [CustomerContextModule],
   controllers: [IdentityController, IdentityInternalController],
-  providers: [IdentityService, InternalAuthGuard],
-  exports: [IdentityService],
+  providers: [IdentityService, IdentityGraphService, InternalAuthGuard],
+  exports: [IdentityService, IdentityGraphService],
 })
 export class IdentityModule {}

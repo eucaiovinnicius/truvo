@@ -1,5 +1,7 @@
 import { createClickHouse, type ClickHouseClient } from '@truvo/db';
 import Redis from 'ioredis';
+import { structuredLog } from '@truvo/observability';
+import { IDENTITY_STITCH_STREAM, type StitchJob } from './identity.constants';
 
 /**
  * Infra memoizada do M8 (singletons de processo).
@@ -53,4 +55,43 @@ export function closeRedis(): void {
   // resposta de um Redis que pode nem estar alcançável (é exatamente o cenário que
   // este helper existe para encerrar).
   client.disconnect();
+}
+
+/**
+ * Enfileira um job de stitching retroativo (Redis STREAM, consumer group + XACK —
+ * ver `apps/consumer/src/identity/stitch-queue.ts`, mesmo shape). Order 045: extraído
+ * do antigo método privado `IdentityService#enqueueRetroStitch` (mesma lógica, sem
+ * mudança de comportamento) para ser reusável tanto pelo `identify()` v1 quanto pelo
+ * novo `IdentityGraphService#enqueueRetroactiveStitch` v2 — UMA fila, dois emissores,
+ * nunca um pipeline paralelo.
+ *
+ * Best-effort: se o Redis piscar, loga e segue — o merge no Postgres já está
+ * persistido; um replay/backfill pode reenfileirar.
+ */
+export async function enqueueRetroStitch(job: StitchJob): Promise<void> {
+  try {
+    const redis = getRedis();
+    await redis.xadd(
+      IDENTITY_STITCH_STREAM,
+      '*',
+      'workspace_id',
+      job.workspace_id,
+      'canonical_id',
+      job.canonical_id,
+      'merged_from',
+      JSON.stringify(job.merged_from),
+      'reason',
+      job.reason,
+      'enqueued_at',
+      job.enqueued_at,
+    );
+  } catch (err) {
+    const failure = (err as Error).message;
+    structuredLog('warn', 'identity_retro_stitch_enqueue_failed', {
+      module: 'identity_retro_stitch',
+      workspaceId: job.workspace_id,
+      canonicalId: job.canonical_id,
+      reason: failure,
+    });
+  }
 }

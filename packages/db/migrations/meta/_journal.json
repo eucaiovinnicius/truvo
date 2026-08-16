@@ -29,6 +29,13 @@
       "when": 1786888948524,
       "tag": "0003_marvelous_banshee",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786894680804,
+      "tag": "0004_slow_goblin_queen",
+      "breakpoints": true
     }
   ]
 }
