@@ -32,38 +32,39 @@ import {
   proveBackfillCheckpointResume,
   proveConnectionLifecycle,
   proveCredentialFailureSeparateFromSyncHealth,
-  proveSourceDefinitionCapabilities,
-  proveDuplicateWebhookIsHarmless,
-  proveInvalidWebhookSignatureRejected,
+  proveDefinitionCapabilities,
+  proveDestinationIdempotencyAndCorrelation,
   provePermanentErrorStops,
   proveRateLimitReschedules,
   proveTransientRetryThenSuccess,
 } from '../../testing/connector-contract-kit';
-import { createStripeAdapter } from './stripe.adapter';
-import { createStripeDriver, createStripeDriverState, createStripeFetch } from './stripe.test-driver';
-import { STRIPE_PROVIDER } from './stripe.constants';
+import { createKlaviyoAdapter } from './klaviyo.adapter';
+import { createKlaviyoDriver, createKlaviyoDriverState, createKlaviyoFetch } from './klaviyo.test-driver';
+import { KLAVIYO_PROVIDER } from './klaviyo.constants';
 
 /**
- * Order 062 (Stripe context connector, closure 02) — "the actual shared Order 50
- * contract kit runs and passes against Stripe for every applicable capability."
+ * Order 063 — "the actual shared Order 50 contract kit runs and passes against
+ * Klaviyo for every applicable source + destination/bidirectional capability."
  * Every `proveXxx` here is the EXACT SAME function `connector-contract-kit.test.ts`
- * runs against the fake provider and `hubspot.contract-kit.test.ts` runs against
- * HubSpot — imported, not copied — driven by the REAL `createStripeAdapter()` + a
- * Stripe-shaped `ConnectorTestDriver` (`stripe.test-driver.ts`) instead of the
- * fake/HubSpot ones. No assertion was weakened.
+ * runs against the fake provider and `hubspot.contract-kit.test.ts`/
+ * `stripe.contract-kit.test.ts` run against their real adapters — imported, not
+ * copied — driven by the REAL `createKlaviyoAdapter()` + a Klaviyo-shaped
+ * `ConnectorTestDriver` (`klaviyo.test-driver.ts`) instead. No assertion was
+ * weakened.
  *
- * Stripe is SOURCE-ONLY (`role: 'source'`, no `outbound_profile`/`outbound_event`
- * — see `stripe.constants.ts`), so this uses `proveSourceDefinitionCapabilities`
- * (not `proveDefinitionCapabilities`, which asserts a bidirectional shape) and
- * registers ONLY `registry.registerSource(adapter)` — never `registerDestination`.
- * `proveDestinationIdempotencyAndCorrelation` is intentionally NOT run: Stripe has
- * no `DestinationAdapter` to write through — there is no destination proof that
- * applies here, not a weakened one.
+ * Klaviyo declares NO `webhook_ingest` capability (see `klaviyo.adapter.ts`'s
+ * DEFINITION comment): Klaviyo has no general-purpose developer webhooks API
+ * comparable to Stripe/HubSpot/Shopify's, and Order 063's own required-runtime-
+ * proof list never mentions webhook signature verification for Klaviyo — only
+ * polling/backfill/incremental. `proveDuplicateWebhookIsHarmless`/
+ * `proveInvalidWebhookSignatureRejected` are therefore intentionally OMITTED —
+ * there is nothing to verify, mirroring how `stripe.contract-kit.test.ts` omits
+ * `proveDestinationIdempotencyAndCorrelation` for its (source-only) provider.
  */
-process.env.INTEGRATIONS_ENCRYPTION_KEY ??= 'order062_stripe_contract_kit_test_key_dev_only';
-process.env.STRIPE_SECRET_KEY ??= 'sk_test_order062_contract_kit';
-process.env.STRIPE_CONNECT_CLIENT_ID ??= 'ca_test_order062_contract_kit';
-process.env.STRIPE_OAUTH_STATE_SECRET ??= 'order062_stripe_contract_kit_oauth_state_secret';
+process.env.INTEGRATIONS_ENCRYPTION_KEY ??= 'order063_klaviyo_contract_kit_test_key_dev_only';
+process.env.KLAVIYO_CLIENT_ID ??= 'klaviyo_test_client_id_ck';
+process.env.KLAVIYO_CLIENT_SECRET ??= 'klaviyo_test_client_secret_ck';
+process.env.KLAVIYO_OAUTH_STATE_SECRET ??= 'order063_klaviyo_contract_kit_oauth_state_secret';
 
 let reachable: boolean | undefined;
 async function checkReachable(): Promise<boolean> {
@@ -86,9 +87,9 @@ async function checkReachable(): Promise<boolean> {
 }
 
 const STAMP = Date.now();
-const WS = `test_ws_stripe_kit_${STAMP}`;
+const WS = `test_ws_klaviyo_kit_${STAMP}`;
 
-test('Connector Framework contract kit: shared proofs PASS against the REAL Stripe adapter', async (t) => {
+test('Connector Framework contract kit: shared proofs PASS against the REAL Klaviyo adapter', async (t) => {
   if (!(await checkReachable())) {
     t.skip('DATABASE_URL não alcançável neste ambiente — ver HANDOFF (Postgres dev unreachable)');
     return;
@@ -106,38 +107,34 @@ test('Connector Framework contract kit: shared proofs PASS against the REAL Stri
   const crm = new CrmWriteService(db, suppression);
   const mapping = new CanonicalMappingService(identityGraph, customerContext, commerce, billing, crm, new EngagementWriteService(db, customerContext));
   const orchestrator = new ConnectorSyncOrchestratorService(db, connections, registry, mapping);
-  // Constructed only to satisfy `ConnectorContractHarness`'s shape — Stripe never
-  // registers a `DestinationAdapter`, so no destination proof runs against it.
   const destination = new ConnectorDestinationService(db, connections, registry, audit);
   const webhook = new ConnectorWebhookService(db, connections, registry, mapping);
 
-  const state = createStripeDriverState();
-  const driver = createStripeDriver(state);
-  const fetchImpl = createStripeFetch(state);
-  const adapter = createStripeAdapter(fetchImpl);
+  const state = createKlaviyoDriverState();
+  const driver = createKlaviyoDriver(state);
+  const fetchImpl = createKlaviyoFetch(state);
+  const adapter = createKlaviyoAdapter(fetchImpl, state.pageSize);
   registry.registerSource(adapter);
-  // No registry.registerDestination(adapter) — Stripe is source-only.
+  registry.registerDestination(adapter);
 
-  const harness: ConnectorContractHarness = { workspaceId: WS, provider: STRIPE_PROVIDER, registry, connections, orchestrator, destination, webhook };
+  const harness: ConnectorContractHarness = { workspaceId: WS, provider: KLAVIYO_PROVIDER, registry, connections, orchestrator, destination, webhook };
 
   try {
-    await t.test('definition declares source-only capabilities (initial_backfill/incremental_pull/webhook_ingest, no outbound)', () => proveSourceDefinitionCapabilities(harness));
+    await t.test('definition declares capabilities independently (source/destination/bidirectional)', () => proveDefinitionCapabilities(harness));
     await t.test('connection lifecycle: draft → authorizing → connected → disconnected', () => proveConnectionLifecycle(harness, driver));
     await t.test('credential failure is separate from sync health', () => proveCredentialFailureSeparateFromSyncHealth(harness, driver));
     await t.test('initial backfill + durable checkpoint resume', () => proveBackfillCheckpointResume(harness, driver));
     await t.test('transient failure retries then succeeds', () => proveTransientRetryThenSuccess(harness, driver));
     await t.test('permanent error stops (terminal, no infinite retry, auth failure flags credentials)', () => provePermanentErrorStops(harness, driver));
     await t.test('rate limit reschedules without dropping records', () => proveRateLimitReschedules(harness, driver));
-    await t.test('duplicate webhook delivery is harmless', () => proveDuplicateWebhookIsHarmless(harness, driver));
-    await t.test('invalid webhook signature fails closed', () => proveInvalidWebhookSignatureRejected(harness, driver));
-    // proveDestinationIdempotencyAndCorrelation intentionally OMITTED — Stripe has
-    // no DestinationAdapter/outbound capability (source-only per Order 062 scope);
-    // there is nothing to write through, so no substitute proof is added either.
+    // proveDuplicateWebhookIsHarmless / proveInvalidWebhookSignatureRejected
+    // intentionally OMITTED — see file header comment.
+    await t.test('destination write idempotency + correlation + external result id', () => proveDestinationIdempotencyAndCorrelation(harness, driver));
 
     await t.test('canonical mapping actually wrote through Identity Graph v2 / Customer Context (no adapter-local identity)', async () => {
       const rows = await db.select().from(customerIdentifiers).where(eq(customerIdentifiers.workspaceId, WS));
-      const stripeRows = rows.filter((r) => r.providerNamespace === STRIPE_PROVIDER);
-      assert.ok(stripeRows.length > 0, 'a projeção deve ter criado identifiers reais via IdentityGraphService');
+      const klaviyoRows = rows.filter((r) => r.providerNamespace === KLAVIYO_PROVIDER);
+      assert.ok(klaviyoRows.length > 0, 'a projeção deve ter criado identifiers reais via IdentityGraphService');
     });
   } finally {
     await db.delete(connectorDestinationWrites).where(eq(connectorDestinationWrites.workspaceId, WS)).catch(() => undefined);

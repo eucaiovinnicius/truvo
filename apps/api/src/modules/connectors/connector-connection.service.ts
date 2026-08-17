@@ -159,7 +159,7 @@ export class ConnectorConnectionService {
     // A provider account/portal/shop identity is an authorization result, never a
     // user-editable preference. Refuse a later callback/config patch that would
     // silently retarget an existing connection to another represented account.
-    for (const key of ['stripe_account_id', 'hubspot_portal_id', 'shop_domain']) {
+    for (const key of ['stripe_account_id', 'hubspot_portal_id', 'shop_domain', 'klaviyo_account_id']) {
       const previous = (existing.config as Record<string, unknown>)[key];
       if (previous !== undefined && patch[key] !== undefined && patch[key] !== previous) {
         throw new BadRequestException(`immutable connection metadata '${key}' cannot be changed`);

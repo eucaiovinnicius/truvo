@@ -25,6 +25,7 @@ import { ConnectorConnectionService } from '../../connector-connection.service';
 import { CanonicalMappingService } from '../../canonical-mapping';
 import { CommerceWriteService } from '../../commerce/commerce-write.service';
 import { BillingContextWriteService } from '../../billing/billing-context-write.service';
+import { EngagementWriteService } from '../../engagement/engagement-write.service';
 import { CrmWriteService } from '../../crm/crm-write.service';
 import { ConnectorSyncOrchestratorService } from '../../connector-sync-orchestrator.service';
 import { createHubspotAdapter } from './hubspot.adapter';
@@ -107,7 +108,7 @@ test('HubSpot association reconciliation: authoritative convergence, not accumul
   const commerce = new CommerceWriteService(db, customerContext);
   const billing = new BillingContextWriteService(db, customerContext);
   const crm = new CrmWriteService(db, suppression);
-  const mapping = new CanonicalMappingService(identityGraph, customerContext, commerce, billing, crm);
+  const mapping = new CanonicalMappingService(identityGraph, customerContext, commerce, billing, crm, new EngagementWriteService(db, customerContext));
   const orchestrator = new ConnectorSyncOrchestratorService(db, connections, registry, mapping);
 
   const queue: Response[] = [];

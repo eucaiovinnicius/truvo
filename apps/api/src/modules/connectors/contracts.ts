@@ -52,6 +52,36 @@ export interface ConnectorDefinition {
    * assuming one stream per connection — no second scheduler, no provider-specific
    * branch in either caller. */
   incrementalStreams?: readonly string[];
+  /** Order 063 — an opt-in, provider-declared gate `ConnectorDestinationService`
+   * enforces BEFORE calling `DestinationAdapter.write()` for the listed `kind`s.
+   * Absent on every prior provider (HubSpot/Stripe/Shopify never declare it) —
+   * zero behavior change for them. Klaviyo is the first to need it: "any Truvo
+   * custom event intended to trigger a messaging flow must pass current provider
+   * + Truvo eligibility rules before dispatch" (§4). Kept generic/provider-neutral
+   * rather than hard-coded to Klaviyo so a future messaging destination can reuse
+   * the same mechanism without another framework change. */
+  activationEligibility?: ActivationEligibilityRule;
+}
+
+/** Order 063 §4 — "provider subscription state is activation eligibility context,
+ * not permission invented by Truvo" + "Truvo privacy suppression remains
+ * fail-closed." `ConnectorDestinationService.write()` reads the ALREADY-SYNCED
+ * `customer_traits` row (never a live re-fetch mid-write — same freshness model
+ * every other canonical trait uses) and blocks fail-closed when the trait is
+ * absent, unknown, or not in `subscribedValues`. It also refuses a write for any
+ * customer whose canonical identity was privacy-erased (`customers.deletedAt`),
+ * covering the "Truvo eligibility rules" half of §4 without a second suppression
+ * mechanism. */
+export interface ActivationEligibilityRule {
+  /** `DestinationWriteInput.kind` values this rule gates — e.g. `['custom_event']`.
+   * A kind NOT listed here (e.g. Klaviyo's own `'profile_upsert'`) is never gated:
+   * "profile trait writeback may update non-messaging metadata without implying
+   * consent" (§4). */
+  requiredForKinds: readonly string[];
+  consentTraitNamespace: string;
+  consentTraitKey: string;
+  /** Raw provider consent values that count as "eligible to receive messaging." */
+  subscribedValues: readonly string[];
 }
 
 /** Workspace-scoped installation/configuration state — the public (non-secret) view of `connector_connections`. */
@@ -193,6 +223,29 @@ export interface NormalizedBillingAdjustment {
   sourceUpdatedAt: string;
 }
 
+/** Order 063 — a provider-attributed canonical ENGAGEMENT observation (email/SMS
+ * delivery, open, click, bounce, unsubscribe, or a Truvo-originated custom event
+ * read back through the normal source path). Deliberately separate from
+ * `NormalizedTrait`/outcomes: an engagement event is an immutable append-only
+ * fact ("this profile opened this message at this time"), never upserted-in-place
+ * the way a mutable trait/billing row is. `providerEventId` is the sole natural
+ * key — insert-once, never updated (Order 063 §7 "duplicate engagement event").
+ */
+export interface NormalizedEngagementEvent {
+  providerNamespace: string;
+  providerEventId: string;
+  metricName: string;
+  engagementKind: 'received' | 'delivery' | 'opened' | 'clicked' | 'bounced' | 'unsubscribed' | 'marked_spam' | 'other';
+  campaignId?: string;
+  flowId?: string;
+  /** Set ONLY when deterministic evidence exists — e.g. this is Truvo's OWN custom
+   * event read back through the source path, carrying the SAME `activation_id`
+   * Truvo itself wrote when creating it (Order 063 §7: "do not fabricate
+   * attribution when correlation evidence is absent"). */
+  correlationId?: string;
+  occurredAt: string;
+}
+
 /** Order 061 — provider-neutral CRM account/company (see `packages/db/src/schema/crm.ts`).
  * `traits` carries ONLY the workspace's explicitly configured/selected properties
  * — never an indiscriminate copy of every custom property (Order 061 §2). */
@@ -286,6 +339,7 @@ export interface NormalizedRecord {
   billingInvoice?: NormalizedBillingInvoice;
   billingPayment?: NormalizedBillingPayment;
   billingAdjustment?: NormalizedBillingAdjustment;
+  engagementEvent?: NormalizedEngagementEvent;
   crmAccount?: NormalizedCrmAccount;
   crmDeal?: NormalizedCrmDeal;
   crmAssociations?: NormalizedCrmAssociation[];
@@ -323,6 +377,12 @@ export interface DestinationWriteInput {
   idempotencyKey: string;
   correlationId: string;
   kind: string;
+  /** Order 063 — when the destination adapter's `ConnectorDefinition.activationEligibility.requiredForKinds`
+   * includes this write's `kind`, `payload.customerId` (Truvo's own canonical
+   * customer id, NOT a provider object id) MUST be present — it is how
+   * `ConnectorDestinationService.write()` looks up the eligibility-gating trait
+   * and erasure state before ever calling the adapter. Every other kind/provider
+   * ignores this convention entirely. */
   payload: Record<string, unknown>;
 }
 

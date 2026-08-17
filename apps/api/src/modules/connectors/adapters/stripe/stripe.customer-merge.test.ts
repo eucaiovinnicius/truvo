@@ -27,6 +27,7 @@ import { ConnectorConnectionService } from '../../connector-connection.service';
 import { CanonicalMappingService } from '../../canonical-mapping';
 import { CommerceWriteService } from '../../commerce/commerce-write.service';
 import { BillingContextWriteService } from '../../billing/billing-context-write.service';
+import { EngagementWriteService } from '../../engagement/engagement-write.service';
 import { CrmWriteService } from '../../crm/crm-write.service';
 import { ConnectorWebhookService } from '../../connector-webhook.service';
 import { createStripeAdapter } from './stripe.adapter';
@@ -111,7 +112,7 @@ test('Stripe + Identity Graph v2: customer merge convergence (real Postgres, rea
   const commerce = new CommerceWriteService(db, customerContext);
   const billing = new BillingContextWriteService(db, customerContext);
   const crm = new CrmWriteService(db, suppression);
-  const mapping = new CanonicalMappingService(identityGraph, customerContext, commerce, billing, crm);
+  const mapping = new CanonicalMappingService(identityGraph, customerContext, commerce, billing, crm, new EngagementWriteService(db, customerContext));
   const webhook = new ConnectorWebhookService(db, connections, registry, mapping);
 
   const fetchImpl: StripeFetch = (async () => {
@@ -251,7 +252,7 @@ test('Stripe: privacy suppression prevents identity reconstruction; tenant isola
   const commerce = new CommerceWriteService(db, customerContext);
   const billing = new BillingContextWriteService(db, customerContext);
   const crm = new CrmWriteService(db, suppression);
-  const mapping = new CanonicalMappingService(identityGraph, customerContext, commerce, billing, crm);
+  const mapping = new CanonicalMappingService(identityGraph, customerContext, commerce, billing, crm, new EngagementWriteService(db, customerContext));
   const webhook = new ConnectorWebhookService(db, connections, registry, mapping);
 
   const fetchImpl: StripeFetch = (async () => {

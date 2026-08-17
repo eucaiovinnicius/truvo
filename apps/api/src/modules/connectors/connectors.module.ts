@@ -6,6 +6,7 @@ import { ConnectorConnectionService } from './connector-connection.service';
 import { CanonicalMappingService } from './canonical-mapping';
 import { CommerceWriteService } from './commerce/commerce-write.service';
 import { BillingContextWriteService } from './billing/billing-context-write.service';
+import { EngagementWriteService } from './engagement/engagement-write.service';
 import { CrmWriteService } from './crm/crm-write.service';
 import { ConnectorSyncOrchestratorService } from './connector-sync-orchestrator.service';
 import { ConnectorDestinationService } from './connector-destination.service';
@@ -14,6 +15,7 @@ import { ConnectorsController, ConnectorWebhooksController } from './connectors.
 import { ShopifyBootstrapService } from './adapters/shopify/shopify.bootstrap';
 import { HubspotBootstrapService } from './adapters/hubspot/hubspot.bootstrap';
 import { StripeBootstrapService } from './adapters/stripe/stripe.bootstrap';
+import { KlaviyoBootstrapService } from './adapters/klaviyo/klaviyo.bootstrap';
 
 /**
  * Order 050 stood this module up service-only, deferring the HTTP surface and any
@@ -31,6 +33,7 @@ import { StripeBootstrapService } from './adapters/stripe/stripe.bootstrap';
     CanonicalMappingService,
     CommerceWriteService,
     BillingContextWriteService,
+    EngagementWriteService,
     CrmWriteService,
     ConnectorSyncOrchestratorService,
     ConnectorDestinationService,
@@ -38,6 +41,7 @@ import { StripeBootstrapService } from './adapters/stripe/stripe.bootstrap';
     ShopifyBootstrapService,
     HubspotBootstrapService,
     StripeBootstrapService,
+    KlaviyoBootstrapService,
   ],
   exports: [
     ConnectorRegistryService,
@@ -45,6 +49,7 @@ import { StripeBootstrapService } from './adapters/stripe/stripe.bootstrap';
     CanonicalMappingService,
     CommerceWriteService,
     BillingContextWriteService,
+    EngagementWriteService,
     CrmWriteService,
     ConnectorSyncOrchestratorService,
     ConnectorDestinationService,

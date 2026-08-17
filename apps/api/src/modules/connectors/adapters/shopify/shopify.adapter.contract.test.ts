@@ -24,6 +24,7 @@ import { ConnectorConnectionService } from '../../connector-connection.service';
 import { CanonicalMappingService } from '../../canonical-mapping';
 import { CommerceWriteService } from '../../commerce/commerce-write.service';
 import { BillingContextWriteService } from '../../billing/billing-context-write.service';
+import { EngagementWriteService } from '../../engagement/engagement-write.service';
 import { CrmWriteService } from '../../crm/crm-write.service';
 import { ConnectorSyncOrchestratorService } from '../../connector-sync-orchestrator.service';
 import { ConnectorWebhookService } from '../../connector-webhook.service';
@@ -140,7 +141,7 @@ test('Shopify adapter: end-to-end proofs against real Postgres (§8 edge cases)'
   const registry = new ConnectorRegistryService();
   const connections = new ConnectorConnectionService(db, audit, registry);
   const commerce = new CommerceWriteService(db, customerContext);
-  const mapping = new CanonicalMappingService(identityGraph, customerContext, commerce, new BillingContextWriteService(db, customerContext), new CrmWriteService(db));
+  const mapping = new CanonicalMappingService(identityGraph, customerContext, commerce, new BillingContextWriteService(db, customerContext), new CrmWriteService(db), new EngagementWriteService(db, customerContext));
   const orchestrator = new ConnectorSyncOrchestratorService(db, connections, registry, mapping);
   const webhook = new ConnectorWebhookService(db, connections, registry, mapping);
 

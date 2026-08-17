@@ -1,13 +1,13 @@
 import { createHash } from 'node:crypto';
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
-import { connectorDestinationWrites } from '@truvo/db';
+import { connectorDestinationWrites, customers, customerTraits } from '@truvo/db';
 import { classifyFailure } from '@truvo/observability';
 import { DRIZZLE, type Database } from '../auth/database.provider';
 import { AuditService } from '../audit/audit.service';
 import { ConnectorConnectionService } from './connector-connection.service';
 import { ConnectorRegistryService } from './connector-registry.service';
-import type { DestinationWriteInput, DestinationWriteResult } from './contracts';
+import type { ActivationEligibilityRule, DestinationWriteInput, DestinationWriteResult } from './contracts';
 
 function deterministicId(prefix: string, ...parts: string[]): string {
   return `${prefix}_${createHash('sha256').update(parts.join('')).digest('hex').slice(0, 26)}`;
@@ -50,11 +50,18 @@ export class ConnectorDestinationService {
     if (!adapter) throw new BadRequestException(`provider '${connection.provider}' não tem DestinationAdapter registrado`);
 
     let result: DestinationWriteResult;
-    try {
-      result = await adapter.write(connection, credentials, input);
-    } catch (err) {
-      const failure = classifyFailure(err);
-      result = { status: 'failed', retryable: failure.kind === 'transient', error: failure.reason };
+    const ineligible = adapter.definition.activationEligibility?.requiredForKinds.includes(input.kind)
+      ? await this.checkEligibility(workspaceId, adapter.definition.activationEligibility, input)
+      : null;
+    if (ineligible) {
+      result = ineligible;
+    } else {
+      try {
+        result = await adapter.write(connection, credentials, input);
+      } catch (err) {
+        const failure = classifyFailure(err);
+        result = { status: 'failed', retryable: failure.kind === 'transient', error: failure.reason };
+      }
     }
 
     const id = deterministicId('cdw', workspaceId, connectionId, input.idempotencyKey);
@@ -88,5 +95,35 @@ export class ConnectorDestinationService {
     });
 
     return result;
+  }
+
+  /**
+   * Order 063 §4 — fail-closed activation eligibility. Returns a `failed,
+   * non-retryable` result when the write must be refused, or `null` when the
+   * adapter should proceed. Deliberately reads the ALREADY-SYNCED
+   * `customer_traits` row rather than making a live provider call mid-write —
+   * the same freshness model every other canonical trait already uses — and
+   * refuses fail-closed (never "unknown → allow") both when the customer's
+   * canonical identity was privacy-erased and when consent was never observed.
+   */
+  private async checkEligibility(workspaceId: string, rule: ActivationEligibilityRule, input: DestinationWriteInput): Promise<DestinationWriteResult | null> {
+    const customerId = input.payload.customerId as string | undefined;
+    if (!customerId) return { status: 'failed', retryable: false, error: 'eligibility_missing_customer_id' };
+
+    const [customerRow] = await this.db.select({ deletedAt: customers.deletedAt }).from(customers).where(and(eq(customers.workspaceId, workspaceId), eq(customers.id, customerId))).limit(1);
+    if (!customerRow || customerRow.deletedAt) {
+      return { status: 'failed', retryable: false, error: 'eligibility_customer_suppressed' };
+    }
+
+    const [traitRow] = await this.db
+      .select({ value: customerTraits.value })
+      .from(customerTraits)
+      .where(and(eq(customerTraits.workspaceId, workspaceId), eq(customerTraits.customerId, customerId), eq(customerTraits.traitNamespace, rule.consentTraitNamespace), eq(customerTraits.traitKey, rule.consentTraitKey)))
+      .limit(1);
+    if (!traitRow || !rule.subscribedValues.includes(String(traitRow.value))) {
+      return { status: 'failed', retryable: false, error: 'eligibility_not_subscribed' };
+    }
+
+    return null;
   }
 }

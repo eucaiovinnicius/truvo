@@ -22,6 +22,7 @@ import { ConnectorConnectionService } from '../../connector-connection.service';
 import { CanonicalMappingService } from '../../canonical-mapping';
 import { CommerceWriteService } from '../../commerce/commerce-write.service';
 import { BillingContextWriteService } from '../../billing/billing-context-write.service';
+import { EngagementWriteService } from '../../engagement/engagement-write.service';
 import { CrmWriteService } from '../../crm/crm-write.service';
 import { ConnectorSyncOrchestratorService } from '../../connector-sync-orchestrator.service';
 import { ConnectorDestinationService } from '../../connector-destination.service';
@@ -95,7 +96,7 @@ test('Connector Framework contract kit: shared proofs PASS against the REAL HubS
   const commerce = new CommerceWriteService(db, customerContext);
   const billing = new BillingContextWriteService(db, customerContext);
   const crm = new CrmWriteService(db, suppression);
-  const mapping = new CanonicalMappingService(identityGraph, customerContext, commerce, billing, crm);
+  const mapping = new CanonicalMappingService(identityGraph, customerContext, commerce, billing, crm, new EngagementWriteService(db, customerContext));
   const orchestrator = new ConnectorSyncOrchestratorService(db, connections, registry, mapping);
   const destination = new ConnectorDestinationService(db, connections, registry, audit);
   const webhook = new ConnectorWebhookService(db, connections, registry, mapping);

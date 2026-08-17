@@ -4,6 +4,7 @@ import { CustomerContextService } from '../customer-context/customer-context.ser
 import type { TypedTraitValue } from '../customer-context/customer-context.contracts';
 import { CommerceWriteService } from './commerce/commerce-write.service';
 import { BillingContextWriteService } from './billing/billing-context-write.service';
+import { EngagementWriteService } from './engagement/engagement-write.service';
 import { CrmWriteService, type CrmOutcomeMapping } from './crm/crm-write.service';
 import type { NormalizedRecord, NormalizedTrait } from './contracts';
 
@@ -39,6 +40,8 @@ export interface ApplyRecordsResult {
   crmObjectsWritten: number;
   /** Order 061: association edges actually resolved+written (both sides already known). */
   crmAssociationsWritten: number;
+  /** Order 063: engagement events written (delivery/open/click/... or Truvo's own custom event read back). */
+  engagementEventsWritten: number;
 }
 
 /**
@@ -59,6 +62,7 @@ export class CanonicalMappingService {
     @Inject(CommerceWriteService) private readonly commerce: CommerceWriteService,
     @Inject(BillingContextWriteService) private readonly billing: BillingContextWriteService,
     @Inject(CrmWriteService) private readonly crm: CrmWriteService,
+    @Inject(EngagementWriteService) private readonly engagement: EngagementWriteService,
   ) {}
 
   /**
@@ -78,6 +82,7 @@ export class CanonicalMappingService {
     const result: ApplyRecordsResult = {
       customersResolved: 0, identifiersAttached: 0, traitsWritten: 0, conflicts: 0, suppressed: 0,
       commerceOrdersWritten: 0, billingObjectsWritten: 0, crmObjectsWritten: 0, crmAssociationsWritten: 0,
+      engagementEventsWritten: 0,
     };
 
     for (const record of records) {
@@ -87,7 +92,7 @@ export class CanonicalMappingService {
       // and deal are not people": a record with NO identifiers is still worth
       // applying if it carries a commerce order or a CRM company/deal/association/
       // deletion signal — those resolve independently of (or before) any personal identity.
-      if (record.identifiers.length === 0 && !record.commerceOrder && !hasCrmPayload && !hasBillingPayload) continue;
+      if (record.identifiers.length === 0 && !record.commerceOrder && !hasCrmPayload && !hasBillingPayload && !record.engagementEvent) continue;
 
       const observedAt = new Date(record.observedAt);
       let customerId: string | null = null;
@@ -161,6 +166,16 @@ export class CanonicalMappingService {
       if (hasBillingPayload) {
         result.billingObjectsWritten += billingOwners.filter((owner, index) => owner !== null || [record.billingSubscription, record.billingInvoice, record.billingPayment, record.billingAdjustment][index]).length;
         for (const owner of new Set(billingOwners.filter((id): id is string => !!id))) await this.billing.recomputeDerivedTraits(workspaceId, owner);
+      }
+
+      // Order 063: engagement follows the same identity/suppression boundary as
+      // billing/commerce — a genuinely unlinked event is durable but stays
+      // unattached. The writer returns the current row owner so a later identity
+      // merge converges derived engagement traits on the surviving id.
+      if (record.engagementEvent) {
+        const owner = await this.engagement.upsertEvent(workspaceId, connectionId, customerId, record.engagementEvent);
+        result.engagementEventsWritten += 1;
+        if (owner) await this.engagement.recomputeDerivedTraits(workspaceId, owner);
       }
 
       if (record.crmAccount) {

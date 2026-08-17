@@ -78,6 +78,13 @@
       "when": 1786919470807,
       "tag": "0010_chubby_blink",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786927118650,
+      "tag": "0011_mysterious_stryfe",
+      "breakpoints": true
     }
   ]
 }
