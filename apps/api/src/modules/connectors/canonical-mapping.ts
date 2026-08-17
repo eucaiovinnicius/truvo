@@ -3,6 +3,7 @@ import { IdentityGraphService, SuppressedIdentifierError } from '../identity/ide
 import { CustomerContextService } from '../customer-context/customer-context.service';
 import type { TypedTraitValue } from '../customer-context/customer-context.contracts';
 import { CommerceWriteService } from './commerce/commerce-write.service';
+import { BillingContextWriteService } from './billing/billing-context-write.service';
 import { CrmWriteService, type CrmOutcomeMapping } from './crm/crm-write.service';
 import type { NormalizedRecord, NormalizedTrait } from './contracts';
 
@@ -33,6 +34,7 @@ export interface ApplyRecordsResult {
   suppressed: number;
   /** Order 060: commerce orders written (identified or guest — `customerId: null`). */
   commerceOrdersWritten: number;
+  billingObjectsWritten: number;
   /** Order 061: CRM accounts/deals written (companies/deals — not customer identity). */
   crmObjectsWritten: number;
   /** Order 061: association edges actually resolved+written (both sides already known). */
@@ -55,6 +57,7 @@ export class CanonicalMappingService {
     @Inject(IdentityGraphService) private readonly identityGraph: IdentityGraphService,
     @Inject(CustomerContextService) private readonly customerContext: CustomerContextService,
     @Inject(CommerceWriteService) private readonly commerce: CommerceWriteService,
+    @Inject(BillingContextWriteService) private readonly billing: BillingContextWriteService,
     @Inject(CrmWriteService) private readonly crm: CrmWriteService,
   ) {}
 
@@ -74,16 +77,17 @@ export class CanonicalMappingService {
   ): Promise<ApplyRecordsResult> {
     const result: ApplyRecordsResult = {
       customersResolved: 0, identifiersAttached: 0, traitsWritten: 0, conflicts: 0, suppressed: 0,
-      commerceOrdersWritten: 0, crmObjectsWritten: 0, crmAssociationsWritten: 0,
+      commerceOrdersWritten: 0, billingObjectsWritten: 0, crmObjectsWritten: 0, crmAssociationsWritten: 0,
     };
 
     for (const record of records) {
       const hasCrmPayload = !!record.crmAccount || !!record.crmDeal || !!record.crmAssociations?.length || !!record.crmAssociationScope || !!record.crmDeletion;
+      const hasBillingPayload = !!record.billingSubscription || !!record.billingInvoice || !!record.billingPayment || !!record.billingAdjustment;
       // Order 060 §8 "guest checkout without Shopify customer" / Order 061 "company
       // and deal are not people": a record with NO identifiers is still worth
       // applying if it carries a commerce order or a CRM company/deal/association/
       // deletion signal — those resolve independently of (or before) any personal identity.
-      if (record.identifiers.length === 0 && !record.commerceOrder && !hasCrmPayload) continue;
+      if (record.identifiers.length === 0 && !record.commerceOrder && !hasCrmPayload && !hasBillingPayload) continue;
 
       const observedAt = new Date(record.observedAt);
       let customerId: string | null = null;
@@ -142,6 +146,21 @@ export class CanonicalMappingService {
         // customer a PREVIOUS sync identified; that customer's derived traits still
         // need recomputing or refund/order-count history would go stale.
         if (upserted.customerId) await this.commerce.recomputeDerivedTraits(workspaceId, upserted.customerId);
+      }
+
+      // Order 062: billing facts follow the same identity/suppression boundary as
+      // commerce. A genuinely unlinked payment is durable but stays unattached;
+      // no provider-local matching is fabricated. Each writer returns the current
+      // row owner so a later identity merge converges traits on the surviving id.
+      const billingOwners = await Promise.all([
+        record.billingSubscription ? this.billing.upsertSubscription(workspaceId, connectionId, customerId, record.billingSubscription) : null,
+        record.billingInvoice ? this.billing.upsertInvoice(workspaceId, connectionId, customerId, record.billingInvoice) : null,
+        record.billingPayment ? this.billing.upsertPayment(workspaceId, connectionId, customerId, record.billingPayment) : null,
+        record.billingAdjustment ? this.billing.upsertAdjustment(workspaceId, connectionId, customerId, record.billingAdjustment) : null,
+      ]);
+      if (hasBillingPayload) {
+        result.billingObjectsWritten += billingOwners.filter((owner, index) => owner !== null || [record.billingSubscription, record.billingInvoice, record.billingPayment, record.billingAdjustment][index]).length;
+        for (const owner of new Set(billingOwners.filter((id): id is string => !!id))) await this.billing.recomputeDerivedTraits(workspaceId, owner);
       }
 
       if (record.crmAccount) {

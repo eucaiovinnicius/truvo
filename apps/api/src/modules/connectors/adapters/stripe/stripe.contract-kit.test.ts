@@ -31,30 +31,38 @@ import {
   proveBackfillCheckpointResume,
   proveConnectionLifecycle,
   proveCredentialFailureSeparateFromSyncHealth,
-  proveDefinitionCapabilities,
-  proveDestinationIdempotencyAndCorrelation,
+  proveSourceDefinitionCapabilities,
   proveDuplicateWebhookIsHarmless,
   proveInvalidWebhookSignatureRejected,
   provePermanentErrorStops,
   proveRateLimitReschedules,
   proveTransientRetryThenSuccess,
 } from '../../testing/connector-contract-kit';
-import { createHubspotAdapter } from './hubspot.adapter';
-import { createHubspotDriver, createHubspotDriverState, createHubspotFetch } from './hubspot.test-driver';
-import { HUBSPOT_PROVIDER } from './hubspot.constants';
+import { createStripeAdapter } from './stripe.adapter';
+import { createStripeDriver, createStripeDriverState, createStripeFetch } from './stripe.test-driver';
+import { STRIPE_PROVIDER } from './stripe.constants';
 
 /**
- * Order 061 (association + contract closure) — "the actual shared Order 50
- * contract kit runs and passes against HubSpot for all applicable capabilities."
+ * Order 062 (Stripe context connector, closure 02) — "the actual shared Order 50
+ * contract kit runs and passes against Stripe for every applicable capability."
  * Every `proveXxx` here is the EXACT SAME function `connector-contract-kit.test.ts`
- * runs against the fake provider — imported, not copied — driven by the REAL
- * `createHubspotAdapter()` + a HubSpot-shaped `ConnectorTestDriver`
- * (`hubspot.test-driver.ts`) instead of the fake. No assertion was weakened; the
- * kit itself was minimally parameterized (page size, destination payload — see
- * `connector-contract-kit.ts` + `fake-provider.adapter.ts`) so both drivers share
- * it unchanged.
+ * runs against the fake provider and `hubspot.contract-kit.test.ts` runs against
+ * HubSpot — imported, not copied — driven by the REAL `createStripeAdapter()` + a
+ * Stripe-shaped `ConnectorTestDriver` (`stripe.test-driver.ts`) instead of the
+ * fake/HubSpot ones. No assertion was weakened.
+ *
+ * Stripe is SOURCE-ONLY (`role: 'source'`, no `outbound_profile`/`outbound_event`
+ * — see `stripe.constants.ts`), so this uses `proveSourceDefinitionCapabilities`
+ * (not `proveDefinitionCapabilities`, which asserts a bidirectional shape) and
+ * registers ONLY `registry.registerSource(adapter)` — never `registerDestination`.
+ * `proveDestinationIdempotencyAndCorrelation` is intentionally NOT run: Stripe has
+ * no `DestinationAdapter` to write through — there is no destination proof that
+ * applies here, not a weakened one.
  */
-process.env.INTEGRATIONS_ENCRYPTION_KEY ??= 'order061_hubspot_contract_kit_test_key_dev_only';
+process.env.INTEGRATIONS_ENCRYPTION_KEY ??= 'order062_stripe_contract_kit_test_key_dev_only';
+process.env.STRIPE_SECRET_KEY ??= 'sk_test_order062_contract_kit';
+process.env.STRIPE_CONNECT_CLIENT_ID ??= 'ca_test_order062_contract_kit';
+process.env.STRIPE_OAUTH_STATE_SECRET ??= 'order062_stripe_contract_kit_oauth_state_secret';
 
 let reachable: boolean | undefined;
 async function checkReachable(): Promise<boolean> {
@@ -77,9 +85,9 @@ async function checkReachable(): Promise<boolean> {
 }
 
 const STAMP = Date.now();
-const WS = `test_ws_hubspot_kit_${STAMP}`;
+const WS = `test_ws_stripe_kit_${STAMP}`;
 
-test('Connector Framework contract kit: shared proofs PASS against the REAL HubSpot adapter', async (t) => {
+test('Connector Framework contract kit: shared proofs PASS against the REAL Stripe adapter', async (t) => {
   if (!(await checkReachable())) {
     t.skip('DATABASE_URL não alcançável neste ambiente — ver HANDOFF (Postgres dev unreachable)');
     return;
@@ -97,23 +105,22 @@ test('Connector Framework contract kit: shared proofs PASS against the REAL HubS
   const crm = new CrmWriteService(db, suppression);
   const mapping = new CanonicalMappingService(identityGraph, customerContext, commerce, billing, crm);
   const orchestrator = new ConnectorSyncOrchestratorService(db, connections, registry, mapping);
+  // Constructed only to satisfy `ConnectorContractHarness`'s shape — Stripe never
+  // registers a `DestinationAdapter`, so no destination proof runs against it.
   const destination = new ConnectorDestinationService(db, connections, registry, audit);
   const webhook = new ConnectorWebhookService(db, connections, registry, mapping);
 
-  const state = createHubspotDriverState();
-  const driver = createHubspotDriver(state);
-  const fetchImpl = createHubspotFetch(state);
-  const adapter = createHubspotAdapter(fetchImpl, state.pageSize);
+  const state = createStripeDriverState();
+  const driver = createStripeDriver(state);
+  const fetchImpl = createStripeFetch(state);
+  const adapter = createStripeAdapter(fetchImpl);
   registry.registerSource(adapter);
-  registry.registerDestination(adapter);
+  // No registry.registerDestination(adapter) — Stripe is source-only.
 
-  const harness: ConnectorContractHarness = { workspaceId: WS, provider: HUBSPOT_PROVIDER, registry, connections, orchestrator, destination, webhook };
+  const harness: ConnectorContractHarness = { workspaceId: WS, provider: STRIPE_PROVIDER, registry, connections, orchestrator, destination, webhook };
 
   try {
-    // capability-gated: HubSpot's OWN definition happens to satisfy the kit's
-    // generic bidirectional-with-backfill/incremental/outbound shape unchanged —
-    // no gating needed for this proof.
-    await t.test('definition declares capabilities independently (source/destination/bidirectional)', () => proveDefinitionCapabilities(harness));
+    await t.test('definition declares source-only capabilities (initial_backfill/incremental_pull/webhook_ingest, no outbound)', () => proveSourceDefinitionCapabilities(harness));
     await t.test('connection lifecycle: draft → authorizing → connected → disconnected', () => proveConnectionLifecycle(harness, driver));
     await t.test('credential failure is separate from sync health', () => proveCredentialFailureSeparateFromSyncHealth(harness, driver));
     await t.test('initial backfill + durable checkpoint resume', () => proveBackfillCheckpointResume(harness, driver));
@@ -122,12 +129,14 @@ test('Connector Framework contract kit: shared proofs PASS against the REAL HubS
     await t.test('rate limit reschedules without dropping records', () => proveRateLimitReschedules(harness, driver));
     await t.test('duplicate webhook delivery is harmless', () => proveDuplicateWebhookIsHarmless(harness, driver));
     await t.test('invalid webhook signature fails closed', () => proveInvalidWebhookSignatureRejected(harness, driver));
-    await t.test('destination write idempotency + correlation + external result id', () => proveDestinationIdempotencyAndCorrelation(harness, driver));
+    // proveDestinationIdempotencyAndCorrelation intentionally OMITTED — Stripe has
+    // no DestinationAdapter/outbound capability (source-only per Order 062 scope);
+    // there is nothing to write through, so no substitute proof is added either.
 
     await t.test('canonical mapping actually wrote through Identity Graph v2 / Customer Context (no adapter-local identity)', async () => {
       const rows = await db.select().from(customerIdentifiers).where(eq(customerIdentifiers.workspaceId, WS));
-      const hubspotRows = rows.filter((r) => r.providerNamespace === HUBSPOT_PROVIDER);
-      assert.ok(hubspotRows.length > 0, 'a projeção deve ter criado identifiers reais via IdentityGraphService');
+      const stripeRows = rows.filter((r) => r.providerNamespace === STRIPE_PROVIDER);
+      assert.ok(stripeRows.length > 0, 'a projeção deve ter criado identifiers reais via IdentityGraphService');
     });
   } finally {
     await db.delete(connectorDestinationWrites).where(eq(connectorDestinationWrites.workspaceId, WS)).catch(() => undefined);

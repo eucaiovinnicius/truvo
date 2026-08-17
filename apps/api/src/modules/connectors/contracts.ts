@@ -122,6 +122,77 @@ export interface NormalizedCommerceOrder {
   refunds?: NormalizedCommerceRefund[];
 }
 
+/** Order 062 — provider-neutral billing facts. These are intentionally separate
+ * from commerce orders: a recurring invoice/payment is billing context, not an
+ * ecommerce purchase by default. Provider ids remain the replay-safe natural keys. */
+export interface NormalizedBillingSubscription {
+  providerNamespace: string;
+  providerSubscriptionId: string;
+  providerCustomerId?: string;
+  status: string;
+  productReference?: string;
+  priceReference?: string;
+  quantity?: number;
+  startedAt?: string;
+  trialStartAt?: string;
+  trialEndAt?: string;
+  currentPeriodStart?: string;
+  currentPeriodEnd?: string;
+  cancelAt?: string;
+  cancelledAt?: string;
+  endedAt?: string;
+  collectionMethod?: string;
+  paymentBehavior?: string;
+  sourceUpdatedAt: string;
+}
+
+export interface NormalizedBillingInvoice {
+  providerNamespace: string;
+  providerInvoiceId: string;
+  providerCustomerId?: string;
+  providerSubscriptionId?: string;
+  status: string;
+  currency: string;
+  amountDue?: number;
+  amountPaid?: number;
+  amountRemaining?: number;
+  createdAt?: string;
+  finalizedAt?: string;
+  paidAt?: string;
+  voidedAt?: string;
+  uncollectibleAt?: string;
+  sourceUpdatedAt: string;
+}
+
+export interface NormalizedBillingPayment {
+  providerNamespace: string;
+  providerPaymentId: string;
+  providerCustomerId?: string;
+  providerSubscriptionId?: string;
+  providerInvoiceId?: string;
+  status: string;
+  amount: number;
+  currency: string;
+  failureCode?: string;
+  failureMessage?: string;
+  succeededAt?: string;
+  failedAt?: string;
+  sourceUpdatedAt: string;
+}
+
+export interface NormalizedBillingAdjustment {
+  providerNamespace: string;
+  providerAdjustmentId: string;
+  providerCustomerId?: string;
+  providerPaymentId?: string;
+  providerInvoiceId?: string;
+  status: string;
+  amount: number;
+  currency: string;
+  occurredAt: string;
+  sourceUpdatedAt: string;
+}
+
 /** Order 061 — provider-neutral CRM account/company (see `packages/db/src/schema/crm.ts`).
  * `traits` carries ONLY the workspace's explicitly configured/selected properties
  * — never an indiscriminate copy of every custom property (Order 061 §2). */
@@ -211,6 +282,10 @@ export interface NormalizedRecord {
   identifiers: NormalizedIdentifier[];
   traits?: NormalizedTrait[];
   commerceOrder?: NormalizedCommerceOrder;
+  billingSubscription?: NormalizedBillingSubscription;
+  billingInvoice?: NormalizedBillingInvoice;
+  billingPayment?: NormalizedBillingPayment;
+  billingAdjustment?: NormalizedBillingAdjustment;
   crmAccount?: NormalizedCrmAccount;
   crmDeal?: NormalizedCrmDeal;
   crmAssociations?: NormalizedCrmAssociation[];
@@ -268,6 +343,7 @@ export interface OAuthAuthorizeUrlResult {
 export interface OAuthExchangeInput {
   code: string;
   redirectUri: string;
+  state?: string;
 }
 export interface OAuthExchangeResult {
   /** Opaque credential bag — stored via the SAME `ConnectorConnectionService.setCredentials`
@@ -294,6 +370,10 @@ export interface SourceAdapter {
   normalizeWebhook?(connection: ConnectorConnection, request: RawWebhookRequest): NormalizedRecord[] | null;
   getOAuthAuthorizeUrl?(connection: ConnectorConnection, redirectUri: string): OAuthAuthorizeUrlResult;
   exchangeOAuthCode?(connection: ConnectorConnection, input: OAuthExchangeInput): Promise<OAuthExchangeResult>;
+  /** Optional provider revocation hook. It is deliberately separate from a sync
+   * failure: revoked authorization invalidates credentials, whereas a 5xx does not. */
+  deauthorize?(connection: ConnectorConnection, credentials: Record<string, unknown>): Promise<void>;
+  isAuthorizationRevokedWebhook?(connection: ConnectorConnection, request: RawWebhookRequest): boolean;
 }
 
 export interface DestinationAdapter {

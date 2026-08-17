@@ -129,13 +129,13 @@ export class ConnectorsController {
   async oauthCallback(
     @Param('id') workspaceId: string,
     @Param('connectionId') connectionId: string,
-    @Body() body: { code: string; redirect_uri: string },
+    @Body() body: { code: string; redirect_uri: string; state?: string },
     @CurrentUser() user: { id: string; email?: string },
   ) {
     const connection = await this.connections.get(workspaceId, connectionId);
     const adapter = this.registry.getSourceAdapter(connection.provider);
     if (!adapter?.exchangeOAuthCode) throw new BadRequestException(`provider '${connection.provider}' não usa autorização OAuth`);
-    const exchanged = await adapter.exchangeOAuthCode(connection, { code: body.code, redirectUri: body.redirect_uri });
+    const exchanged = await adapter.exchangeOAuthCode(connection, { code: body.code, redirectUri: body.redirect_uri, state: body.state });
     await this.connections.setCredentials(workspaceId, connectionId, exchanged.credentials, user);
     if (exchanged.connectionMetadata) await this.connections.updateConfig(workspaceId, connectionId, exchanged.connectionMetadata);
     return { ok: true, connectionMetadata: exchanged.connectionMetadata };
@@ -161,7 +161,7 @@ export class ConnectorWebhooksController {
     @Req() req: RawBodyRequest<Request>,
   ) {
     const headers = Object.fromEntries(Object.entries(req.headers)) as Record<string, string | string[] | undefined>;
-    const deliveryId = (headers['x-shopify-webhook-id'] ?? headers['x-hubspot-request-id']) as string | undefined;
+    const deliveryId = (headers['x-shopify-webhook-id'] ?? headers['x-hubspot-request-id'] ?? headers['stripe-event-id']) as string | undefined;
     // Same `requestUrl` construction the legacy M4 `webhooks.service.ts` already
     // uses for HubSpot's v3 signature scheme (signs over METHOD+URL+BODY+TIMESTAMP)
     // — trusts the 1st proxy hop, matching `main.ts`'s `trust proxy` setting.

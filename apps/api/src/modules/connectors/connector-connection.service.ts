@@ -156,6 +156,15 @@ export class ConnectorConnectionService {
    */
   async updateConfig(workspaceId: string, id: string, patch: Record<string, unknown>): Promise<ConnectorConnection> {
     const existing = await this.findOwnedRaw(workspaceId, id);
+    // A provider account/portal/shop identity is an authorization result, never a
+    // user-editable preference. Refuse a later callback/config patch that would
+    // silently retarget an existing connection to another represented account.
+    for (const key of ['stripe_account_id', 'hubspot_portal_id', 'shop_domain']) {
+      const previous = (existing.config as Record<string, unknown>)[key];
+      if (previous !== undefined && patch[key] !== undefined && patch[key] !== previous) {
+        throw new BadRequestException(`immutable connection metadata '${key}' cannot be changed`);
+      }
+    }
     const [row] = await this.db
       .update(connectorConnections)
       .set({ config: { ...(existing.config as Record<string, unknown>), ...patch }, updatedAt: new Date() })
@@ -234,7 +243,11 @@ export class ConnectorConnectionService {
   }
 
   async disconnect(workspaceId: string, id: string, actor?: ConnectorActor): Promise<ConnectorConnection> {
-    await this.findOwnedRaw(workspaceId, id);
+    const existing = await this.findOwnedRaw(workspaceId, id);
+    const adapter = this.registry.getSourceAdapter(existing.provider);
+    if (adapter?.deauthorize && existing.credentialsEncrypted) {
+      await adapter.deauthorize(this.sanitize(existing), decryptJson(existing.credentialsEncrypted));
+    }
     const [row] = await this.db
       .update(connectorConnections)
       .set({ lifecycleState: 'disconnected', updatedAt: new Date() })
@@ -252,6 +265,11 @@ export class ConnectorConnectionService {
     });
 
     return this.sanitize(row!);
+  }
+
+  /** Provider revocation is a credential fact, not a generic sync-health issue. */
+  async markAuthorizationRevoked(workspaceId: string, id: string): Promise<void> {
+    await this.db.update(connectorConnections).set({ credentialStatus: 'invalid', lifecycleState: 'disconnected', lastError: 'provider authorization revoked', updatedAt: new Date() }).where(and(eq(connectorConnections.workspaceId, workspaceId), eq(connectorConnections.id, id)));
   }
 
   async remove(workspaceId: string, id: string, actor?: ConnectorActor): Promise<void> {

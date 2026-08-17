@@ -38,6 +38,18 @@ export async function proveDefinitionCapabilities(h: ConnectorContractHarness): 
   assert.equal(def!.role, 'bidirectional');
 }
 
+/** Applicable subset for a real source-only adapter. Kept in the shared kit so
+ * Stripe/Shopify do not replace framework assertions with provider-only ones. */
+export async function proveSourceDefinitionCapabilities(h: ConnectorContractHarness): Promise<void> {
+  const def = h.registry.getDefinition(h.provider);
+  assert.ok(def, 'provider deve estar registrado');
+  assert.equal(def!.role, 'source');
+  assert.ok(def!.capabilities.includes('initial_backfill'));
+  assert.ok(def!.capabilities.includes('incremental_pull'));
+  assert.ok(def!.capabilities.includes('webhook_ingest'));
+  assert.ok(!def!.capabilities.includes('outbound_profile'));
+}
+
 export async function proveConnectionLifecycle(h: ConnectorContractHarness, driver: ConnectorTestDriver): Promise<void> {
   const conn = await freshConnection(h);
   assert.equal(conn.lifecycleState, 'draft');

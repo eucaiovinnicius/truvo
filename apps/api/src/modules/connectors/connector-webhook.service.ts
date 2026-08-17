@@ -49,9 +49,16 @@ export class ConnectorWebhookService {
       structuredLog('warn', 'connector_webhook_invalid_signature', { workspaceId, connectionId, provider: connection.provider });
       return { status: 'rejected', reason: 'invalid_signature' };
     }
+    if (adapter.isAuthorizationRevokedWebhook?.(connection, request)) {
+      await this.connections.markAuthorizationRevoked(workspaceId, connectionId);
+      return { status: 'ok', reason: 'authorization_revoked' };
+    }
 
     // 2. durable + idempotent job. deliveryId absent → derive one from the body (best-effort).
-    const deliveryId = request.deliveryId ?? deterministicId('whd', JSON.stringify(request.body ?? {}));
+    const stripeEventId = connection.provider === 'stripe' && request.body && typeof request.body === 'object'
+      ? (request.body as { id?: unknown }).id
+      : undefined;
+    const deliveryId = request.deliveryId ?? (typeof stripeEventId === 'string' ? stripeEventId : undefined) ?? deterministicId('whd', JSON.stringify(request.body ?? {}));
     const runId = deterministicId('csr', workspaceId, connectionId, 'webhook_ingest', deliveryId);
     const [inserted] = await this.db
       .insert(connectorSyncRuns)

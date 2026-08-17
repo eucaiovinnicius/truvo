@@ -92,6 +92,15 @@ export class ConnectorSyncOrchestratorService {
     kind: Extract<ConnectorSyncRunKind, 'backfill' | 'incremental'>,
   ): Promise<SyncRunResult> {
     const { connection, credentials } = await this.connections.getConnectionWithCredentials(workspaceId, connectionId);
+    // A disconnected connection (explicit disconnect() or a provider-side
+    // revocation via `markAuthorizationRevoked`) must never be blindly polled —
+    // mirrors how `credentialStatus`/`lifecycleState` already gate other actions
+    // in `ConnectorConnectionService` (e.g. `testConnection`'s lifecycle-advance
+    // check). Only 'disconnected' is refused here: 'error' (a failed sync) must
+    // still be retryable — that is the whole point of the retry/backoff model below.
+    if (connection.lifecycleState === 'disconnected') {
+      throw new BadRequestException(`connection '${connectionId}' is disconnected — sync refused`);
+    }
     const adapter = this.registry.getSourceAdapter(connection.provider);
     if (!adapter) throw new BadRequestException(`provider '${connection.provider}' não tem SourceAdapter registrado`);
     const pull = kind === 'backfill' ? adapter.initialBackfill : adapter.incrementalPull;

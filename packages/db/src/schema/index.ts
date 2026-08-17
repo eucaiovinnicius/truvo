@@ -6,6 +6,7 @@ export * from './identity-graph'; // Order 045 — identity conflicts + auditabl
 export * from './connectors'; // Order 050 — provider-neutral Connector Framework
 export * from './suppression'; // Order 055 — identity suppression against reconstruction
 export * from './commerce'; // Order 060 — provider-neutral commerce (orders/line items/refunds)
+export * from './billing-context'; // Order 062 — provider-neutral billing/subscription context
 export * from './crm'; // Order 061 — provider-neutral CRM (accounts/deals/associations)
 export * from './audit'; // Order 035 — audit_log (security/admin change trail)
 export * from './data-lifecycle'; // Order 035 — data_lifecycle_requests (export/deletion orchestration)
