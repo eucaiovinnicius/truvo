@@ -14,7 +14,7 @@ import type {
   SourcePullResult,
   SyncCheckpoint,
 } from '../../contracts';
-import { KlaviyoApiClient, type KlaviyoCredentials, type KlaviyoFetch } from './klaviyo.api-client';
+import { KlaviyoApiClient, refreshKlaviyoCredentials, shouldRefreshKlaviyoCredentials, type KlaviyoCredentials, type KlaviyoFetch } from './klaviyo.api-client';
 import {
   KLAVIYO_DEFAULT_CUSTOM_EVENT_METRIC_NAME,
   KLAVIYO_DEFAULT_PAGE_SIZE,
@@ -35,12 +35,11 @@ import { mapKlaviyoEvent, mapKlaviyoProfile, type ConfiguredProperties, type Kla
  * `NormalizedRecord`s through the SAME contracts every other adapter proves
  * against the shared `connector-contract-kit.ts`.
  *
- * Deliberately NO `webhook_ingest` capability: Klaviyo has no general-purpose
- * developer webhooks API comparable to Stripe/HubSpot/Shopify's, and Order 063's
- * own required-runtime-proof list never mentions webhook signature verification
- * for Klaviyo — only polling/backfill/incremental. `verifyWebhook`/
- * `normalizeWebhook` are therefore left unimplemented (optional on
- * `SourceAdapter`), not stubbed out.
+ * Deliberately NO `webhook_ingest` capability today: Klaviyo documents a System
+ * Webhooks API, but it is restricted to Advanced KDP customers/allowlisted app
+ * partners. Until Truvo has that access and a tested receiver, ingestion remains
+ * poll/reconciliation-first. `verifyWebhook`/`normalizeWebhook` are therefore
+ * left unimplemented (optional on `SourceAdapter`), not stubbed out.
  */
 
 export interface KlaviyoConfig {
@@ -232,6 +231,11 @@ function retryableStatus(status: unknown): boolean {
 export function createKlaviyoAdapter(fetchImpl: KlaviyoFetch = fetch, pageSize: number = KLAVIYO_DEFAULT_PAGE_SIZE): SourceAdapter & DestinationAdapter {
   return {
     definition: DEFINITION,
+    oauthRefresh: {
+      shouldRefreshOAuthCredentials: (credentials) => shouldRefreshKlaviyoCredentials(credentialsOf(credentials)),
+      refreshOAuthCredentials: async (_connection, credentials) => refreshKlaviyoCredentials(credentialsOf(credentials), fetchImpl) as unknown as Record<string, unknown>,
+      isOAuthRefreshReauthorizationFailure: (error) => Boolean((error as { reauthorizationRequired?: boolean }).reauthorizationRequired),
+    },
     testConnection: (connection, credentials) => testConnection(connection, credentials, fetchImpl),
     initialBackfill: (connection, credentials, checkpoint) => pull(connection, credentials, checkpoint, fetchImpl, false, pageSize),
     incrementalPull: (connection, credentials, checkpoint) => pull(connection, credentials, checkpoint, fetchImpl, true, pageSize),
@@ -307,6 +311,7 @@ export function createKlaviyoAdapter(fetchImpl: KlaviyoFetch = fetch, pageSize: 
           await client.patch(`/api/profiles/${profileId}`, { data: { type: 'profile', id: profileId, attributes: { properties } } });
           return { status: 'sent', externalResultId: profileId };
         } catch (err) {
+          if ((err as { status?: number }).status === 401) throw err;
           return { status: 'failed', retryable: retryableStatus((err as { status?: number }).status), error: (err as Error).message };
         }
       }
@@ -339,6 +344,7 @@ export function createKlaviyoAdapter(fetchImpl: KlaviyoFetch = fetch, pageSize: 
           // `externalResultId` stays absent rather than fabricated.
           return { status: 'sent' };
         } catch (err) {
+          if ((err as { status?: number }).status === 401) throw err;
           return { status: 'failed', retryable: retryableStatus((err as { status?: number }).status), error: (err as Error).message };
         }
       }

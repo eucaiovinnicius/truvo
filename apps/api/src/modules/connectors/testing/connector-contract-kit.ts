@@ -160,13 +160,22 @@ export async function provePermanentErrorStops(h: ConnectorContractHarness, driv
   assert.equal(result.status, 'failed', 'erro permanente (401) deve ser terminal, visível');
 
   const afterFailure = await h.connections.get(h.workspaceId, conn.id);
-  assert.equal(afterFailure.lifecycleState, 'error');
+  // OAuth providers may distinguish a revoked/invalid refresh credential from a
+  // normal 401 by moving the connection to explicit reauthorization-required
+  // (`disconnected`). Static-key providers retain the legacy `error` state.
+  assert.ok(['error', 'disconnected'].includes(afterFailure.lifecycleState));
   assert.equal(afterFailure.credentialStatus, 'invalid', '401 É uma falha de credencial genuína — diferente de uma falha de sync qualquer');
 
-  // no infinite retry: re-invoking returns the SAME terminal result from cache, never retries.
-  const replay = await h.orchestrator.runBackfill(h.workspaceId, conn.id, stream);
-  assert.equal(replay.status, 'failed');
-  assert.equal(replay.replayedFromCache, true);
+  // A revoked OAuth credential is explicitly disconnected and must not be
+  // polled again. Other permanent failures remain replayable from the terminal
+  // ledger row without another provider call.
+  if (afterFailure.lifecycleState === 'disconnected') {
+    await assert.rejects(() => h.orchestrator.runBackfill(h.workspaceId, conn.id, stream));
+  } else {
+    const replay = await h.orchestrator.runBackfill(h.workspaceId, conn.id, stream);
+    assert.equal(replay.status, 'failed');
+    assert.equal(replay.replayedFromCache, true);
+  }
 }
 
 export async function proveRateLimitReschedules(h: ConnectorContractHarness, driver: ConnectorTestDriver): Promise<void> {

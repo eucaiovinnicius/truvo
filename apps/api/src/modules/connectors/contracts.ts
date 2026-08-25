@@ -413,6 +413,21 @@ export interface OAuthExchangeResult {
   connectionMetadata?: Record<string, unknown>;
 }
 
+/**
+ * Provider-neutral OAuth refresh seam.  The Connector Framework owns encrypted
+ * persistence and connection-scoped locking; an adapter owns only its provider's
+ * refresh grant.  Keeping that boundary here prevents each OAuth provider from
+ * inventing a second credential store or a process-local refresh lock.
+ */
+export interface OAuthRefreshAdapter {
+  /** True when the persisted credential should be renewed before the next call. */
+  shouldRefreshOAuthCredentials(credentials: Record<string, unknown>): boolean;
+  /** Exchanges the current credential for its replacement. Must not mutate input. */
+  refreshOAuthCredentials(connection: ConnectorConnection, credentials: Record<string, unknown>): Promise<Record<string, unknown>>;
+  /** Invalid/revoked refresh credentials need an explicit new authorization. */
+  isOAuthRefreshReauthorizationFailure?(error: unknown): boolean;
+}
+
 export interface SourceAdapter {
   definition: ConnectorDefinition;
   testConnection(connection: ConnectorConnection, credentials: Record<string, unknown>): Promise<ConnectionTestResult>;
@@ -430,6 +445,7 @@ export interface SourceAdapter {
   normalizeWebhook?(connection: ConnectorConnection, request: RawWebhookRequest): NormalizedRecord[] | null;
   getOAuthAuthorizeUrl?(connection: ConnectorConnection, redirectUri: string): OAuthAuthorizeUrlResult;
   exchangeOAuthCode?(connection: ConnectorConnection, input: OAuthExchangeInput): Promise<OAuthExchangeResult>;
+  oauthRefresh?: OAuthRefreshAdapter;
   /** Optional provider revocation hook. It is deliberately separate from a sync
    * failure: revoked authorization invalidates credentials, whereas a 5xx does not. */
   deauthorize?(connection: ConnectorConnection, credentials: Record<string, unknown>): Promise<void>;
@@ -444,4 +460,5 @@ export interface DestinationAdapter {
     credentials: Record<string, unknown>,
     input: DestinationWriteInput,
   ): Promise<DestinationWriteResult>;
+  oauthRefresh?: OAuthRefreshAdapter;
 }

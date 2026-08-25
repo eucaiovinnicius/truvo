@@ -25,6 +25,8 @@ export interface KlaviyoDriverState {
    * queue, shifted in call order — mirrors `hubspot.test-driver.ts`'s `pullQueue`. */
   pullQueue: Response[];
   nextPullBehavior: KlaviyoPullBehavior;
+  /** A forced permanent auth failure represents credentials that cannot refresh. */
+  nextRefreshInvalid: boolean;
   pullCallCount: number;
   nextWriteBehavior: 'success' | 'transient_error' | 'permanent_error';
   writeCallCount: number;
@@ -37,6 +39,7 @@ export function createKlaviyoDriverState(overrides: Partial<KlaviyoDriverState> 
   return {
     pullQueue: [],
     nextPullBehavior: 'success',
+    nextRefreshInvalid: false,
     pullCallCount: 0,
     nextWriteBehavior: 'success',
     writeCallCount: 0,
@@ -62,6 +65,11 @@ export function createKlaviyoFetch(state: KlaviyoDriverState): KlaviyoFetch {
     const method = init?.method ?? 'GET';
 
     if (url.includes('/oauth/token')) {
+      const refreshToken = new URLSearchParams(String(init?.body ?? '')).get('refresh_token');
+      if (state.nextRefreshInvalid || refreshToken === 'contract_kit_invalid_refresh') {
+        state.nextRefreshInvalid = false;
+        return jsonResponse({ error: 'invalid_grant' }, 400);
+      }
       return jsonResponse({ access_token: state.validAccessToken, refresh_token: 'contract_kit_klaviyo_refresh', expires_in: 3600, token_type: 'Bearer' });
     }
 
@@ -105,6 +113,7 @@ export function createKlaviyoDriver(state: KlaviyoDriverState): ConnectorTestDri
   return {
     forceNextPull: (behavior) => {
       state.nextPullBehavior = behavior as KlaviyoPullBehavior;
+      state.nextRefreshInvalid = behavior === 'permanent_error';
     },
     forceNextWrite: (behavior) => {
       state.nextWriteBehavior = behavior;
@@ -127,7 +136,7 @@ export function createKlaviyoDriver(state: KlaviyoDriverState): ConnectorTestDri
       }
     },
     validCredentials: () => ({ access_token: state.validAccessToken, refresh_token: 'contract_kit_klaviyo_refresh', expires_at: FAR_FUTURE(), klaviyo_account_id: state.accountId }),
-    invalidCredentials: () => ({ access_token: 'contract_kit_wrong_klaviyo_token', refresh_token: 'contract_kit_klaviyo_refresh', expires_at: FAR_FUTURE(), klaviyo_account_id: state.accountId }),
+    invalidCredentials: () => ({ access_token: 'contract_kit_wrong_klaviyo_token', refresh_token: 'contract_kit_invalid_refresh', expires_at: FAR_FUTURE(), klaviyo_account_id: state.accountId }),
     webhookRequest: (): RawWebhookRequest => {
       throw new Error('Klaviyo declares no webhook_ingest capability — verifyWebhook/normalizeWebhook are intentionally unimplemented (see klaviyo.adapter.ts)');
     },

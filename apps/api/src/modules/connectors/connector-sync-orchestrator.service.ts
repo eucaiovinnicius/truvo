@@ -91,7 +91,9 @@ export class ConnectorSyncOrchestratorService {
     streamKey: string,
     kind: Extract<ConnectorSyncRunKind, 'backfill' | 'incremental'>,
   ): Promise<SyncRunResult> {
-    const { connection, credentials } = await this.connections.getConnectionWithCredentials(workspaceId, connectionId);
+    const initial = await this.connections.getConnectionWithCredentials(workspaceId, connectionId);
+    let connection = initial.connection;
+    let credentials = initial.credentials;
     // A disconnected connection (explicit disconnect() or a provider-side
     // revocation via `markAuthorizationRevoked`) must never be blindly polled —
     // mirrors how `credentialStatus`/`lifecycleState` already gate other actions
@@ -180,9 +182,31 @@ export class ConnectorSyncOrchestratorService {
 
     let pullResult: SourcePullResult;
     try {
+      const fresh = await this.connections.resolveOAuthCredentials(workspaceId, connectionId, adapter.oauthRefresh, {
+        observedAccessToken: typeof credentials.access_token === 'string' ? credentials.access_token : undefined,
+      });
+      connection = fresh.connection;
+      credentials = fresh.credentials;
       pullResult = await pull.call(adapter, connection, credentials, checkpoint);
     } catch (err) {
-      return this.handleFailure(workspaceId, connectionId, streamKey, runId, attempt, err);
+      // Local expiry metadata can be wrong (clock skew) or a token can be
+      // revoked early.  Retry exactly once after a refresh; never refresh for
+      // arbitrary 4xx/429 errors and never loop.
+      if ((err as { status?: number }).status === 401 && adapter.oauthRefresh) {
+        try {
+          const fresh = await this.connections.resolveOAuthCredentials(workspaceId, connectionId, adapter.oauthRefresh, {
+            force: true,
+            observedAccessToken: typeof credentials.access_token === 'string' ? credentials.access_token : undefined,
+          });
+          connection = fresh.connection;
+          credentials = fresh.credentials;
+          pullResult = await pull.call(adapter, connection, credentials, checkpoint);
+        } catch (refreshError) {
+          return this.handleFailure(workspaceId, connectionId, streamKey, runId, attempt, refreshError);
+        }
+      } else {
+        return this.handleFailure(workspaceId, connectionId, streamKey, runId, attempt, err);
+      }
     }
 
     const applied = await this.mapping.apply(workspaceId, connectionId, `connector.${connection.provider}`, pullResult.records, readOutcomeMappings(connection.config));
@@ -239,6 +263,9 @@ export class ConnectorSyncOrchestratorService {
     err: unknown,
   ): Promise<SyncRunResult> {
     const failure = classifyFailure(err);
+    const refreshFailure = Boolean((err as { oauthRefreshFailure?: boolean }).oauthRefreshFailure);
+    const reauthorizationRequired = Boolean((err as { reauthorizationRequired?: boolean }).reauthorizationRequired);
+    const errorReason = refreshFailure ? (reauthorizationRequired ? 'oauth_refresh_reauthorization_required' : 'oauth_refresh_failed') : failure.reason;
     const isRateLimit = failure.reason === 'http_429';
     const exhausted = attempt >= MAX_ATTEMPTS;
     const terminal = failure.kind === 'permanent' || exhausted;
@@ -252,7 +279,7 @@ export class ConnectorSyncOrchestratorService {
       .set({
         status,
         errorKind: failure.kind,
-        errorReason: failure.reason,
+        errorReason,
         nextRetryAt,
         finishedAt: terminal ? finishedAt : null,
       })
@@ -261,19 +288,23 @@ export class ConnectorSyncOrchestratorService {
     if (terminal) {
       await this.db
         .update(connectorSyncCheckpoints)
-        .set({ status: 'failed', lastError: failure.reason, updatedAt: finishedAt })
+        .set({ status: 'failed', lastError: errorReason, updatedAt: finishedAt })
         .where(and(eq(connectorSyncCheckpoints.workspaceId, workspaceId), eq(connectorSyncCheckpoints.connectionId, connectionId), eq(connectorSyncCheckpoints.streamKey, streamKey)));
-      await this.connections.applySyncOutcome(workspaceId, connectionId, {
-        state: 'error',
-        error: failure.reason,
-        authFailure: failure.reason.startsWith('http_401') || failure.reason === 'http_403',
-      });
+      if (reauthorizationRequired) {
+        await this.connections.markAuthorizationRevoked(workspaceId, connectionId);
+      } else {
+        await this.connections.applySyncOutcome(workspaceId, connectionId, {
+          state: 'error',
+          error: errorReason,
+          authFailure: failure.reason.startsWith('http_401') || failure.reason === 'http_403',
+        });
+      }
     } else {
       await this.connections.applySyncOutcome(workspaceId, connectionId, { state: isRateLimit ? 'degraded' : 'syncing', error: failure.reason });
     }
 
     metrics.increment('connector_sync_failures_total', { kind: failure.kind, terminal: String(terminal), rate_limited: String(isRateLimit) });
-    structuredLog('warn', 'connector_sync_failed', { workspaceId, connectionId, streamKey, attempt, terminal, rateLimited: isRateLimit, reason: failure.reason });
+    structuredLog('warn', 'connector_sync_failed', { workspaceId, connectionId, streamKey, attempt, terminal, rateLimited: isRateLimit, reason: errorReason, oauthRefreshFailure: refreshFailure });
 
     return {
       runId,

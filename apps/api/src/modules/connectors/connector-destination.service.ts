@@ -45,7 +45,9 @@ export class ConnectorDestinationService {
       return { status: existing.status === 'sent' ? 'sent' : 'failed', externalResultId: existing.externalResultId ?? undefined, error: existing.error ?? undefined };
     }
 
-    const { connection, credentials } = await this.connections.getConnectionWithCredentials(workspaceId, connectionId);
+    const initial = await this.connections.getConnectionWithCredentials(workspaceId, connectionId);
+    let connection = initial.connection;
+    let credentials = initial.credentials;
     const adapter = this.registry.getDestinationAdapter(connection.provider);
     if (!adapter) throw new BadRequestException(`provider '${connection.provider}' não tem DestinationAdapter registrado`);
 
@@ -57,10 +59,31 @@ export class ConnectorDestinationService {
       result = ineligible;
     } else {
       try {
+        const fresh = await this.connections.resolveOAuthCredentials(workspaceId, connectionId, adapter.oauthRefresh, {
+          observedAccessToken: typeof credentials.access_token === 'string' ? credentials.access_token : undefined,
+        });
+        connection = fresh.connection;
+        credentials = fresh.credentials;
         result = await adapter.write(connection, credentials, input);
       } catch (err) {
-        const failure = classifyFailure(err);
-        result = { status: 'failed', retryable: failure.kind === 'transient', error: failure.reason };
+        if ((err as { oauthRefreshFailure?: boolean }).oauthRefreshFailure) {
+          result = await this.refreshFailureResult(workspaceId, connectionId, err);
+        } else if ((err as { status?: number }).status === 401 && adapter.oauthRefresh) {
+          try {
+            const fresh = await this.connections.resolveOAuthCredentials(workspaceId, connectionId, adapter.oauthRefresh, {
+              force: true,
+              observedAccessToken: typeof credentials.access_token === 'string' ? credentials.access_token : undefined,
+            });
+            connection = fresh.connection;
+            credentials = fresh.credentials;
+            result = await adapter.write(connection, credentials, input);
+          } catch (refreshError) {
+            result = await this.refreshFailureResult(workspaceId, connectionId, refreshError);
+          }
+        } else {
+          const failure = classifyFailure(err);
+          result = { status: 'failed', retryable: failure.kind === 'transient', error: failure.reason };
+        }
       }
     }
 
@@ -95,6 +118,16 @@ export class ConnectorDestinationService {
     });
 
     return result;
+  }
+
+  private async refreshFailureResult(workspaceId: string, connectionId: string, error: unknown): Promise<DestinationWriteResult> {
+    const reauthorizationRequired = Boolean((error as { reauthorizationRequired?: boolean }).reauthorizationRequired);
+    if (reauthorizationRequired) await this.connections.markAuthorizationRevoked(workspaceId, connectionId);
+    return {
+      status: 'failed',
+      retryable: !reauthorizationRequired && classifyFailure(error).kind === 'transient',
+      error: reauthorizationRequired ? 'oauth_refresh_reauthorization_required' : 'oauth_refresh_failed',
+    };
   }
 
   /**

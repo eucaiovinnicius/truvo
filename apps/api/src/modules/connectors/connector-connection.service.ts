@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { connectorConnections, type ConnectorConnectionRow, type ConnectorCredentialStatus, type ConnectorLifecycleState, type ConnectorRole } from '@truvo/db';
 import { DRIZZLE, type Database } from '../auth/database.provider';
 import { AuditService } from '../audit/audit.service';
 import { ConnectorRegistryService } from './connector-registry.service';
 import { decryptJson, encryptJson } from './crypto';
-import type { ConnectionTestResult, ConnectorConnection } from './contracts';
+import type { ConnectionTestResult, ConnectorConnection, OAuthRefreshAdapter } from './contracts';
 
 export interface ConnectorActor {
   id?: string;
@@ -113,6 +113,78 @@ export class ConnectorConnectionService {
     const row = await this.findOwnedRaw(workspaceId, id);
     const credentials = row.credentialsEncrypted ? decryptJson(row.credentialsEncrypted) : {};
     return { connection: this.sanitize(row), credentials };
+  }
+
+  /**
+   * Refreshes an OAuth credential under a transaction-scoped Postgres advisory
+   * lock.  Klaviyo rotates its refresh token, so the lock intentionally covers
+   * the provider exchange and encrypted replacement as one serialized operation.
+   * A caller that waited for another refresh observes the new access token and
+   * reuses it instead of spending the now-invalid old refresh token.
+   */
+  async resolveOAuthCredentials(
+    workspaceId: string,
+    id: string,
+    refresh: OAuthRefreshAdapter | undefined,
+    options: { force?: boolean; observedAccessToken?: string } = {},
+  ): Promise<{ connection: ConnectorConnection; credentials: Record<string, unknown>; refreshed: boolean }> {
+    if (!refresh) {
+      const current = await this.getConnectionWithCredentials(workspaceId, id);
+      return { ...current, refreshed: false };
+    }
+
+    const lockScope = `connector-oauth-refresh:${workspaceId}:${id}`;
+    try {
+      const result = await this.db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${lockScope}))`);
+        const [row] = await tx
+          .select()
+          .from(connectorConnections)
+          .where(and(eq(connectorConnections.workspaceId, workspaceId), eq(connectorConnections.id, id)))
+          .limit(1);
+        if (!row) throw new NotFoundException('conexão de conector não encontrada');
+
+        const credentials = row.credentialsEncrypted ? decryptJson<Record<string, unknown>>(row.credentialsEncrypted) : {};
+        const storedAccessToken = typeof credentials.access_token === 'string' ? credentials.access_token : undefined;
+        // A forced recovery can race another caller that already refreshed. In
+        // that case the token change is the compare-and-swap proof: use it.
+        const anotherCallerRefreshed = Boolean(options.observedAccessToken && storedAccessToken && storedAccessToken !== options.observedAccessToken);
+        if (anotherCallerRefreshed || (!options.force && !refresh.shouldRefreshOAuthCredentials(credentials))) {
+          return { connection: this.sanitize(row), credentials, refreshed: false };
+        }
+
+        const nextCredentials = await refresh.refreshOAuthCredentials(this.sanitize(row), credentials);
+        const [updated] = await tx
+          .update(connectorConnections)
+          .set({
+            credentialsEncrypted: encryptJson(nextCredentials),
+            credentialStatus: 'valid',
+            lastCredentialCheckAt: new Date(),
+            lastError: null,
+            updatedAt: new Date(),
+          })
+          .where(and(eq(connectorConnections.workspaceId, workspaceId), eq(connectorConnections.id, id)))
+          .returning();
+        return { connection: this.sanitize(updated!), credentials: nextCredentials, refreshed: true };
+      });
+
+      if (result.refreshed) {
+        await this.audit.record({
+          workspaceId,
+          category: 'connector',
+          action: 'connector.credential_rotated',
+          resourceType: 'connector_connection',
+          resourceId: id,
+          metadata: { provider: result.connection.provider, reason: 'oauth_refresh' },
+        });
+      }
+      return result;
+    } catch (error) {
+      const wrapped = error as Error & { oauthRefreshFailure?: boolean; reauthorizationRequired?: boolean };
+      wrapped.oauthRefreshFailure = true;
+      wrapped.reauthorizationRequired = refresh.isOAuthRefreshReauthorizationFailure?.(error) ?? false;
+      throw wrapped;
+    }
   }
 
   /** Stores/rotates credentials — auditable, never logs the secret itself. Moves a

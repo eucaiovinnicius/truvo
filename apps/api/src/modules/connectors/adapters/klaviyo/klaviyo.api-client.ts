@@ -1,4 +1,4 @@
-import { KLAVIYO_API_BASE_URL, KLAVIYO_API_REVISION } from './klaviyo.constants';
+import { KLAVIYO_API_BASE_URL, KLAVIYO_API_REVISION, KLAVIYO_OAUTH_TOKEN_URL } from './klaviyo.constants';
 
 /**
  * Order 063 §1 — minimal fetch-based Klaviyo REST client: Bearer OAuth auth +
@@ -29,6 +29,53 @@ export interface KlaviyoCredentials {
   /** ISO timestamp — informational only (no proactive refresh implemented here). */
   expires_at?: string;
   klaviyo_account_id?: string;
+}
+
+const REFRESH_MARGIN_MS = 60_000;
+
+export function shouldRefreshKlaviyoCredentials(credentials: KlaviyoCredentials, now = Date.now()): boolean {
+  if (!credentials.access_token || !credentials.refresh_token) return false;
+  const expiresAt = Date.parse(credentials.expires_at ?? '');
+  return Number.isFinite(expiresAt) && expiresAt - now <= REFRESH_MARGIN_MS;
+}
+
+/** Provider-only refresh grant. Durable encrypted persistence and concurrency
+ * control are deliberately owned by ConnectorConnectionService. */
+export async function refreshKlaviyoCredentials(credentials: KlaviyoCredentials, fetchImpl: KlaviyoFetch = fetch): Promise<KlaviyoCredentials> {
+  if (!credentials.refresh_token) {
+    throw Object.assign(new Error('klaviyo oauth refresh requires a refresh token'), { status: 401, reauthorizationRequired: true });
+  }
+  const clientId = process.env.KLAVIYO_CLIENT_ID ?? '';
+  const clientSecret = process.env.KLAVIYO_CLIENT_SECRET ?? '';
+  if (!clientId || !clientSecret) {
+    throw Object.assign(new Error('Klaviyo OAuth client credentials are required for token refresh'), { status: 500 });
+  }
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: credentials.refresh_token,
+    client_id: clientId,
+    client_secret: clientSecret,
+  });
+  const response = await fetchImpl(KLAVIYO_OAUTH_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+  if (response.status === 400 || response.status === 401 || response.status === 403) {
+    throw Object.assign(new Error(`klaviyo oauth refresh reauthorization required (${response.status})`), { status: response.status, reauthorizationRequired: true });
+  }
+  if (!response.ok) throw Object.assign(new Error(`klaviyo oauth refresh failed (${response.status})`), { status: response.status });
+  const data = (await response.json()) as { access_token?: string; refresh_token?: string; expires_in?: number };
+  if (!data.access_token || !data.refresh_token || !Number.isFinite(data.expires_in)) {
+    throw Object.assign(new Error('klaviyo oauth refresh response missing rotated token material'), { status: 502 });
+  }
+  const expiresIn = data.expires_in!;
+  return {
+    ...credentials,
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
+  };
 }
 
 export class KlaviyoApiClient {

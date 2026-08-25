@@ -53,9 +53,8 @@ import { KLAVIYO_PROVIDER } from './klaviyo.constants';
  * weakened.
  *
  * Klaviyo declares NO `webhook_ingest` capability (see `klaviyo.adapter.ts`'s
- * DEFINITION comment): Klaviyo has no general-purpose developer webhooks API
- * comparable to Stripe/HubSpot/Shopify's, and Order 063's own required-runtime-
- * proof list never mentions webhook signature verification for Klaviyo — only
+ * DEFINITION comment): Klaviyo System Webhooks are restricted to eligible,
+ * allowlisted partners and are not enabled for Truvo today. Ingestion remains
  * polling/backfill/incremental. `proveDuplicateWebhookIsHarmless`/
  * `proveInvalidWebhookSignatureRejected` are therefore intentionally OMITTED —
  * there is nothing to verify, mirroring how `stripe.contract-kit.test.ts` omits

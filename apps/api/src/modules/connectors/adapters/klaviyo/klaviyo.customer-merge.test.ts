@@ -38,8 +38,8 @@ import { KLAVIYO_PROVIDER } from './klaviyo.constants';
  * never by editing an id directly) must converge onto the surviving customer on
  * the next sync, with no split/duplicate engagement state left behind. Mirrors
  * `stripe.customer-merge.test.ts`'s structure. Also covers privacy suppression
- * (Order 55) and tenant isolation under merge. Klaviyo has no webhook path
- * (see `klaviyo.adapter.ts`), so every scenario here goes through
+ * (Order 55) and tenant isolation under merge. Klaviyo's restricted System
+ * Webhooks API is not enabled for Truvo, so every scenario here goes through
  * `ConnectorSyncOrchestratorService.runBackfill`/`runIncremental` instead of
  * `ConnectorWebhookService.handleWebhook`.
  */
