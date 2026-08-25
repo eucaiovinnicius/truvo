@@ -42,3 +42,9 @@ export const discrepancyQuerySchema = z.object({
   end: dateInput,
 });
 export type DiscrepancyQueryDto = z.infer<typeof discrepancyQuerySchema>;
+
+export const qualityEvaluationSchema = z.object({
+  requiredDimensions: z.array(z.enum(['identity', 'events', 'commerce', 'crm', 'billing', 'engagement', 'acquisition', 'outcomes'])).max(8).optional(),
+  outcomeNamespace: z.string().trim().max(100).optional(), outcomeKey: z.string().trim().max(100).optional(), historicalWindowDays: z.number().int().min(0).max(3650).optional(),
+});
+export type QualityEvaluationDto = z.infer<typeof qualityEvaluationSchema>;

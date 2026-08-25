@@ -85,6 +85,13 @@
       "when": 1786927118650,
       "tag": "0011_mysterious_stryfe",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1787697354397,
+      "tag": "0012_flashy_maximus",
+      "breakpoints": true
     }
   ]
 }

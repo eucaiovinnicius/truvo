@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe';
 import { SupabaseAuthGuard } from '../auth/guards/supabase-auth.guard';
 import { WorkspaceGuard } from '../auth/guards/workspace.guard';
@@ -6,6 +6,7 @@ import { CurrentWorkspace, Roles } from '../auth/decorators';
 import { ReconciliationService } from './reconciliation.service';
 import { BotDetectionService } from './bot-detection.service';
 import { DiscrepancyService } from './discrepancy.service';
+import { EventContextQualityService } from './event-context-quality.service';
 import {
   botReportQuerySchema,
   discrepancyQuerySchema,
@@ -15,6 +16,7 @@ import {
   type DiscrepancyQueryDto,
   type ReconciliationQueryDto,
   type ReconciliationRunDto,
+  qualityEvaluationSchema, type QualityEvaluationDto,
 } from './dto/data-quality.dto';
 
 /**
@@ -36,6 +38,7 @@ export class DataQualityController {
     private readonly reconciliation: ReconciliationService,
     private readonly botDetection: BotDetectionService,
     private readonly discrepancy: DiscrepancyService,
+    private readonly quality: EventContextQualityService,
   ) {}
 
   @Get('reconciliation')
@@ -76,4 +79,10 @@ export class DataQualityController {
       persist: true,
     });
   }
+
+  @Get('quality') getQuality(@CurrentWorkspace('id') workspaceId: string) { return this.quality.getSummary(workspaceId); }
+  @Get('quality/issues') listQualityIssues(@Query('status') status: string | undefined, @CurrentWorkspace('id') workspaceId: string) { return this.quality.listIssues(workspaceId, status); }
+  @Get('quality/issues/:issueId') getQualityIssue(@Param('issueId') issueId: string, @CurrentWorkspace('id') workspaceId: string) { return this.quality.getIssue(workspaceId, issueId); }
+  @Post('quality/evaluate') @Roles('owner', 'admin') evaluateQuality(@Body(new ZodValidationPipe(qualityEvaluationSchema)) body: QualityEvaluationDto, @CurrentWorkspace('id') workspaceId: string) { return this.quality.evaluate(workspaceId, body); }
+  @Post('quality/radar-readiness') radarReadiness(@Body(new ZodValidationPipe(qualityEvaluationSchema)) body: QualityEvaluationDto, @CurrentWorkspace('id') workspaceId: string) { return this.quality.evaluate(workspaceId, body).then((result) => result.radarReadiness); }
 }

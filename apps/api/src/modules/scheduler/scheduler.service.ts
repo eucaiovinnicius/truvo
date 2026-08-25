@@ -11,6 +11,7 @@ import { withLeaderLock } from '../../common/leader-lock';
 import { BillingService } from '../billing/billing.service';
 import { CreativeAlertsService } from '../creatives/creative-alerts.service';
 import { ReconciliationService } from '../data-quality/reconciliation.service';
+import { EventContextQualityService } from '../data-quality/event-context-quality.service';
 import { AdsService } from '../creatives/ads/ads.service';
 import { RetentionEnforcementService } from '../data-lifecycle/retention-enforcement.service';
 import { ConnectorConnectionService } from '../connectors/connector-connection.service';
@@ -49,6 +50,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     private readonly billing: BillingService,
     private readonly creativeAlerts: CreativeAlertsService,
     private readonly reconciliation: ReconciliationService,
+    private readonly quality: EventContextQualityService,
     private readonly ads: AdsService,
     private readonly retention: RetentionEnforcementService,
     private readonly connectorConnections: ConnectorConnectionService,
@@ -66,6 +68,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       { name: 'billing-usage', intervalMs: 15 * 60_000, lockKey: 'truvo:cron:billing-usage', run: () => this.sweepPerWorkspace((ws) => this.billing.sweepUsage(ws)) },
       { name: 'creative-alerts', intervalMs: HOUR, lockKey: 'truvo:cron:creative-alerts', run: () => this.sweepPerWorkspace(async (ws) => { await this.creativeAlerts.getAlerts(ws, { persist: true }); }) },
       { name: 'reconciliation', intervalMs: HOUR, lockKey: 'truvo:cron:reconciliation', run: () => this.sweepPerWorkspace(async (ws) => { await this.reconciliation.getReconciliation(ws, undefined, undefined); }) },
+      { name: 'event-context-quality', intervalMs: HOUR, lockKey: 'truvo:cron:event-context-quality', run: () => this.sweepPerWorkspace(async (ws) => { await this.quality.evaluate(ws); }) },
       { name: 'ads-sync', intervalMs: 24 * HOUR, lockKey: 'truvo:cron:ads-sync', run: () => this.sweepPerWorkspace(async (ws) => { await this.ads.syncWorkspace(ws); }) },
       // Order 055 §5 — retention enforcement: skips a workspace entirely when it
       // has no configured tombstone_purge_after_days (fail-safe, no default).

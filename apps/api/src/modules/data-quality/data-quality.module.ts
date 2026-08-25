@@ -5,6 +5,7 @@ import { ReconciliationService } from './reconciliation.service';
 import { GatewayMetricsService } from './gateway-metrics.service';
 import { BotDetectionService } from './bot-detection.service';
 import { DiscrepancyService } from './discrepancy.service';
+import { EventContextQualityService } from './event-context-quality.service';
 
 /**
  * M14 — QUALIDADE DE DADOS & RECONCILIAÇÃO (lado da API).
@@ -19,7 +20,7 @@ import { DiscrepancyService } from './discrepancy.service';
 @Module({
   imports: [CreativesModule],
   controllers: [DataQualityController],
-  providers: [ReconciliationService, GatewayMetricsService, BotDetectionService, DiscrepancyService],
-  exports: [ReconciliationService, BotDetectionService],
+  providers: [ReconciliationService, GatewayMetricsService, BotDetectionService, DiscrepancyService, EventContextQualityService],
+  exports: [ReconciliationService, BotDetectionService, EventContextQualityService],
 })
 export class DataQualityModule {}
