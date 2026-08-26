@@ -1,0 +1,1 @@
+ALTER TABLE "radar_training_requests" ADD COLUMN "failure_category" text;
