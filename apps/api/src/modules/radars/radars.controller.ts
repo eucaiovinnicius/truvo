@@ -6,6 +6,7 @@ export class RadarsController { constructor(private readonly radars: RadarServic
   @Get('metadata/outcomes') outcomes(@CurrentWorkspace('id') ws:string) { return this.radars.availableOutcomes(ws); }
   @Get('metadata/audience') audienceMetadata() { return this.radars.audienceMetadata(); }
   @Get('metadata/destinations') destinations(@CurrentWorkspace('id') ws:string) { return this.radars.activationDestinations(ws); }
+  @Post('metadata/readiness-preview') @Roles('owner','admin','member') previewReadiness(@CurrentWorkspace('id') ws: string, @Body(new ZodValidationPipe(createRadarSchema.omit({ name: true }))) body: Omit<CreateRadarDto, 'name'>) { return this.radars.previewReadiness(ws, body); }
   @Post() @Roles('owner','admin','member') create(@CurrentWorkspace('id') ws: string, @Body(new ZodValidationPipe(createRadarSchema)) body: CreateRadarDto) { return this.radars.create(ws, body); }
   @Get() list(@CurrentWorkspace('id') ws: string) { return this.radars.list(ws); }
   @Get(':id') get(@CurrentWorkspace('id') ws: string, @Param('id') id: string) { return this.radars.get(ws,id); }

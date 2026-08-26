@@ -250,13 +250,8 @@ export class RadarService {
     return new Set([...groups[0]!].filter((customerId) => groups.every((group) => group.has(customerId))));
   }
 
-  async validate(workspaceId: string, id: string) {
-    const { radar, definition } = await this.get(workspaceId, id);
-    this.transition(radar.status, 'validating_data');
-    const [started] = await this.db.execute(sql`update radars set status='validating_data',updated_at=now() where workspace_id=${workspaceId} and id=${id} and current_definition_version=${definition.version} and status=${radar.status} returning id`);
-    if (!started) throw new BadRequestException('Radar definition changed before validation started');
-    this.logger.log(`Radar validation requested workspace=${workspaceId} radar=${id} definition=${definition.version}`);
-
+  /** Computes the same immutable-definition readiness used by validation, without writing Radar state. */
+  private async readinessForDefinition(workspaceId: string, definition: Pick<DefinitionRow, 'version' | 'audience_ast' | 'outcome_definition_id' | 'prediction_window_days' | 'activation_destination'>) {
     const eligibleIds = await this.audienceIds(workspaceId, definition.audience_ast);
     const privacyEligibleIds = await this.audienceIds(workspaceId, DEFAULT_AUDIENCE);
     const eligible = new Set([...eligibleIds].filter((customerId) => privacyEligibleIds.has(customerId)));
@@ -274,9 +269,7 @@ export class RadarService {
       }, null);
     const historyDays = earliest == null ? 0 : Math.max(0, Math.floor((Date.now() - earliest) / 86_400_000));
     const quality = await this.quality.evaluate(workspaceId, {
-      requiredDimensions: ['identity'],
-      outcomeKey: definition.outcome_definition_id,
-      historicalWindowDays: definition.prediction_window_days,
+      requiredDimensions: ['identity'], outcomeKey: definition.outcome_definition_id, historicalWindowDays: definition.prediction_window_days,
     });
     const policy = configuredPolicy();
     const reasonCodes: string[] = [];
@@ -287,30 +280,40 @@ export class RadarService {
     if (!targetOutcome) reasonCodes.push('target_outcome_unavailable');
     if (quality.criticalCount) reasonCodes.push('blocking_quality_issues');
     const status = reasonCodes.length ? 'insufficient_data' : 'ready_to_train';
-    this.transition('validating_data', status);
     const activationReadiness = await this.activationReadiness(workspaceId, definition.activation_destination);
-    const readiness = {
-      status,
-      definitionVersion: definition.version,
-      eligibleCustomerCount: eligible.size,
-      positiveOutcomeCount: positives,
-      negativeCount: negatives,
-      historyDays,
-      minimumHistoryDays: definition.prediction_window_days,
-      policy,
-      quality,
-      blockers: reasonCodes,
-      warnings: [
-        ...(quality.warningsCount ? ['quality_warnings'] : []),
-        ...(activationReadiness.status === 'unavailable' ? [activationReadiness.reasonCode] : []),
-      ],
-      reasonCodes,
-      activationReadiness,
+    return {
+      status, definitionVersion: definition.version, eligibleCustomerCount: eligible.size, positiveOutcomeCount: positives, negativeCount: negatives,
+      historyDays, minimumHistoryDays: definition.prediction_window_days, policy, quality, blockers: reasonCodes,
+      warnings: [...(quality.warningsCount ? ['quality_warnings'] : []), ...(activationReadiness.status === 'unavailable' ? [activationReadiness.reasonCode] : [])],
+      reasonCodes, activationReadiness,
     };
-    const [completed] = await this.db.execute(sql`update radars set status=${status},updated_at=now() where workspace_id=${workspaceId} and id=${id} and current_definition_version=${definition.version} and status='validating_data' returning id`);
+  }
+
+  async previewReadiness(workspaceId: string, input: {
+    outcomeDefinitionId: string; audienceAst?: unknown; predictionWindowDays: number; activationDestination?: ActivationDestination;
+  }) {
+    if (!RADAR_WINDOWS.includes(input.predictionWindowDays as 7)) throw new BadRequestException('Prediction window must be 7, 14, 30, or 60 days');
+    await this.assertOutcome(workspaceId, input.outcomeDefinitionId);
+    const activationDestination = await this.validateDestination(workspaceId, input.activationDestination);
+    return this.readinessForDefinition(workspaceId, {
+      version: 1, outcome_definition_id: input.outcomeDefinitionId, audience_ast: validateAudienceAst(input.audienceAst ?? DEFAULT_AUDIENCE),
+      prediction_window_days: input.predictionWindowDays, activation_destination: activationDestination,
+    });
+  }
+
+  async validate(workspaceId: string, id: string) {
+    const { radar, definition } = await this.get(workspaceId, id);
+    this.transition(radar.status, 'validating_data');
+    const [started] = await this.db.execute(sql`update radars set status='validating_data',updated_at=now() where workspace_id=${workspaceId} and id=${id} and current_definition_version=${definition.version} and status=${radar.status} returning id`);
+    if (!started) throw new BadRequestException('Radar definition changed before validation started');
+    this.logger.log(`Radar validation requested workspace=${workspaceId} radar=${id} definition=${definition.version}`);
+
+    const readiness = await this.readinessForDefinition(workspaceId, definition);
+    this.transition('validating_data', readiness.status);
+    const [completed] = await this.db.execute(sql`update radars set status=${readiness.status},updated_at=now() where workspace_id=${workspaceId} and id=${id} and current_definition_version=${definition.version} and status='validating_data' returning id`);
     if (!completed) throw new BadRequestException('Radar definition changed during validation');
     await this.db.execute(sql`update radar_definition_versions set readiness=${JSON.stringify(readiness)}::jsonb where workspace_id=${workspaceId} and radar_id=${id} and version=${definition.version}`);
-    this.logger.log(`Radar validation completed workspace=${workspaceId} radar=${id} definition=${definition.version} status=${status}`);
+    this.logger.log(`Radar validation completed workspace=${workspaceId} radar=${id} definition=${definition.version} status=${readiness.status}`);
     return readiness;
   }
 

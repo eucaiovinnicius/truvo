@@ -46,6 +46,7 @@ export default function TopBar({
     profiles: 'Customer 360',
     'data-quality': 'Data Quality & Reconciliação',
     reports: 'Relatórios Agendados',
+    radars: 'Radars de receita',
     tracking: 'SDK & Pixel',
     integrations: 'Central de Integrações',
     billing: 'Planos & Faturamento',

@@ -8,7 +8,8 @@
     "start": "next start --port 3000",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test lib/live-truthfulness.test.tsx"
+    "test": "tsx --test lib/live-truthfulness.test.tsx appui/components/radar-ui.test.ts"
+    ,"test:radars:e2e": "playwright test e2e/radars.e2e.ts"
   },
   "dependencies": {
     "@truvo/event-schema": "workspace:*",
@@ -25,6 +26,7 @@
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@types/react-is": "^19.2.0",
+    "@playwright/test": "^1.62.1",
     "autoprefixer": "^10.4.19",
     "eslint": "^8.57.0",
     "eslint-config-next": "14.2.5",

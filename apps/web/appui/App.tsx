@@ -19,6 +19,7 @@ import DataQualityView from './components/DataQualityView';
 import ReportsView from './components/ReportsView';
 import IntegrationsView from './components/IntegrationsView';
 import BillingView from './components/BillingView';
+import RadarsView from './components/RadarsView';
 import { ViewState, Funnel, CampaignRow, Integration, ApiKey, WorkspaceConfig, ProfileConfig } from './types';
 import { initialFunnels, initialCampaigns, initialIntegrations, initialApiKeys } from './data';
 import { useSession } from '@/lib/session';
@@ -314,6 +315,7 @@ export default function App() {
             {currentView === 'ai' && <AiView />}
             {currentView === 'profiles' && <ProfilesView />}
             {currentView === 'data-quality' && <DataQualityView />}
+            {currentView === 'radars' && <RadarsView />}
             {currentView === 'reports' && <ReportsView />}
             {currentView === 'integrations' && <IntegrationsView />}
             {currentView === 'billing' && <BillingView />}

@@ -9,6 +9,7 @@ export type ViewState =
   | 'ai'
   | 'profiles'
   | 'data-quality'
+  | 'radars'
   | 'reports'
   | 'tracking'
   | 'integrations'
