@@ -20,6 +20,7 @@
     "db:ch": "pnpm --filter @truvo/db ch:migrate",
     "db:setup": "pnpm db:pg && pnpm db:ch",
     "migration:validate": "node scripts/validate-migrations.mjs",
+    "test:propensity": "python -m unittest discover -s apps/propensity-worker/tests -t apps/propensity-worker -v",
     "release:identity": "node scripts/release-identity.mjs"
   },
   "devDependencies": {
