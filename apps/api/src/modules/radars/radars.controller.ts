@@ -3,6 +3,9 @@ import { CurrentWorkspace, Roles } from '../auth/decorators'; import { SupabaseA
 import { RadarService } from './radar.service'; import { createRadarSchema, patchRadarSchema, trainRadarSchema, type CreateRadarDto, type PatchRadarDto, type TrainRadarDto } from './radar.dto';
 @Controller('v1/radars') @UseGuards(SupabaseAuthGuard, WorkspaceGuard)
 export class RadarsController { constructor(private readonly radars: RadarService) {}
+  @Get('metadata/outcomes') outcomes(@CurrentWorkspace('id') ws:string) { return this.radars.availableOutcomes(ws); }
+  @Get('metadata/audience') audienceMetadata() { return this.radars.audienceMetadata(); }
+  @Get('metadata/destinations') destinations(@CurrentWorkspace('id') ws:string) { return this.radars.activationDestinations(ws); }
   @Post() @Roles('owner','admin','member') create(@CurrentWorkspace('id') ws: string, @Body(new ZodValidationPipe(createRadarSchema)) body: CreateRadarDto) { return this.radars.create(ws, body); }
   @Get() list(@CurrentWorkspace('id') ws: string) { return this.radars.list(ws); }
   @Get(':id') get(@CurrentWorkspace('id') ws: string, @Param('id') id: string) { return this.radars.get(ws,id); }
