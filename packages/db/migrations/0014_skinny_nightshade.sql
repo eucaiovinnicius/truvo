@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX IF NOT EXISTS "radar_training_requests_one_per_definition_uq" ON "radar_training_requests" USING btree ("workspace_id","radar_id","definition_version");

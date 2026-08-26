@@ -13,7 +13,8 @@
     "test:data-quality": "tsx --test src/modules/data-quality/event-context-quality.test.ts",
     "test:data-quality:runtime": "tsx --test src/modules/data-quality/event-context-quality.runtime.test.ts",
     "test:data-quality:scheduler": "tsx --test src/modules/data-quality/event-context-quality.scheduler.test.ts",
-    "test:radars": "tsx --test src/modules/radars/radar.service.test.ts"
+    "test:radars": "tsx --test src/modules/radars/radar.service.test.ts",
+    "test:radars:runtime": "tsx --test src/modules/radars/radar.runtime.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",
