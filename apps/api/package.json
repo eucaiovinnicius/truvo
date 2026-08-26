@@ -11,7 +11,8 @@
     "test:stripe": "tsx --test src/modules/connectors/adapters/stripe/stripe.adapter.test.ts src/modules/connectors/adapters/stripe/stripe.contract-kit.test.ts src/modules/connectors/adapters/stripe/stripe.adapter.contract.test.ts src/modules/connectors/adapters/stripe/stripe.customer-merge.test.ts",
     "test:klaviyo": "tsx --test src/modules/connectors/adapters/klaviyo/klaviyo.adapter.test.ts src/modules/connectors/adapters/klaviyo/klaviyo.contract-kit.test.ts src/modules/connectors/adapters/klaviyo/klaviyo.adapter.contract.test.ts src/modules/connectors/adapters/klaviyo/klaviyo.customer-merge.test.ts src/modules/connectors/adapters/klaviyo/klaviyo.oauth-refresh.test.ts",
     "test:data-quality": "tsx --test src/modules/data-quality/event-context-quality.test.ts",
-    "test:data-quality:runtime": "tsx --test src/modules/data-quality/event-context-quality.runtime.test.ts"
+    "test:data-quality:runtime": "tsx --test src/modules/data-quality/event-context-quality.runtime.test.ts",
+    "test:data-quality:scheduler": "tsx --test src/modules/data-quality/event-context-quality.scheduler.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",

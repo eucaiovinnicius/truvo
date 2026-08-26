@@ -88,6 +88,15 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     for (const t of this.timers) clearInterval(t);
   }
 
+  /** Executes the Order 070 quality tick through the same leader-lock contract
+   * used by the hourly scheduler. Kept public for a deterministic integration
+   * proof without waiting an hour for setInterval. */
+  async runQualityEvaluationTick(): Promise<boolean> {
+    return withLeaderLock('truvo:cron:event-context-quality', 10 * 60_000, () =>
+      this.sweepPerWorkspace((workspaceId) => this.quality.evaluate(workspaceId).then(() => undefined)),
+    );
+  }
+
   private schedule(job: Job): void {
     // TTL do lock = min(intervalo, 10min): cobre o job sem segurar além do necessário.
     const ttl = Math.min(job.intervalMs, 10 * 60_000);

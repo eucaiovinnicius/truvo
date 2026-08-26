@@ -25,6 +25,12 @@ test('ORDER_070 populated Postgres runtime matrix', async () => {
   assert.equal(first.sourceFreshness.some((s) => (s as { state?: string }).state === 'rate_limited_backoff'), true);
   assert.equal(first.radarReadiness.status, 'not_ready');
   assert.equal(first.radarReadiness.reasonCodes.includes('insufficient_outcome_history'), true);
+  assert.equal(first.dataHealth.score, 30);
+  assert.equal(first.dataHealth.status, 'blocker');
+  assert.equal(first.contextCoverage.score, 21);
+  const persisted = await service.getSummary(a) as { data_health_score: number; context_coverage_score: number };
+  assert.equal(persisted.data_health_score, 30);
+  assert.equal(persisted.context_coverage_score, 21);
   assert.equal(first.duplicateSummary.deliveryReplayAttempts, 1);
   assert.equal(first.duplicateSummary.canonicalNaturalKeyDefects, 0);
   assert.equal(validateEventQuality({ eventName: 'unknown', identifiers: {}, properties: {} }, { knownEventNames: ['signup'], requiredProperties: { amount: 'number' } }).length >= 3, true);
@@ -40,6 +46,14 @@ test('ORDER_070 populated Postgres runtime matrix', async () => {
   assert.equal(resolved.issues.some((i) => i.stableKey === 'source:disconnected:off'), false);
   const resolvedRow = await db.execute(sql`select status from quality_issues where workspace_id=${a} and stable_key='source:disconnected:off'`);
   assert.equal((resolvedRow[0] as { status: string }).status, 'resolved');
+  assert.equal(resolved.dataHealth.score, 100);
+  assert.equal(resolved.contextCoverage.score, 21);
+  assert.equal(resolved.radarReadiness.status, 'ready');
+  const stableReadback = await service.getSummary(a) as { data_health_score: number; context_coverage_score: number };
+  assert.equal(stableReadback.data_health_score, 100);
+  assert.equal(stableReadback.context_coverage_score, 21);
+  const canonical = await db.execute(sql`select count(*)::int as count from customers where workspace_id=${a}`);
+  assert.equal(Number((canonical[0] as { count: number }).count), 2);
   await db.execute(sql`delete from quality_evaluations where workspace_id in (${a},${b})`);
   await db.execute(sql`delete from quality_issues where workspace_id in (${a},${b})`);
   await db.execute(sql`delete from engagement_events where workspace_id in (${a},${b})`);

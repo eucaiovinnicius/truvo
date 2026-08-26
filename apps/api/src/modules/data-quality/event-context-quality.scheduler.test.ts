@@ -1,0 +1,38 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { closeDb, createDb } from '@truvo/db';
+import { sql } from 'drizzle-orm';
+import { SchedulerService } from '../scheduler/scheduler.service';
+import { EventContextQualityService } from './event-context-quality.service';
+import { getRedis } from '../events/infra';
+
+test('ORDER_070 scheduler quality tick is Redis-leader safe and recoverable', async () => {
+  if (!process.env.DATABASE_URL || !process.env.REDIS_URL) throw new Error('DATABASE_URL and REDIS_URL are required; run against disposable Postgres 16 + Redis 7');
+  const db = createDb(); const redis = getRedis(); const workspaceId = '00000000-0000-0000-0000-000000000070';
+  await db.execute(sql`insert into workspaces (id,name,slug) values (${workspaceId},'Order 070 scheduler','order-070-scheduler') on conflict (id) do nothing`);
+  await redis.del('truvo:cron:event-context-quality');
+  const realQuality = new EventContextQualityService(db); let calls = 0;
+  const delayedQuality = { evaluate: async (ws: string) => { calls++; await new Promise((resolve) => setTimeout(resolve, 100)); return realQuality.evaluate(ws); } } as EventContextQualityService;
+  const fake = {} as never;
+  const makeScheduler = () => new SchedulerService(db, fake, fake, fake, delayedQuality, fake, fake, fake, fake, fake);
+  const first = makeScheduler(); const second = makeScheduler();
+  const [wonA, wonB] = await Promise.all([first.runQualityEvaluationTick(), second.runQualityEvaluationTick()]);
+  assert.deepEqual([wonA, wonB].sort(), [false, true]);
+  assert.equal(calls, 1);
+  const row = await db.execute(sql`select count(*)::int as count from quality_evaluations where workspace_id=${workspaceId}`);
+  assert.equal(Number((row[0] as { count: number }).count), 1);
+  const repeated = await first.runQualityEvaluationTick();
+  assert.equal(repeated, true);
+  assert.equal(calls, 2);
+  await redis.set('truvo:cron:event-context-quality', 'stale-test', 'PX', 50);
+  await new Promise((resolve) => setTimeout(resolve, 75));
+  const recovered = await second.runQualityEvaluationTick();
+  assert.equal(recovered, true);
+  assert.equal(calls, 3);
+  const after = await db.execute(sql`select count(*)::int as count from quality_evaluations where workspace_id=${workspaceId}`);
+  assert.equal(Number((after[0] as { count: number }).count), 1);
+  first.onModuleDestroy(); second.onModuleDestroy();
+  await db.execute(sql`delete from quality_evaluations where workspace_id=${workspaceId}`);
+  await db.execute(sql`delete from workspaces where id=${workspaceId}`);
+  await redis.quit(); await closeDb(db);
+});
