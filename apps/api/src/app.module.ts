@@ -22,6 +22,7 @@ import { CustomerContextModule } from './modules/customer-context/customer-conte
 import { AuditModule } from './modules/audit/audit.module';
 import { DataLifecycleModule } from './modules/data-lifecycle/data-lifecycle.module';
 import { ConnectorsModule } from './modules/connectors/connectors.module';
+import { RadarsModule } from './modules/radars/radars.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { ConnectorsModule } from './modules/connectors/connectors.module';
     CustomerContextModule,
     DataLifecycleModule, // Order 035 §5 — depende de CustomerContextModule
     ConnectorsModule, // Order 050 — provider-neutral connector framework
+    RadarsModule,
     DataQualityModule,
     FunnelsModule,
     MetricsModule,
