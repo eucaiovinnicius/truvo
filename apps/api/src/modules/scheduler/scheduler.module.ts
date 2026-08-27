@@ -6,6 +6,7 @@ import { DataLifecycleModule } from '../data-lifecycle/data-lifecycle.module';
 import { ConnectorsModule } from '../connectors/connectors.module';
 import { RadarsModule } from '../radars/radars.module';
 import { OpportunitiesModule } from '../opportunities/opportunities.module';
+import { DecisionsModule } from '../decisions/decisions.module';
 import { SchedulerService } from './scheduler.service';
 
 /**
@@ -15,7 +16,7 @@ import { SchedulerService } from './scheduler.service';
  * módulo). OFF por padrão (SCHEDULER_ENABLED). Adicionar aos imports do AppModule.
  */
 @Module({
-  imports: [BillingModule, CreativesModule, DataQualityModule, DataLifecycleModule, ConnectorsModule, RadarsModule, OpportunitiesModule],
+  imports: [BillingModule, CreativesModule, DataQualityModule, DataLifecycleModule, ConnectorsModule, RadarsModule, OpportunitiesModule, DecisionsModule],
   providers: [SchedulerService],
 })
 export class SchedulerModule {}

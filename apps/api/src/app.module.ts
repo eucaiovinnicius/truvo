@@ -24,6 +24,7 @@ import { DataLifecycleModule } from './modules/data-lifecycle/data-lifecycle.mod
 import { ConnectorsModule } from './modules/connectors/connectors.module';
 import { RadarsModule } from './modules/radars/radars.module';
 import { OpportunitiesModule } from './modules/opportunities/opportunities.module';
+import { DecisionsModule } from './modules/decisions/decisions.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { OpportunitiesModule } from './modules/opportunities/opportunities.modul
     ConnectorsModule, // Order 050 — provider-neutral connector framework
     RadarsModule,
     OpportunitiesModule,
+    DecisionsModule,
     DataQualityModule,
     FunnelsModule,
     MetricsModule,

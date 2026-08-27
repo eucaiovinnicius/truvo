@@ -23,6 +23,7 @@
     "test:propensity": "node scripts/test-propensity-runtime.mjs",
     "test:model-registry": "node scripts/test-propensity-runtime.mjs",
     "test:opportunities": "node scripts/test-opportunities.mjs",
+    "test:decisions": "node scripts/test-decisions-runtime.mjs",
     "test:propensity:python": "python -m unittest discover -s apps/propensity-worker/tests -t apps/propensity-worker -p test_core.py -v",
     "lint:propensity": "python -m ruff check apps/propensity-worker",
     "typecheck:propensity": "python -m mypy --config-file apps/propensity-worker/pyproject.toml apps/propensity-worker/propensity_worker",

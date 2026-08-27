@@ -22,6 +22,7 @@ import type { ConnectorLifecycleState } from '@truvo/db';
 import { PropensityDispatchService } from '../radars/propensity-dispatch.service';
 import { ModelRegistryService } from '../radars/model-registry.service';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
+import { DecisionsService } from '../decisions/decisions.service';
 
 interface Job {
   name: string;
@@ -63,6 +64,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly propensity?: PropensityDispatchService,
     @Optional() private readonly modelRegistry?: ModelRegistryService,
     @Optional() private readonly opportunities?: OpportunitiesService,
+    @Optional() private readonly decisions?: DecisionsService,
   ) {}
 
   onModuleInit(): void {
@@ -88,6 +90,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       { name: 'connector-incremental-sync', intervalMs: 15 * 60_000, lockKey: 'truvo:cron:connector-incremental-sync', run: () => this.sweepPerWorkspace((ws) => this.syncConnectorsForWorkspace(ws)) },
       { name: 'propensity-recovery-scoring', intervalMs: HOUR, lockKey: 'truvo:cron:propensity-recovery-scoring', run: () => this.sweepPerWorkspace(async (ws) => { await this.propensity?.sweepWorkspace(ws); await this.modelRegistry?.maintainWorkspace(ws); }) },
       { name: 'opportunity-refresh', intervalMs: 24 * HOUR, lockKey: 'truvo:cron:opportunity-refresh', run: () => this.sweepPerWorkspace(async (ws) => { await this.opportunities?.sweepWorkspace(ws); }) },
+      { name: 'decision-reward-reconciliation', intervalMs: HOUR, lockKey: 'truvo:cron:decision-reward-reconciliation', run: () => this.sweepPerWorkspace(async (ws) => { await this.decisions?.reconcileRewards(ws); }) },
     ];
     for (const job of jobs) this.schedule(job);
     this.logger.log(`scheduler ligado: ${jobs.map((j) => j.name).join(', ')}`);
@@ -119,6 +122,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       this.sweepPerWorkspace(async (workspaceId) => { await this.opportunities?.sweepWorkspace(workspaceId); }),
     );
   }
+  async runDecisionRewardTick(): Promise<boolean> { return withLeaderLock('truvo:cron:decision-reward-reconciliation', 10 * 60_000, () => this.sweepPerWorkspace(async (workspaceId) => { await this.decisions?.reconcileRewards(workspaceId); })); }
 
   private schedule(job: Job): void {
     // TTL do lock = min(intervalo, 10min): cobre o job sem segurar além do necessário.

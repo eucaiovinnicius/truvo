@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { sql, type SQL } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import { DRIZZLE, type Database } from '../auth/database.provider';
@@ -21,6 +21,7 @@ import {
   type SortDirection,
 } from './opportunity-contracts';
 import { VALUE_POLICY } from './opportunity-economics';
+import { DecisionsService } from '../decisions/decisions.service';
 
 export const band = (probability: number): 'high' | 'medium' | 'low' =>
   probability >= 0.75 ? 'high' : probability >= 0.5 ? 'medium' : 'low';
@@ -69,6 +70,7 @@ export class OpportunitiesService {
     private readonly connectorConnections: ConnectorConnectionService,
     private readonly connectorRegistry: ConnectorRegistryService,
     private readonly connectorDestination: ConnectorDestinationService,
+    @Optional() private readonly decisions?: DecisionsService,
   ) {}
 
   /**
@@ -635,6 +637,7 @@ export class OpportunitiesService {
     const preview = await this.previewActivation(workspaceId, input);
     if (preview.destination.status !== 'ready') throw machineError('destination_disconnected');
     const activationId = deterministicId('opac', workspaceId, input.idempotencyKey);
+    const decisions = this.decisions ? await this.decisions.createForOpportunity(workspaceId, preview.deliverable, { radarId: input.radarId, connectionId: input.connectionId, correlationId: input.correlationId, idempotencyKey: input.idempotencyKey }) : [];
     await this.db.execute(sql`
       INSERT INTO opportunity_activations(
         workspace_id,id,radar_id,definition_version,model_version_id,batch_id,connection_id,
@@ -698,7 +701,8 @@ export class OpportunitiesService {
       resourceType: 'opportunity_activation', resourceId: activationId,
       metadata: { radarId: input.radarId, modelVersionId: preview.modelVersionId, opportunityBatchId: preview.opportunityBatchId, connectionId: input.connectionId, correlationId: input.correlationId, status, counts },
     });
-    return { replay: false, id: activationId, status, counts, remoteAudienceId };
+    if (this.decisions) await this.decisions.recordExecution(workspaceId, decisions.map((decision) => decision.id), { connectionId: input.connectionId, correlationId: input.correlationId, idempotencyKey: input.idempotencyKey, status: status === 'success' ? 'succeeded' : status === 'partial' ? 'partially_succeeded' : 'failed', remoteId: remoteAudienceId, counts });
+    return { replay: false, id: activationId, status, counts, remoteAudienceId, decisionBatchId: decisions[0] ? `dcb_${createHash('sha256').update([workspaceId,input.idempotencyKey].join('\u001f')).digest('hex').slice(0,26)}` : undefined, decisionCount: decisions.length };
   }
 
   private normalizedQuery(options: OpportunityQuery) {

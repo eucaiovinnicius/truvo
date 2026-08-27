@@ -1,10 +1,11 @@
 import { Module } from '@nestjs/common';
 import { ConnectorsModule } from '../connectors/connectors.module';
+import { DecisionsModule } from '../decisions/decisions.module';
 import { OpportunitiesController } from './opportunities.controller';
 import { OpportunitiesService } from './opportunities.service';
 
 @Module({
-  imports: [ConnectorsModule],
+  imports: [ConnectorsModule, DecisionsModule],
   controllers: [OpportunitiesController],
   providers: [OpportunitiesService],
   exports: [OpportunitiesService],
