@@ -1,0 +1,43 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { closeDb, createDb } from '@truvo/db';
+import { sql } from 'drizzle-orm';
+import { SchedulerService } from '../scheduler/scheduler.service';
+import { getRedis } from '../events/infra';
+import { PropensityDispatchService, PROPENSITY_TRAINING_TOPIC } from './propensity-dispatch.service';
+
+test('Order 090 propensity scheduling has one effective leader decision and recovers', async (t) => {
+  if (!process.env.DATABASE_URL || !process.env.REDIS_URL) throw new Error('DATABASE_URL and REDIS_URL are required');
+  process.env.PROPENSITY_RETRAIN_INTERVAL_DAYS = '30';
+  process.env.PROPENSITY_RETRAIN_RETRY_COOLDOWN_HOURS = '24';
+  const db = createDb(); const redis = getRedis(); const workspaceId = '00000000-0000-0000-0000-000000000090';
+  const radarId = 'rad_scheduler_order_090'; const requestId = 'rtr_scheduler_order_090'; const modelId = 'mdl_scheduler_order_090';
+  let first: SchedulerService | undefined; let second: SchedulerService | undefined;
+  t.after(async () => {
+    first?.onModuleDestroy(); second?.onModuleDestroy();
+    await db.execute(sql`delete from workspaces where id=${workspaceId}`);
+    await redis.quit(); await closeDb(db);
+  });
+  await db.execute(sql`insert into workspaces (id,name,slug) values (${workspaceId},'Order 090 scheduler','order-090-scheduler') on conflict (id) do nothing`);
+  await db.execute(sql`insert into outcome_definitions (workspace_id,id,outcome_namespace,outcome_key,name,kind,definition,source_namespace) values (${workspaceId},'scheduler-target','canonical','scheduler_target','Scheduler target','event','{}'::jsonb,'test')`);
+  await db.execute(sql`insert into radars (workspace_id,id,name,status,current_definition_version) values (${workspaceId},${radarId},'Scheduled retraining','active',1)`);
+  await db.execute(sql`insert into radar_definition_versions (workspace_id,radar_id,version,outcome_definition_id,audience_ast,prediction_window_days,optimization_goal,readiness) values (${workspaceId},${radarId},1,'scheduler-target','{"version":1,"op":"identified"}'::jsonb,30,'{}'::jsonb,'{"status":"ready_to_train","definitionVersion":1}'::jsonb)`);
+  await db.execute(sql`insert into radar_training_requests (workspace_id,id,radar_id,definition_version,idempotency_key,status,correlation_id,terminal_at,created_at,updated_at) values (${workspaceId},${requestId},${radarId},1,'initial','succeeded','00000000-0000-0000-0000-000000000090',now()-interval '31 days',now()-interval '31 days',now()-interval '31 days')`);
+  await db.execute(sql`insert into radar_model_versions (workspace_id,id,radar_id,definition_version,training_request_id,target_outcome_definition_id,prediction_window_days,status,estimator_type,feature_schema_version,artifact_provider,artifact_bucket,artifact_object_key,artifact_reference,artifact_checksum,serialization_format,cutoff_ranges,data_counts,metrics,calibration,selection_reason,verified_at,promoted_at) values (${workspaceId},${modelId},${radarId},1,${requestId},'scheduler-target',30,'active','logistic_regression','propensity-v1','supabase_storage','models','safe/scheduler.joblib','supabase://models/safe/scheduler.joblib','0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef','joblib-v1','{}'::jsonb,'{}'::jsonb,'{}'::jsonb,'{}'::jsonb,'baseline_selected',now()-interval '31 days',now()-interval '31 days')`);
+  await db.execute(sql`update radars set current_model_reference=${modelId} where workspace_id=${workspaceId} and id=${radarId}`);
+  await redis.del('truvo:cron:propensity-recovery-scoring');
+  const published: Array<{ topic: string; payload: Record<string, unknown> }> = [];
+  const kafka = { publish: async (topic: string, _key: string, payload: Record<string, unknown>) => { published.push({ topic, payload }); await new Promise((resolve) => setTimeout(resolve, 100)); } };
+  const propensity = new PropensityDispatchService(db, kafka as never);
+  const schedulerDb = { select: () => ({ from: async () => [{ id: workspaceId }] }) } as never;
+  const fake = {} as never;
+  const make = () => new SchedulerService(schedulerDb, fake, fake, fake, fake, fake, fake, fake, fake, fake, propensity);
+  first = make(); second = make();
+  const winners = await Promise.all([first.runPropensityTick(), second.runPropensityTick()]);
+  assert.deepEqual(winners.sort(), [false, true]);
+  assert.equal(published.length, 1); assert.equal(published[0].topic, PROPENSITY_TRAINING_TOPIC);
+  assert.deepEqual(Object.keys(published[0].payload).sort(), ['correlationId', 'definitionVersion', 'radarId', 'trainingRequestId', 'workspaceId']);
+  const [scheduled] = await db.execute(sql`select count(*)::int as count from radar_training_requests where workspace_id=${workspaceId} and radar_id=${radarId} and status='accepted'`);
+  assert.equal(Number((scheduled as { count: number }).count), 1);
+  assert.equal(await second.runPropensityTick(), true); assert.equal(published.length, 1);
+});

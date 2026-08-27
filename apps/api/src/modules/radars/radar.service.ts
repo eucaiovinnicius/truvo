@@ -1,8 +1,9 @@
-import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { DRIZZLE, type Database } from '../auth/database.provider';
 import { EventContextQualityService } from '../data-quality/event-context-quality.service';
+import { PropensityDispatchService } from './propensity-dispatch.service';
 
 export const RADAR_WINDOWS = [7, 14, 30, 60] as const;
 export const DEFAULT_AUDIENCE = { version: 1, op: 'identified' } as const;
@@ -18,8 +19,8 @@ const transitions: Record<string, string[]> = {
   validating_data: ['ready_to_train', 'insufficient_data', 'failed'],
   insufficient_data: ['validating_data', 'archived'],
   ready_to_train: ['training', 'paused', 'archived', 'validating_data'],
-  training: ['active', 'failed'],
-  active: ['paused', 'archived', 'validating_data'],
+  training: ['active', 'failed', 'insufficient_data'],
+  active: ['training', 'paused', 'archived', 'validating_data'],
   paused: ['ready_to_train', 'archived', 'validating_data'],
   failed: ['validating_data', 'archived'],
   archived: [],
@@ -156,6 +157,7 @@ export class RadarService {
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly quality: EventContextQualityService,
+    @Optional() private readonly propensityDispatch?: PropensityDispatchService,
   ) {}
 
   private async radar(workspaceId: string, id: string): Promise<RadarRow> {
@@ -190,10 +192,36 @@ export class RadarService {
     const radar = await this.radar(workspaceId, id);
     const [rawDefinition] = await this.db.execute(sql`select * from radar_definition_versions where workspace_id=${workspaceId} and radar_id=${id} and version=${radar.current_definition_version}`);
     const definition = normalizeRadarDefinition(rawDefinition);
+    const [ml] = await this.db.execute(sql`
+      select m.id as current_model_version,m.estimator_type,m.metrics,m.calibration,m.promoted_at as last_successful_training_at,
+             scores.latest_scoring_at,scores.scored_customer_count,
+             training.status as training_state
+      from radars r
+      left join radar_model_versions m on m.workspace_id=r.workspace_id and m.id=r.current_model_reference
+      left join lateral (
+        select max(scored_at) as latest_scoring_at,count(distinct customer_id)::int as scored_customer_count
+        from radar_propensity_scores s where s.workspace_id=r.workspace_id and s.radar_id=r.id
+          and s.model_version_id=r.current_model_reference
+      ) scores on true
+      left join lateral (
+        select status from radar_training_requests tr where tr.workspace_id=r.workspace_id and tr.radar_id=r.id
+        order by tr.created_at desc limit 1
+      ) training on true
+      where r.workspace_id=${workspaceId} and r.id=${id}`);
     return {
       radar,
       definition,
       activationReadiness: await this.activationReadiness(workspaceId, definition.activation_destination),
+      ml: ml ? {
+        currentModelVersion: (ml as { current_model_version?: string | null }).current_model_version ?? null,
+        estimatorType: (ml as { estimator_type?: string | null }).estimator_type ?? null,
+        validationMetrics: parseJsonBoundary((ml as { metrics?: unknown }).metrics, 'model metrics', true),
+        calibration: parseJsonBoundary((ml as { calibration?: unknown }).calibration, 'model calibration', true),
+        lastSuccessfulTrainingAt: (ml as { last_successful_training_at?: Date | null }).last_successful_training_at ?? null,
+        latestScoringAt: (ml as { latest_scoring_at?: Date | null }).latest_scoring_at ?? null,
+        scoredCustomerCount: Number((ml as { scored_customer_count?: number | null }).scored_customer_count ?? 0),
+        trainingState: (ml as { training_state?: string | null }).training_state ?? null,
+      } : null,
     };
   }
 
@@ -319,27 +347,29 @@ export class RadarService {
 
   async train(workspaceId: string, id: string, key: string) {
     if (!key.trim()) throw new BadRequestException('Idempotency key is required');
-    return this.db.transaction(async (tx) => {
+    const accepted = await this.db.transaction(async (tx) => {
       const [row] = await tx.execute(sql`select * from radars where workspace_id=${workspaceId} and id=${id} for update`);
       if (!row) throw new NotFoundException('Radar not found');
       const radar = row as unknown as RadarRow;
       if (radar.status === 'archived') throw new BadRequestException('Archived Radar cannot train');
-      const [existing] = await tx.execute(sql`select * from radar_training_requests where workspace_id=${workspaceId} and radar_id=${id} and definition_version=${radar.current_definition_version}`);
+      const [sameKey] = await tx.execute(sql`select * from radar_training_requests where workspace_id=${workspaceId} and radar_id=${id} and definition_version=${radar.current_definition_version} and idempotency_key=${key}`);
+      if (sameKey) return sameKey;
+      const [existing] = await tx.execute(sql`select * from radar_training_requests where workspace_id=${workspaceId} and radar_id=${id} and definition_version=${radar.current_definition_version} order by created_at desc limit 1`);
       if (existing) {
         if (radar.status === 'ready_to_train' && (existing as { status?: string }).status === 'failed') {
           const correlationId = randomUUID();
-          const [retried] = await tx.execute(sql`update radar_training_requests set status='accepted',idempotency_key=${key},correlation_id=${correlationId},model_reference=null,failure_category=null,failure_reason=null,updated_at=now() where workspace_id=${workspaceId} and id=${(existing as { id: string }).id} returning *`);
+          const [retried] = await tx.execute(sql`update radar_training_requests set status='accepted',idempotency_key=${key},correlation_id=${correlationId},model_reference=null,failure_category=null,failure_reason=null,claimed_by=null,claimed_at=null,lease_expires_at=null,terminal_at=null,updated_at=now() where workspace_id=${workspaceId} and id=${(existing as { id: string }).id} returning *`);
           await tx.execute(sql`update radars set status='training',updated_at=now() where workspace_id=${workspaceId} and id=${id}`);
           this.logger.log(`Radar training request retried workspace=${workspaceId} radar=${id} definition=${radar.current_definition_version}`);
           return retried;
         }
-        if (radar.status === 'training' || radar.status === 'active') {
+        if (radar.status === 'training') {
           this.logger.log(`Radar training request reused workspace=${workspaceId} radar=${id} definition=${radar.current_definition_version}`);
           return existing;
         }
-        throw new BadRequestException('Radar is not ready to train');
+        if (radar.status !== 'active') throw new BadRequestException('Radar is not ready to train');
       }
-      if (radar.status !== 'ready_to_train') throw new BadRequestException('Radar is not ready to train');
+      if (radar.status !== 'ready_to_train' && radar.status !== 'active') throw new BadRequestException('Radar is not ready to train');
       const [definitionRaw] = await tx.execute(sql`select readiness from radar_definition_versions where workspace_id=${workspaceId} and radar_id=${id} and version=${radar.current_definition_version}`);
       const readiness = objectJson((definitionRaw as { readiness?: unknown } | undefined)?.readiness, 'readiness', true);
       if (readiness?.status !== 'ready_to_train' || readiness.definitionVersion !== radar.current_definition_version) {
@@ -352,6 +382,14 @@ export class RadarService {
       this.logger.log(`Radar training request accepted workspace=${workspaceId} radar=${id} definition=${radar.current_definition_version}`);
       return request;
     });
+    if (this.propensityDispatch) {
+      try {
+        await this.propensityDispatch.dispatchTraining(accepted as unknown as { workspace_id: string; radar_id: string; definition_version: number; id: string; correlation_id: string });
+      } catch (error) {
+        this.logger.warn(`Radar training wake-up failed; durable scheduler will recover workspace=${workspaceId} radar=${id}: ${(error as Error).message}`);
+      }
+    }
+    return accepted;
   }
 
   async reportTrainingResult(
@@ -359,7 +397,7 @@ export class RadarService {
     id: string,
     version: number,
     requestId: string,
-    result: { status: 'succeeded' | 'failed'; modelReference?: string; failureCategory?: string; failureReason?: string },
+    result: { status: 'succeeded' | 'failed' | 'insufficient_data'; modelReference?: string; failureCategory?: string; failureReason?: string },
   ) {
     return this.db.transaction(async (tx) => {
       const [row] = await tx.execute(sql`select * from radars where workspace_id=${workspaceId} and id=${id} for update`);
@@ -368,14 +406,15 @@ export class RadarService {
       const [request] = await tx.execute(sql`select * from radar_training_requests where workspace_id=${workspaceId} and id=${requestId} and radar_id=${id} and definition_version=${version} for update`);
       if (!request) throw new BadRequestException('Training request does not match Radar definition');
       const prior = request as { status: string; model_reference: string | null; failure_category: string | null };
-      if (prior.status === 'succeeded' || prior.status === 'failed') {
+      if (prior.status === 'succeeded' || prior.status === 'failed' || prior.status === 'insufficient_data') {
         const sameSuccess = prior.status === 'succeeded'
           && result.status === 'succeeded'
           && prior.model_reference === result.modelReference?.trim();
         const sameFailure = prior.status === 'failed'
           && result.status === 'failed'
           && prior.failure_category === result.failureCategory;
-        if (sameSuccess || sameFailure) return;
+        const sameInsufficient = prior.status === 'insufficient_data' && result.status === 'insufficient_data';
+        if (sameSuccess || sameFailure || sameInsufficient) return;
         throw new BadRequestException('Training result conflicts with an already accepted result');
       }
       if (radar.current_definition_version !== version || radar.status !== 'training') {
@@ -385,11 +424,32 @@ export class RadarService {
       if (result.status === 'succeeded') {
         const modelReference = result.modelReference?.trim();
         if (!modelReference) throw new BadRequestException('Successful training result requires model reference');
-        await tx.execute(sql`update radar_training_requests set status='succeeded',model_reference=${modelReference},failure_category=null,failure_reason=null,updated_at=now() where workspace_id=${workspaceId} and id=${requestId}`);
+        const [verifiedModel] = await tx.execute(sql`
+          select m.id from radar_model_versions m where m.workspace_id=${workspaceId} and m.id=${modelReference}
+            and m.radar_id=${id} and m.definition_version=${version} and m.training_request_id=${requestId}
+            and m.verified_at is not null and m.status in ('candidate','active') and exists (
+              select 1 from radar_score_batches b where b.workspace_id=m.workspace_id and b.radar_id=m.radar_id
+                and b.model_version_id=m.id and b.status='completed'
+            )`);
+        if (!verifiedModel) throw new BadRequestException('Successful training result requires verified model and completed score batch');
+        await tx.execute(sql`update radar_training_requests set status='succeeded',model_reference=${modelReference},failure_category=null,failure_reason=null,claimed_by=null,lease_expires_at=null,terminal_at=now(),updated_at=now() where workspace_id=${workspaceId} and id=${requestId}`);
+        await tx.execute(sql`update radar_model_versions set status='retired' where workspace_id=${workspaceId} and radar_id=${id} and status='active' and id<>${modelReference}`);
+        await tx.execute(sql`update radar_model_versions set status='active',promoted_at=coalesce(promoted_at,now()) where workspace_id=${workspaceId} and id=${modelReference}`);
         await tx.execute(sql`update radars set status='active',current_model_reference=${modelReference},updated_at=now() where workspace_id=${workspaceId} and id=${id}`);
+      } else if (result.status === 'insufficient_data') {
+        await tx.execute(sql`update radar_training_requests set status='insufficient_data',failure_category='insufficient_data',failure_reason=${safeFailureReason(result.failureReason)},model_reference=null,claimed_by=null,lease_expires_at=null,terminal_at=now(),updated_at=now() where workspace_id=${workspaceId} and id=${requestId}`);
+        if (radar.current_model_reference) {
+          await tx.execute(sql`update radars set status='active',updated_at=now() where workspace_id=${workspaceId} and id=${id}`);
+        } else {
+          await tx.execute(sql`update radars set status='insufficient_data',updated_at=now() where workspace_id=${workspaceId} and id=${id}`);
+        }
       } else {
-        await tx.execute(sql`update radar_training_requests set status='failed',failure_category=${safeFailureCategory(result.failureCategory)},failure_reason=${safeFailureReason(result.failureReason)},model_reference=null,updated_at=now() where workspace_id=${workspaceId} and id=${requestId}`);
-        await tx.execute(sql`update radars set status='failed',current_model_reference=null,updated_at=now() where workspace_id=${workspaceId} and id=${id}`);
+        await tx.execute(sql`update radar_training_requests set status='failed',failure_category=${safeFailureCategory(result.failureCategory)},failure_reason=${safeFailureReason(result.failureReason)},model_reference=null,claimed_by=null,lease_expires_at=null,terminal_at=now(),updated_at=now() where workspace_id=${workspaceId} and id=${requestId}`);
+        if (radar.current_model_reference) {
+          await tx.execute(sql`update radars set status='active',updated_at=now() where workspace_id=${workspaceId} and id=${id}`);
+        } else {
+          await tx.execute(sql`update radars set status='failed',updated_at=now() where workspace_id=${workspaceId} and id=${id}`);
+        }
       }
     });
   }

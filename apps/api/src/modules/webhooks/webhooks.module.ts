@@ -30,5 +30,6 @@ import { WebhooksService } from './webhooks.service';
     WebhookRetryService,
     WorkspaceAuthGuard,
   ],
+  exports: [KafkaProducerService],
 })
 export class WebhooksModule {}

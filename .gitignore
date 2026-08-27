@@ -18,3 +18,10 @@ packages/db/migrations/meta/_journal.json.lock
 *.log
 .DS_Store
 Thumbs.db
+
+# Python worker
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.venv/
