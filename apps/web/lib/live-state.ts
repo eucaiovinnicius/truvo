@@ -8,6 +8,7 @@ export interface LiveFailure {
   message: string;
   path: string;
   status?: number;
+  code?: string;
 }
 
 export interface LiveState<T> {
@@ -52,7 +53,9 @@ export function classifyLiveFailure(error: unknown, path: string): LiveFailure {
         ? 'Você não tem permissão para acessar estes dados.'
         : 'Os dados ao vivo estão indisponíveis no momento. Tente novamente mais tarde.';
   const safePath = path.split('?')[0] ?? path;
-  return { kind, message, path: safePath, ...(Number.isFinite(status) ? { status } : {}) };
+  const code = typeof error === 'object' && error !== null && 'code' in error && typeof (error as { code?: unknown }).code === 'string'
+    ? (error as { code: string }).code : undefined;
+  return { kind, message, path: safePath, ...(Number.isFinite(status) ? { status } : {}), ...(code ? { code } : {}) };
 }
 
 export function reconcileLiveContext<T>(

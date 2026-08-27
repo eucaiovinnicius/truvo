@@ -148,6 +148,13 @@
       "when": 1787807840595,
       "tag": "0020_perfect_whistler",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1787809463797,
+      "tag": "0021_nebulous_spectrum",
+      "breakpoints": true
     }
   ]
 }

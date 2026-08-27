@@ -22,7 +22,7 @@ import {
   FileText,
   Blocks,
   CreditCard
-  ,Radar
+  ,Radar, Target
 } from 'lucide-react';
 import { ViewState, ProfileConfig } from '../types';
 import type { SessionMode } from '@/lib/session';
@@ -66,6 +66,7 @@ export default function Sidebar({
     { id: 'profiles', name: 'Customer 360', icon: Users, badge: null },
     { id: 'data-quality', name: 'Data Quality', icon: ShieldCheck, badge: null },
     { id: 'radars', name: 'Radars', icon: Radar, badge: 'NOVO' },
+    { id: 'revenue-opportunities', name: 'Revenue Opportunities', icon: Target, badge: 'NOVO' },
     { id: 'reports', name: 'Reports', icon: FileText, badge: null },
     { id: 'tracking', name: 'SDK & Pixel', icon: Code2, badge: null },
     { id: 'integrations', name: 'Integrations Hub', icon: Blocks, badge: null },

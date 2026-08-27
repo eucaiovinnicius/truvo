@@ -10,6 +10,7 @@ export type ViewState =
   | 'profiles'
   | 'data-quality'
   | 'radars'
+  | 'revenue-opportunities'
   | 'reports'
   | 'tracking'
   | 'integrations'

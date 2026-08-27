@@ -47,6 +47,7 @@ export default function TopBar({
     'data-quality': 'Data Quality & Reconciliação',
     reports: 'Relatórios Agendados',
     radars: 'Radars de receita',
+    'revenue-opportunities': 'Revenue Opportunities',
     tracking: 'SDK & Pixel',
     integrations: 'Central de Integrações',
     billing: 'Planos & Faturamento',

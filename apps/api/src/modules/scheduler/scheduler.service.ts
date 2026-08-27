@@ -21,6 +21,7 @@ import { ConnectorSyncOrchestratorService } from '../connectors/connector-sync-o
 import type { ConnectorLifecycleState } from '@truvo/db';
 import { PropensityDispatchService } from '../radars/propensity-dispatch.service';
 import { ModelRegistryService } from '../radars/model-registry.service';
+import { OpportunitiesService } from '../opportunities/opportunities.service';
 
 interface Job {
   name: string;
@@ -61,6 +62,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     private readonly connectorRegistry: ConnectorRegistryService,
     @Optional() private readonly propensity?: PropensityDispatchService,
     @Optional() private readonly modelRegistry?: ModelRegistryService,
+    @Optional() private readonly opportunities?: OpportunitiesService,
   ) {}
 
   onModuleInit(): void {
@@ -85,6 +87,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       // needs a deliberate re-test, not blind repeated polling).
       { name: 'connector-incremental-sync', intervalMs: 15 * 60_000, lockKey: 'truvo:cron:connector-incremental-sync', run: () => this.sweepPerWorkspace((ws) => this.syncConnectorsForWorkspace(ws)) },
       { name: 'propensity-recovery-scoring', intervalMs: HOUR, lockKey: 'truvo:cron:propensity-recovery-scoring', run: () => this.sweepPerWorkspace(async (ws) => { await this.propensity?.sweepWorkspace(ws); await this.modelRegistry?.maintainWorkspace(ws); }) },
+      { name: 'opportunity-refresh', intervalMs: 24 * HOUR, lockKey: 'truvo:cron:opportunity-refresh', run: () => this.sweepPerWorkspace(async (ws) => { await this.opportunities?.sweepWorkspace(ws); }) },
     ];
     for (const job of jobs) this.schedule(job);
     this.logger.log(`scheduler ligado: ${jobs.map((j) => j.name).join(', ')}`);
@@ -107,6 +110,13 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   async runPropensityTick(): Promise<boolean> {
     return withLeaderLock('truvo:cron:propensity-recovery-scoring', 10 * 60_000, () =>
       this.sweepPerWorkspace(async (workspaceId) => { await this.propensity?.sweepWorkspace(workspaceId); await this.modelRegistry?.maintainWorkspace(workspaceId); }),
+    );
+  }
+
+  /** Order 100 deterministic competing-replica proof through the existing lock. */
+  async runOpportunityTick(): Promise<boolean> {
+    return withLeaderLock('truvo:cron:opportunity-refresh', 10 * 60_000, () =>
+      this.sweepPerWorkspace(async (workspaceId) => { await this.opportunities?.sweepWorkspace(workspaceId); }),
     );
   }
 

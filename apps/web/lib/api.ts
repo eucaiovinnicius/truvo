@@ -5,8 +5,9 @@ export class ApiError extends Error {
     public readonly status: number,
     public readonly path: string,
     statusText: string,
+    public readonly code?: string,
   ) {
-    super(`API ${status} ${statusText} em ${path}`);
+    super(code ?? `API ${status} ${statusText} em ${path}`);
     this.name = 'ApiError';
   }
 }
@@ -33,7 +34,12 @@ export async function api<T = unknown>(path: string, init?: RequestInit): Promis
     },
   });
   if (!res.ok) {
-    throw new ApiError(res.status, path, res.statusText);
+    let code: string | undefined;
+    try {
+      const payload = await res.clone().json() as { code?: unknown; message?: unknown };
+      code = typeof payload.code === 'string' ? payload.code : typeof payload.message === 'string' ? payload.message : undefined;
+    } catch { /* non-JSON error body */ }
+    throw new ApiError(res.status, path, res.statusText, code);
   }
   const contentType = res.headers.get('content-type') ?? '';
   return (contentType.includes('application/json') ? res.json() : res.text()) as Promise<T>;
