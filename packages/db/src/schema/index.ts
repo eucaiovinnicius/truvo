@@ -29,4 +29,5 @@ export * from './reports'; // M13 — reports, report_runs
 export * from './ai'; // M17 — ai_objectives, ai_journey_runs, ai_insights, ai_recommendations, ai_conversations
 
 export * from './event-context-quality'; // Order 070
+export * from './opportunities'; // Order 100
 export * from './radars'; // Order 080 â€” versioned prediction questions

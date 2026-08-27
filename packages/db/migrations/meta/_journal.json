@@ -141,6 +141,13 @@
       "when": 1787805575504,
       "tag": "0019_model_registry_v1",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1787807840595,
+      "tag": "0020_perfect_whistler",
+      "breakpoints": true
     }
   ]
 }

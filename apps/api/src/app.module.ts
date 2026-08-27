@@ -23,6 +23,7 @@ import { AuditModule } from './modules/audit/audit.module';
 import { DataLifecycleModule } from './modules/data-lifecycle/data-lifecycle.module';
 import { ConnectorsModule } from './modules/connectors/connectors.module';
 import { RadarsModule } from './modules/radars/radars.module';
+import { OpportunitiesModule } from './modules/opportunities/opportunities.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { RadarsModule } from './modules/radars/radars.module';
     DataLifecycleModule, // Order 035 §5 — depende de CustomerContextModule
     ConnectorsModule, // Order 050 — provider-neutral connector framework
     RadarsModule,
+    OpportunitiesModule,
     DataQualityModule,
     FunnelsModule,
     MetricsModule,

@@ -16,6 +16,7 @@
     "test:radars": "tsx --test src/modules/radars/radar.service.test.ts",
     "test:radars:runtime": "node ../../scripts/test-radars-runtime.mjs",
     "test:propensity:contracts": "tsx --test src/modules/radars/propensity-dispatch.service.test.ts"
+    ,"test:opportunities": "tsx --test src/modules/opportunities/opportunities.service.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.3",
