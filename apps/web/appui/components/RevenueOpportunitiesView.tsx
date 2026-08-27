@@ -43,7 +43,7 @@ type ActivationPreview = {
   destination: { status: string; reason?: string };
   counts: { requested: number; currentlyEligible: number; suppressed: number; missingDestinationIdentifier: number; duplicatesCollapsed: number; deliverable: number };
 };
-type ActivationResult = { status: 'success' | 'partial' | 'failed'; replay: boolean; counts: Record<string, number>; remoteAudienceId?: string };
+type ActivationResult = { status: 'success' | 'partial' | 'failed'; replay: boolean; counts: Record<string, number>; remoteAudienceId?: string; decisionBatchId?: string; decisionCount?: number };
 
 const demoRadar: RadarListItem = {
   id: 'demo-revenue-radar', name: 'Radar de recompra (demo)', status: 'active', current_definition_version: 1,
@@ -184,7 +184,8 @@ export default function RevenueOpportunitiesView() {
     setActionState('activating');
     try {
       const result = await api<ActivationResult>('/v1/opportunities/activation', { method: 'POST', body: JSON.stringify({ radarId, connectionId: destinationId, selection: selectionBody(batchId, selected, allMatching, query), ...activationIdentity }) });
-      setActionMessage(result.status === 'success' ? `Audiência enviada: ${result.counts.accepted ?? 0} aceitos.` : result.status === 'partial' ? `Envio parcial: ${result.counts.accepted ?? 0} aceitos; ${result.counts.providerRejected ?? 0} rejeitados.` : 'O provedor não aceitou a audiência. A lista continua disponível.');
+      const provenance = result.decisionCount ? ` Decision recorded: ${result.decisionCount} (${result.decisionBatchId}).` : '';
+      setActionMessage(result.status === 'success' ? `Audiência enviada: ${result.counts.accepted ?? 0} aceitos.${provenance}` : result.status === 'partial' ? `Envio parcial: ${result.counts.accepted ?? 0} aceitos; ${result.counts.providerRejected ?? 0} rejeitados.${provenance}` : 'O provedor não aceitou a audiência. A lista continua disponível.');
       setPreview(null);
       setActivationIdentity(null);
     } catch { setActionMessage('Falha isolada na ativação. A lista e o CSV continuam disponíveis.'); }

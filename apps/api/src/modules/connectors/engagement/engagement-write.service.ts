@@ -4,6 +4,7 @@ import { and, eq } from 'drizzle-orm';
 import { engagementEvents } from '@truvo/db';
 import { DRIZZLE, type Database } from '../../auth/database.provider';
 import { CustomerContextService } from '../../customer-context/customer-context.service';
+import { DecisionsService } from '../../decisions/decisions.service';
 import type { NormalizedEngagementEvent } from '../contracts';
 
 function deterministicId(prefix: string, ...parts: string[]): string {
@@ -21,6 +22,7 @@ export class EngagementWriteService {
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly customerContext: CustomerContextService,
+    private readonly decisions: DecisionsService,
   ) {}
 
   async upsertEvent(workspaceId: string, connectionId: string, customerId: string | null, input: NormalizedEngagementEvent): Promise<string | null> {
@@ -38,6 +40,8 @@ export class EngagementWriteService {
       // is a harmless no-op, never a state change (Order 063 §7 "duplicate
       // engagement event", §3 "replay is harmless").
       .onConflictDoNothing({ target: [engagementEvents.workspaceId, engagementEvents.providerNamespace, engagementEvents.providerEventId] });
+    const kind = input.engagementKind === 'delivery' ? 'delivered' : input.engagementKind === 'received' ? 'sent' : null;
+    if (kind) await this.decisions.recordExposureFromEngagement(workspaceId,{connectionId,customerId,providerEventId:input.providerEventId,correlationId:input.correlationId,remoteId:input.campaignId??input.flowId,kind,occurredAt:new Date(input.occurredAt)});
     const [row] = await this.db
       .select({ customerId: engagementEvents.customerId })
       .from(engagementEvents)

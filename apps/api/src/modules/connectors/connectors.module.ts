@@ -16,6 +16,7 @@ import { ShopifyBootstrapService } from './adapters/shopify/shopify.bootstrap';
 import { HubspotBootstrapService } from './adapters/hubspot/hubspot.bootstrap';
 import { StripeBootstrapService } from './adapters/stripe/stripe.bootstrap';
 import { KlaviyoBootstrapService } from './adapters/klaviyo/klaviyo.bootstrap';
+import { DecisionsModule } from '../decisions/decisions.module';
 
 /**
  * Order 050 stood this module up service-only, deferring the HTTP surface and any
@@ -25,7 +26,7 @@ import { KlaviyoBootstrapService } from './adapters/klaviyo/klaviyo.bootstrap';
  * unchanged.
  */
 @Module({
-  imports: [IdentityModule, CustomerContextModule],
+  imports: [IdentityModule, CustomerContextModule, DecisionsModule],
   controllers: [ConnectorsController, ConnectorWebhooksController],
   providers: [
     ConnectorRegistryService,
