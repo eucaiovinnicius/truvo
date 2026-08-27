@@ -1,4 +1,4 @@
-import { and, eq, isNull, or } from 'drizzle-orm';
+import { and, eq, isNull, or, sql } from 'drizzle-orm';
 import type { ClickHouseClient } from '@truvo/db';
 import {
   customers,
@@ -193,6 +193,29 @@ export const eraseCommerceOrderAttribution: StoreErasureHandler = async (ctx) =>
   return ok(updated.length);
 };
 
+/** Order 110 Decision facts keep non-identifying provenance for audit/learning,
+ * while every customer-derived snapshot value and the mutable current-subject
+ * pointer participate in the existing Order 55 lifecycle. The immutable internal
+ * customer id remains only as an FK; Decision APIs hide it once the canonical
+ * customer tombstone is present. */
+export const eraseDecisionLearningContext: StoreErasureHandler = async (ctx) => {
+  const snapshots = await ctx.db.execute(sql`
+    update decision_context_snapshots s
+    set snapshot=(case when jsonb_typeof(s.snapshot)='string' then (s.snapshot#>>'{}')::jsonb else s.snapshot end-'historicalContext')||'{"subjectErased":true}'::jsonb
+    from decision_records d
+    where d.workspace_id=${ctx.workspaceId} and d.customer_id=${ctx.customerId}
+      and s.workspace_id=d.workspace_id and s.id=d.context_snapshot_id
+      and not (case when jsonb_typeof(s.snapshot)='string' then (s.snapshot#>>'{}')::jsonb else s.snapshot end @> '{"subjectErased":true}'::jsonb)
+    returning s.id
+  `) as unknown as unknown[];
+  const pointers = await ctx.db.execute(sql`
+    update decision_records set current_customer_id=null
+    where workspace_id=${ctx.workspaceId} and customer_id=${ctx.customerId} and current_customer_id is not null
+    returning id
+  `) as unknown as unknown[];
+  return ok(snapshots.length + pointers.length);
+};
+
 /** Order 055 §2 "Derived / ML artifacts" — explicitly enumerated: `user_profiles`
  * (M15) is a lazily-recomputed cache (regenerates from source on next read, per
  * `DATA_LIFECYCLE_LINEAGE.md`) and the ClickHouse materialized views (`*_daily`,
@@ -206,4 +229,5 @@ export const SUBJECT_ERASURE_STORES: ReadonlyArray<{ store: string; handler: Sto
   { store: 'identity_graph_v2_evidence', handler: redactIdentityGraphV2Evidence },
   { store: 'clickhouse_events_touchpoints', handler: eraseClickHouseEventsAndTouchpoints },
   { store: 'commerce_order_attribution', handler: eraseCommerceOrderAttribution },
+  { store: 'decision_learning_provenance', handler: eraseDecisionLearningContext },
 ];

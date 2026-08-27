@@ -657,15 +657,24 @@ export class OpportunitiesService {
     let permanentFailures = 0;
     let suppressedAfterPreview = 0;
     let remoteAudienceId: string | undefined;
+    const decisionByCustomer = new Map(decisions.map((decision) => [decision.customerId, decision.id]));
+    const perDecision: Record<string,{ status:'succeeded'|'failed'|'unknown'; failureCategory?:string; counts?:Record<string,number> }> = {};
     for (let offset = 0; offset < preview.deliverable.length; offset += OPPORTUNITY_POLICY.activationChunkSize) {
       const candidateChunk = preview.deliverable.slice(offset, offset + OPPORTUNITY_POLICY.activationChunkSize);
-      const freshRows = await this.db.execute(sql`
-        SELECT id FROM customers
-        WHERE workspace_id = ${workspaceId} AND id IN (${sql.join(candidateChunk.map((row) => sql`${row.customer_id}`), sql`,`)})
-          AND status = 'identified' AND deleted_at IS NULL
-      `) as SqlRow[];
-      const allowed = new Set(freshRows.map((row) => row.id));
+      const candidateDecisionIds = candidateChunk.map((row) => decisionByCustomer.get(row.customer_id)).filter((value): value is string => Boolean(value));
+      const executable = this.decisions
+        ? await this.decisions.filterExecutableDecisions(workspaceId,candidateDecisionIds)
+        : await this.db.execute(sql`
+            SELECT id customer_id FROM customers
+            WHERE workspace_id = ${workspaceId} AND id IN (${sql.join(candidateChunk.map((row) => sql`${row.customer_id}`), sql`,`)})
+              AND status = 'identified' AND deleted_at IS NULL
+          `) as SqlRow[];
+      const allowed = new Set(executable.map((row) => row.customer_id));
       const chunk = candidateChunk.filter((row) => allowed.has(row.customer_id));
+      for (const row of candidateChunk.filter((candidate) => !allowed.has(candidate.customer_id))) {
+        const decisionId = decisionByCustomer.get(row.customer_id);
+        if (decisionId) perDecision[decisionId] = { status:'failed',failureCategory:'privacy_suppressed' };
+      }
       suppressedAfterPreview += candidateChunk.length - chunk.length;
       if (!chunk.length) continue;
       attempted += chunk.length;
@@ -682,10 +691,12 @@ export class OpportunitiesService {
       if (write.status === 'sent') {
         accepted += chunk.length;
         remoteAudienceId ??= write.externalResultId;
+        for (const row of chunk) { const decisionId=decisionByCustomer.get(row.customer_id); if(decisionId) perDecision[decisionId]={ status:'succeeded',counts:{ requested:1,succeeded:1 } }; }
       } else {
         providerRejected += chunk.length;
         if (write.retryable) retryableFailures += chunk.length;
         else permanentFailures += chunk.length;
+        for (const row of chunk) { const decisionId=decisionByCustomer.get(row.customer_id); if(decisionId) perDecision[decisionId]={ status:write.retryable?'unknown':'failed',failureCategory:write.error??(write.retryable?'provider_ambiguous':'provider_rejected'),counts:{ requested:1,succeeded:0 } }; }
       }
     }
     const excluded = preview.counts.requested - preview.counts.deliverable + suppressedAfterPreview;
@@ -701,7 +712,7 @@ export class OpportunitiesService {
       resourceType: 'opportunity_activation', resourceId: activationId,
       metadata: { radarId: input.radarId, modelVersionId: preview.modelVersionId, opportunityBatchId: preview.opportunityBatchId, connectionId: input.connectionId, correlationId: input.correlationId, status, counts },
     });
-    if (this.decisions) await this.decisions.recordExecution(workspaceId, decisions.map((decision) => decision.id), { connectionId: input.connectionId, correlationId: input.correlationId, idempotencyKey: input.idempotencyKey, status: status === 'success' ? 'succeeded' : status === 'partial' ? 'partially_succeeded' : 'failed', remoteId: remoteAudienceId, counts });
+    if (this.decisions) await this.decisions.recordExecution(workspaceId, decisions.map((decision) => decision.id), { connectionId: input.connectionId, correlationId: input.correlationId, idempotencyKey: input.idempotencyKey, status: status === 'success' ? 'succeeded' : status === 'partial' ? 'partially_succeeded' : 'failed', remoteId: remoteAudienceId, counts, perDecision });
     return { replay: false, id: activationId, status, counts, remoteAudienceId, decisionBatchId: decisions[0] ? `dcb_${createHash('sha256').update([workspaceId,input.idempotencyKey].join('\u001f')).digest('hex').slice(0,26)}` : undefined, decisionCount: decisions.length };
   }
 
