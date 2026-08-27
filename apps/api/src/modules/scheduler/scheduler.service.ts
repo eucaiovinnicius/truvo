@@ -20,6 +20,7 @@ import { ConnectorRegistryService } from '../connectors/connector-registry.servi
 import { ConnectorSyncOrchestratorService } from '../connectors/connector-sync-orchestrator.service';
 import type { ConnectorLifecycleState } from '@truvo/db';
 import { PropensityDispatchService } from '../radars/propensity-dispatch.service';
+import { ModelRegistryService } from '../radars/model-registry.service';
 
 interface Job {
   name: string;
@@ -59,6 +60,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     private readonly connectorOrchestrator: ConnectorSyncOrchestratorService,
     private readonly connectorRegistry: ConnectorRegistryService,
     @Optional() private readonly propensity?: PropensityDispatchService,
+    @Optional() private readonly modelRegistry?: ModelRegistryService,
   ) {}
 
   onModuleInit(): void {
@@ -82,7 +84,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       // 'disconnected'/'error'/'draft'/'authorizing' connections (an error state
       // needs a deliberate re-test, not blind repeated polling).
       { name: 'connector-incremental-sync', intervalMs: 15 * 60_000, lockKey: 'truvo:cron:connector-incremental-sync', run: () => this.sweepPerWorkspace((ws) => this.syncConnectorsForWorkspace(ws)) },
-      { name: 'propensity-recovery-scoring', intervalMs: HOUR, lockKey: 'truvo:cron:propensity-recovery-scoring', run: () => this.sweepPerWorkspace(async (ws) => { await this.propensity?.sweepWorkspace(ws); }) },
+      { name: 'propensity-recovery-scoring', intervalMs: HOUR, lockKey: 'truvo:cron:propensity-recovery-scoring', run: () => this.sweepPerWorkspace(async (ws) => { await this.propensity?.sweepWorkspace(ws); await this.modelRegistry?.maintainWorkspace(ws); }) },
     ];
     for (const job of jobs) this.schedule(job);
     this.logger.log(`scheduler ligado: ${jobs.map((j) => j.name).join(', ')}`);
@@ -104,7 +106,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   /** Public deterministic proof for competing scheduler replicas. */
   async runPropensityTick(): Promise<boolean> {
     return withLeaderLock('truvo:cron:propensity-recovery-scoring', 10 * 60_000, () =>
-      this.sweepPerWorkspace(async (workspaceId) => { await this.propensity?.sweepWorkspace(workspaceId); }),
+      this.sweepPerWorkspace(async (workspaceId) => { await this.propensity?.sweepWorkspace(workspaceId); await this.modelRegistry?.maintainWorkspace(workspaceId); }),
     );
   }
 

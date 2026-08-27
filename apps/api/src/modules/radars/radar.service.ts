@@ -4,6 +4,7 @@ import { sql } from 'drizzle-orm';
 import { DRIZZLE, type Database } from '../auth/database.provider';
 import { EventContextQualityService } from '../data-quality/event-context-quality.service';
 import { PropensityDispatchService } from './propensity-dispatch.service';
+import { ModelRegistryService } from './model-registry.service';
 
 export const RADAR_WINDOWS = [7, 14, 30, 60] as const;
 export const DEFAULT_AUDIENCE = { version: 1, op: 'identified' } as const;
@@ -19,7 +20,7 @@ const transitions: Record<string, string[]> = {
   validating_data: ['ready_to_train', 'insufficient_data', 'failed'],
   insufficient_data: ['validating_data', 'archived'],
   ready_to_train: ['training', 'paused', 'archived', 'validating_data'],
-  training: ['active', 'failed', 'insufficient_data'],
+  training: ['active', 'ready_to_train', 'failed', 'insufficient_data'],
   active: ['training', 'paused', 'archived', 'validating_data'],
   paused: ['ready_to_train', 'archived', 'validating_data'],
   failed: ['validating_data', 'archived'],
@@ -158,6 +159,7 @@ export class RadarService {
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly quality: EventContextQualityService,
     @Optional() private readonly propensityDispatch?: PropensityDispatchService,
+    private readonly modelRegistry?: ModelRegistryService,
   ) {}
 
   private async radar(workspaceId: string, id: string): Promise<RadarRow> {
@@ -399,6 +401,7 @@ export class RadarService {
     requestId: string,
     result: { status: 'succeeded' | 'failed' | 'insufficient_data'; modelReference?: string; failureCategory?: string; failureReason?: string },
   ) {
+    if (this.modelRegistry) return this.modelRegistry.reportTrainingResult(workspaceId, id, version, requestId, result);
     return this.db.transaction(async (tx) => {
       const [row] = await tx.execute(sql`select * from radars where workspace_id=${workspaceId} and id=${id} for update`);
       if (!row) throw new NotFoundException('Radar not found');
@@ -427,7 +430,7 @@ export class RadarService {
         const [verifiedModel] = await tx.execute(sql`
           select m.id from radar_model_versions m where m.workspace_id=${workspaceId} and m.id=${modelReference}
             and m.radar_id=${id} and m.definition_version=${version} and m.training_request_id=${requestId}
-            and m.verified_at is not null and m.status in ('candidate','active') and exists (
+            and m.verified_at is not null and m.status in ('candidate','training','validated','active') and exists (
               select 1 from radar_score_batches b where b.workspace_id=m.workspace_id and b.radar_id=m.radar_id
                 and b.model_version_id=m.id and b.status='completed'
             )`);

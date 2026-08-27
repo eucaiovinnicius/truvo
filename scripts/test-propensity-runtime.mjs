@@ -101,7 +101,7 @@ async function main() {
     run(pnpm, ['--filter', '@truvo/db', 'db:migrate'], { env });
     run(python, ['-m', 'unittest', 'discover', '-s', 'apps/propensity-worker/tests', '-t', 'apps/propensity-worker', '-v'], { env });
     run(pnpm, ['--filter', '@truvo/api', 'test:propensity:contracts'], { env });
-    run(pnpm, ['--filter', '@truvo/api', 'exec', 'tsx', '--test', 'src/modules/radars/radar.runtime.test.ts', 'src/modules/radars/propensity.scheduler.runtime.test.ts'], { env });
+    run(pnpm, ['--filter', '@truvo/api', 'exec', 'tsx', '--test', 'src/modules/radars/radar.runtime.test.ts', 'src/modules/radars/propensity.scheduler.runtime.test.ts', 'src/modules/radars/model-registry.runtime.test.ts'], { env });
   } finally {
     for (const container of started.reverse()) {
       const cleanup = spawnSync('docker', ['rm', '-f', container], { stdio: 'inherit' });

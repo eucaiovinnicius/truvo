@@ -18,7 +18,7 @@ NOW = datetime(2026, 1, 1, 12, 34, tzinfo=timezone.utc)
 
 
 class DatabaseResultClient:
-    """Test boundary with the same terminal state effects as RadarService."""
+    """Test boundary stops at validated; promotion is an explicit registry operation."""
     def __init__(self, database_url): self.database_url = database_url; self.calls = []
     def report(self, dispatch, status, **values):
         self.calls.append((dispatch.workspace_id, status, values))
@@ -26,8 +26,8 @@ class DatabaseResultClient:
             if status == "succeeded":
                 model = values["model_reference"]
                 connection.execute("update radar_training_requests set status='succeeded',model_reference=%s,terminal_at=now(),claimed_by=null,lease_expires_at=null where workspace_id=%s and id=%s", (model, dispatch.workspace_id, dispatch.training_request_id))
-                connection.execute("update radar_model_versions set status='active',promoted_at=now() where workspace_id=%s and id=%s", (dispatch.workspace_id, model))
-                connection.execute("update radars set status='active',current_model_reference=%s where workspace_id=%s and id=%s and current_definition_version=%s", (model, dispatch.workspace_id, dispatch.radar_id, dispatch.definition_version))
+                connection.execute("update radar_model_versions set status='validated' where workspace_id=%s and id=%s", (dispatch.workspace_id, model))
+                connection.execute("update radars set status='ready_to_train' where workspace_id=%s and id=%s and current_definition_version=%s", (dispatch.workspace_id, dispatch.radar_id, dispatch.definition_version))
             else:
                 old = connection.execute("select current_model_reference from radars where workspace_id=%s and id=%s", (dispatch.workspace_id, dispatch.radar_id)).fetchone()[0]
                 connection.execute("update radar_training_requests set status=%s,failure_category=%s,failure_reason=%s,terminal_at=now(),claimed_by=null,lease_expires_at=null where workspace_id=%s and id=%s", (status, values.get("failure_category"), values.get("failure_reason"), dispatch.workspace_id, dispatch.training_request_id))
@@ -106,15 +106,15 @@ class PostgresRuntimeTests(unittest.TestCase):
         self.assertEqual({name: summary["rows"] for name, summary in result["splitRanges"].items()}, {"train": 540, "calibration": 180, "test": 180})
         self.assertIn(result["selectedEstimator"], ("logistic_regression", "hist_gradient_boosting"))
         self.assertEqual(runtime.process(dispatch)["status"], "terminal")
-        first_refresh = runtime.score_current(dispatch); second_refresh = runtime.score_current(dispatch)
-        self.assertEqual((first_refresh["status"], second_refresh["status"]), ("executed", "idempotent"))
+        # Refresh is intentionally unavailable before an explicit registry promotion.
+        self.assertEqual(runtime.score_current(dispatch)["status"], "stale")
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
             model = connection.execute("select * from radar_model_versions where workspace_id=%s and training_request_id=%s", (self.ws_a, dispatch.training_request_id)).fetchone()
             scores = connection.execute("select count(*)::int as count,min(probability)::float8 as minimum,max(probability)::float8 as maximum,count(distinct scoring_cutoff)::int as batches from radar_propensity_scores where workspace_id=%s and radar_id=%s", (self.ws_a, dispatch.radar_id)).fetchone()
             cross = connection.execute("select count(*) as count from radar_propensity_scores where workspace_id=%s and customer_id='customer-000'", (self.ws_b,)).fetchone()["count"]
-        self.assertEqual((model["definition_version"], model["target_outcome_definition_id"], model["feature_schema_version"], model["status"]), (1, "target", "propensity-v1", "active"))
+        self.assertEqual((model["definition_version"], model["target_outcome_definition_id"], model["feature_schema_version"], model["status"]), (1, "target", "propensity-v1", "validated"))
         self.assertTrue(model["artifact_reference"].startswith("supabase://models/workspaces/")); self.assertNotIn("service-role", model["artifact_reference"])
-        self.assertGreaterEqual(scores["minimum"], 0); self.assertLessEqual(scores["maximum"], 1); self.assertEqual(scores["count"], 60); self.assertEqual(scores["batches"], 2); self.assertEqual(cross, 0)
+        self.assertGreaterEqual(scores["minimum"], 0); self.assertLessEqual(scores["maximum"], 1); self.assertEqual(scores["count"], 30); self.assertEqual(scores["batches"], 1); self.assertEqual(cross, 0)
     def test_realized_insufficient_data_writes_no_artifact_model_or_scores(self):
         dispatch = self._radar_request(self.ws_b, "insufficient"); self._customers(self.ws_b, 1)
         boundary = DatabaseResultClient(self.database_url)

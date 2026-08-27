@@ -134,6 +134,13 @@
       "when": 1787801738807,
       "tag": "0018_stiff_serpent_society",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1787805575504,
+      "tag": "0019_model_registry_v1",
+      "breakpoints": true
     }
   ]
 }

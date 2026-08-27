@@ -270,8 +270,8 @@ class PostgresRepository:
                    (workspace_id,id,radar_id,definition_version,training_request_id,target_outcome_definition_id,
                     prediction_window_days,status,estimator_type,feature_schema_version,artifact_provider,artifact_bucket,
                     artifact_object_key,artifact_reference,artifact_checksum,serialization_format,cutoff_ranges,data_counts,
-                    metrics,calibration,selection_reason,verified_at)
-                   values (%s,%s,%s,%s,%s,%s,%s,'candidate',%s,%s,%s,%s,%s,%s,%s,'joblib-v1',%s,%s,%s,%s,%s,%s)
+                    metrics,calibration,provenance,validation,selection_reason,verified_at)
+                   values (%s,%s,%s,%s,%s,%s,%s,'training',%s,%s,%s,%s,%s,%s,%s,'joblib-v1',%s,%s,%s,%s,%s,%s,%s,%s)
                    on conflict (workspace_id,training_request_id) do update set verified_at=excluded.verified_at
                    returning id,workspace_id,radar_id,definition_version,training_request_id,artifact_bucket,
                              artifact_object_key,artifact_checksum,artifact_reference,estimator_type,feature_schema_version,verified_at""",
@@ -279,7 +279,7 @@ class PostgresRepository:
                  job.dispatch.training_request_id, job.outcome_definition_id, job.prediction_window_days,
                  result.selected.estimator_type, FEATURE_SCHEMA_VERSION, artifact.provider, artifact.bucket,
                  artifact.object_key, artifact.reference, artifact.checksum, Jsonb(result.split_ranges), Jsonb(result.data_counts),
-                 Jsonb(candidate_metrics), Jsonb(calibration), result.selection_reason, verified_at),
+                 Jsonb(candidate_metrics), Jsonb(calibration), Jsonb({"worker_version": "propensity-worker-v1", "feature_schema_version": FEATURE_SCHEMA_VERSION, "split_counts": result.data_counts, "split_ranges": result.split_ranges, "training_attempt": job.attempt_count}), Jsonb({"artifact_verified_at": verified_at.isoformat(), "artifact_checksum": artifact.checksum}), result.selection_reason, verified_at),
             ).fetchone()
             return PersistedModel(row["id"], row["workspace_id"], row["radar_id"], row["definition_version"], row["training_request_id"], row["artifact_bucket"], row["artifact_object_key"], row["artifact_checksum"], row["artifact_reference"], row["estimator_type"], row["feature_schema_version"], row["verified_at"])
 

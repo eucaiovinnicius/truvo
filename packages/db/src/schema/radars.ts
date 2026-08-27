@@ -78,6 +78,7 @@ export const radarModelVersions = pgTable('radar_model_versions', {
   targetOutcomeDefinitionId: text('target_outcome_definition_id').notNull(),
   predictionWindowDays: integer('prediction_window_days').notNull(),
   status: text('status').notNull().default('candidate'),
+  modelRole: text('model_role').notNull().default('propensity'),
   estimatorType: text('estimator_type').notNull(),
   featureSchemaVersion: text('feature_schema_version').notNull(),
   artifactProvider: text('artifact_provider').notNull().default('supabase_storage'),
@@ -90,6 +91,8 @@ export const radarModelVersions = pgTable('radar_model_versions', {
   dataCounts: jsonb('data_counts').$type<Record<string, unknown>>().notNull(),
   metrics: jsonb('metrics').$type<Record<string, unknown>>().notNull(),
   calibration: jsonb('calibration').$type<Record<string, unknown>>().notNull(),
+  provenance: jsonb('provenance').$type<Record<string, unknown>>().notNull().default({}),
+  validation: jsonb('validation').$type<Record<string, unknown>>().notNull().default({}),
   selectionReason: text('selection_reason').notNull(),
   verifiedAt: timestamp('verified_at', { withTimezone: true }).notNull(),
   promotedAt: timestamp('promoted_at', { withTimezone: true }),
@@ -100,6 +103,24 @@ export const radarModelVersions = pgTable('radar_model_versions', {
   requestFk: foreignKey({ columns: [t.workspaceId, t.trainingRequestId], foreignColumns: [radarTrainingRequests.workspaceId, radarTrainingRequests.id] }).onDelete('cascade'),
   requestUq: uniqueIndex('radar_model_versions_ws_request_uq').on(t.workspaceId, t.trainingRequestId),
   artifactUq: uniqueIndex('radar_model_versions_ws_artifact_uq').on(t.workspaceId, t.artifactBucket, t.artifactObjectKey),
+}));
+
+/** Append-only operational observations.  They are deliberately separate from the
+ * immutable model record so monitoring never rewrites training provenance. */
+export const radarModelMonitoringSnapshots = pgTable('radar_model_monitoring_snapshots', {
+  workspaceId: text('workspace_id').notNull(),
+  id: text('id').notNull(),
+  radarId: text('radar_id').notNull(),
+  modelVersionId: text('model_version_id').notNull(),
+  snapshotType: text('snapshot_type').notNull(),
+  healthStatus: text('health_status').notNull(),
+  metrics: jsonb('metrics').$type<Record<string, unknown>>().notNull().default({}),
+  anomalies: jsonb('anomalies').$type<string[]>().notNull().default([]),
+  observedAt: timestamp('observed_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.workspaceId, t.id] }),
+  modelFk: foreignKey({ columns: [t.workspaceId, t.modelVersionId], foreignColumns: [radarModelVersions.workspaceId, radarModelVersions.id] }).onDelete('restrict'),
+  modelObservedIdx: index('radar_model_monitoring_model_observed_idx').on(t.workspaceId, t.modelVersionId, t.observedAt),
 }));
 
 export const radarPropensityScores = pgTable('radar_propensity_scores', {
