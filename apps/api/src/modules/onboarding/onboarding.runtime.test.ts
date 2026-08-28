@@ -7,7 +7,7 @@ import { RadarService } from '../radars/radar.service';
 import { OnboardingService } from './onboarding.service';
 
 const A = '00000000-0000-0000-0000-000000001201'; const B = '00000000-0000-0000-0000-000000001202';
-let db: Database; let onboarding: OnboardingService;
+let db: Database; let onboarding: OnboardingService; let quality: EventContextQualityService; let radars: RadarService;
 const connections = { get: async (ws: string, id: string) => { const [row] = await db.execute(sql`select id,provider,display_name as "displayName",lifecycle_state as "lifecycleState",credential_status as "credentialStatus" from connector_connections where workspace_id=${ws} and id=${id}`); if (!row) throw new Error('not found'); return row; } };
 
 async function clean() { await db.execute(sql`delete from onboarding_milestones where workspace_id in (${A},${B})`); await db.execute(sql`delete from onboarding_progress where workspace_id in (${A},${B})`); await db.execute(sql`delete from radar_definition_versions where workspace_id in (${A},${B})`); await db.execute(sql`delete from radars where workspace_id in (${A},${B})`); }
@@ -22,8 +22,8 @@ describe('Order 120 onboarding runtime acceptance', { concurrency: 1 }, () => {
     await db.execute(sql`insert into workspaces (id,name,slug) values (${A},'Onboarding A','onboarding-a'),(${B},'Onboarding B','onboarding-b') on conflict do nothing`);
     await seedCanonical(A); await seedCanonical(B);
     await db.execute(sql`insert into connector_connections (workspace_id,id,provider,role,display_name,lifecycle_state,credential_status,capabilities) values (${A},'shopify-a','shopify','source','Shopify A','healthy','valid','["read"]'),(${B},'shopify-a','shopify','source','Shopify B','healthy','valid','["read"]') on conflict do nothing`);
-    const quality = new EventContextQualityService(db); const radars = new RadarService(db, quality);
-    onboarding = new OnboardingService(db, { update: async () => ({}) } as never, connections as never, quality, radars);
+    quality = new EventContextQualityService(db); radars = new RadarService(db, quality);
+    onboarding = new OnboardingService(db, { update: async (ws: string, input: { name?: string }) => { if (input.name) await db.execute(sql`update workspaces set name=${input.name} where id=${ws}`); return {}; } } as never, connections as never, quality, radars);
   });
   after(async () => { await clean(); await db.execute(sql`delete from connector_connections where workspace_id in (${A},${B})`); await db.execute(sql`delete from outcome_definitions where workspace_id in (${A},${B})`); await db.execute(sql`delete from customers where workspace_id in (${A},${B})`); await db.execute(sql`delete from workspaces where id in (${A},${B})`); await closeDb(db); });
 
@@ -37,15 +37,31 @@ describe('Order 120 onboarding runtime acceptance', { concurrency: 1 }, () => {
     }
   });
 
-  test('real canonical readiness permits an insufficient-history Radar and concurrent replay creates exactly one', async () => {
+  test('post-persistence failure rolls back Radar atomically; retry, concurrency and different-key replay remain singular', async () => {
     await clean(); await onboarding.start(A, undefined); await onboarding.selectPath(A, undefined, { path: 'ecommerce' }); await onboarding.linkConnection(A, undefined, 'shopify-a'); await onboarding.verifyData(A); const ready = await onboarding.readiness(A, undefined, { outcomeKey: 'purchase' });
     assert.equal(ready.readiness.radarReadiness.status, 'not_ready');
     const request = { name: 'First truthful Radar', outcomeDefinitionId: 'purchase', predictionWindowDays: 30 as const, idempotencyKey: 'stable-first-radar-a' };
+    let injected = false;
+    const failing = new OnboardingService(db, {} as never, connections as never, quality, radars, { afterRadarPersistence: async (_ws, radarId) => { assert.match(radarId, /^rad_/); injected = true; throw new Error('injected_after_radar_persistence'); } });
+    await assert.rejects(() => failing.createFirstRadar(A, undefined, request), /injected_after_radar_persistence/); assert.equal(injected, true);
+    const [rolledBack] = await db.execute(sql`select (select count(*) from radars where workspace_id=${A})::int radars,(select first_radar_id from onboarding_progress where workspace_id=${A}) first_radar_id`);
+    assert.deepEqual({ radars: Number((rolledBack as { radars: number }).radars), firstRadarId: (rolledBack as { first_radar_id: string | null }).first_radar_id }, { radars: 0, firstRadarId: null });
     const results = await Promise.all(Array.from({ length: 8 }, () => onboarding.createFirstRadar(A, undefined, request)));
-    const ids = results.map((r) => String((r.radar as any).radar.id)); assert.equal(new Set(ids).size, 1);
+    const ids = results.map((r) => String((r.radar as { radar: { id: string } }).radar.id)); assert.equal(new Set(ids).size, 1);
+    const differentKey = await onboarding.createFirstRadar(A, undefined, { ...request, idempotencyKey: 'different-key-after-complete' }); assert.equal((differentKey.radar as { radar: { id: string } }).radar.id, ids[0]);
     const [counts] = await db.execute(sql`select (select count(*) from radars where workspace_id=${A})::int radars,(select count(*) from onboarding_milestones where workspace_id=${A} and milestone='first_radar_created')::int milestones`);
-    assert.deepEqual({ radars: Number((counts as any).radars), milestones: Number((counts as any).milestones) }, { radars: 1, milestones: 1 });
-    const final = await onboarding.get(A); assert.equal(final.progress.status, 'completed'); assert.ok(final.ttfvMs! >= 0);
+    assert.deepEqual({ radars: Number((counts as { radars: number }).radars), milestones: Number((counts as { milestones: number }).milestones) }, { radars: 1, milestones: 1 });
+    const final = await onboarding.get(A); assert.equal(final.progress.status, 'completed'); assert.equal(final.progress.first_radar_id, ids[0]); assert.ok(final.ttfvMs! >= 0);
+  });
+
+  test('owner/admin may rename, member may start but receives 403 on rename and cannot mutate another workspace', async () => {
+    await clean(); await db.execute(sql`update workspaces set name='Original A' where id=${A}`); await db.execute(sql`update workspaces set name='Original B' where id=${B}`);
+    await onboarding.start(A, undefined, 'Owner rename', true); let [a] = await db.execute(sql`select name from workspaces where id=${A}`); assert.equal((a as { name: string }).name, 'Owner rename');
+    await onboarding.start(A, undefined, 'Admin rename', true); [a] = await db.execute(sql`select name from workspaces where id=${A}`); assert.equal((a as { name: string }).name, 'Admin rename');
+    await onboarding.start(B, undefined, undefined, false);
+    await assert.rejects(() => onboarding.start(A, undefined, 'Forbidden member rename', false), (error: unknown) => (error as { getStatus(): number }).getStatus() === 403);
+    const [names] = await db.execute(sql`select (select name from workspaces where id=${A}) a,(select name from workspaces where id=${B}) b`);
+    assert.deepEqual(names, { a: 'Admin rename', b: 'Original B' });
   });
 
   test('tenant boundary, source revocation and retry reflect canonical truth', async () => {

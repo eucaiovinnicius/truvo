@@ -62,7 +62,7 @@ export default function App() {
   const handleLoginSuccess = (newProfile: ProfileConfig, mode: 'live' | 'demo') => {
     setProfile(newProfile);
     localStorage.setItem('truvo_profile', JSON.stringify(newProfile));
-    setView(mode === 'live' ? 'dashboard' : 'onboarding');
+    setView('dashboard');
   };
 
   const handleLogout = () => {
@@ -96,6 +96,7 @@ export default function App() {
 
   // Launch onboarding wizard trigger
   const handleStartOnboarding = () => {
+    if (session.mode === 'demo') { setView('dashboard'); return; }
     setView('onboarding');
   };
 
@@ -233,6 +234,7 @@ export default function App() {
             {/* Conditional Sub-View Router */}
             {currentView === 'onboarding' && (
               <OnboardingFlow 
+                workspaceId={visibleWorkspace.id}
                 onComplete={handleCompleteOnboarding} 
                 onCancel={() => setView('dashboard')}
                 showCancelButton={true}

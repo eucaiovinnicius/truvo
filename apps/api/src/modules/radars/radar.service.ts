@@ -41,6 +41,7 @@ type RadarRow = {
   current_definition_version: number;
   current_model_reference: string | null;
 };
+type RadarDb = Pick<Database, 'execute' | 'transaction'>;
 type DefinitionRow = {
   workspace_id: string;
   radar_id: string;
@@ -162,8 +163,8 @@ export class RadarService {
     private readonly modelRegistry?: ModelRegistryService,
   ) {}
 
-  private async radar(workspaceId: string, id: string): Promise<RadarRow> {
-    const [row] = await this.db.execute(sql`select * from radars where workspace_id=${workspaceId} and id=${id}`);
+  private async radar(workspaceId: string, id: string, database: RadarDb = this.db): Promise<RadarRow> {
+    const [row] = await database.execute(sql`select * from radars where workspace_id=${workspaceId} and id=${id}`);
     if (!row) throw new NotFoundException('Radar not found');
     return row as unknown as RadarRow;
   }
@@ -175,26 +176,26 @@ export class RadarService {
     predictionWindowDays: number;
     optimizationGoal?: Record<string, unknown>;
     activationDestination?: ActivationDestination;
-  }) {
+  }, database: RadarDb = this.db) {
     if (!RADAR_WINDOWS.includes(input.predictionWindowDays as 7)) {
       throw new BadRequestException('Prediction window must be 7, 14, 30, or 60 days');
     }
     const audience = validateAudienceAst(input.audienceAst ?? DEFAULT_AUDIENCE);
-    await this.assertOutcome(workspaceId, input.outcomeDefinitionId);
-    const destination = await this.validateDestination(workspaceId, input.activationDestination);
+    await this.assertOutcome(workspaceId, input.outcomeDefinitionId, database);
+    const destination = await this.validateDestination(workspaceId, input.activationDestination, database);
     const id = `rad_${randomUUID()}`;
-    await this.db.transaction(async (tx) => {
+    await database.transaction(async (tx) => {
       await tx.execute(sql`insert into radars (workspace_id,id,name,status,current_definition_version) values (${workspaceId},${id},${input.name},'draft',1)`);
       await tx.execute(sql`insert into radar_definition_versions (workspace_id,radar_id,version,outcome_definition_id,audience_ast,prediction_window_days,optimization_goal,activation_destination) values (${workspaceId},${id},1,${input.outcomeDefinitionId},${JSON.stringify(audience)}::jsonb,${input.predictionWindowDays},${JSON.stringify(input.optimizationGoal ?? {})}::jsonb,${destination ? JSON.stringify(destination) : null}::jsonb)`);
     });
-    return this.get(workspaceId, id);
+    return this.get(workspaceId, id, database);
   }
 
-  async get(workspaceId: string, id: string) {
-    const radar = await this.radar(workspaceId, id);
-    const [rawDefinition] = await this.db.execute(sql`select * from radar_definition_versions where workspace_id=${workspaceId} and radar_id=${id} and version=${radar.current_definition_version}`);
+  async get(workspaceId: string, id: string, database: RadarDb = this.db) {
+    const radar = await this.radar(workspaceId, id, database);
+    const [rawDefinition] = await database.execute(sql`select * from radar_definition_versions where workspace_id=${workspaceId} and radar_id=${id} and version=${radar.current_definition_version}`);
     const definition = normalizeRadarDefinition(rawDefinition);
-    const [ml] = await this.db.execute(sql`
+    const [ml] = await database.execute(sql`
       select m.id as current_model_version,m.estimator_type,m.metrics,m.calibration,m.promoted_at as last_successful_training_at,
              scores.latest_scoring_at,scores.scored_customer_count,
              training.status as training_state
@@ -213,7 +214,7 @@ export class RadarService {
     return {
       radar,
       definition,
-      activationReadiness: await this.activationReadiness(workspaceId, definition.activation_destination),
+      activationReadiness: await this.activationReadiness(workspaceId, definition.activation_destination, database),
       ml: ml ? {
         currentModelVersion: (ml as { current_model_version?: string | null }).current_model_version ?? null,
         estimatorType: (ml as { estimator_type?: string | null }).estimator_type ?? null,
@@ -505,15 +506,15 @@ export class RadarService {
     if (!transitions[from]?.includes(to)) throw new BadRequestException(`Illegal Radar transition: ${from} -> ${to}`);
   }
 
-  private async assertOutcome(workspaceId: string, outcomeDefinitionId: string) {
-    const [outcome] = await this.db.execute(sql`select id from outcome_definitions where workspace_id=${workspaceId} and id=${outcomeDefinitionId} and is_active=true and deleted_at is null`);
+  private async assertOutcome(workspaceId: string, outcomeDefinitionId: string, database: RadarDb = this.db) {
+    const [outcome] = await database.execute(sql`select id from outcome_definitions where workspace_id=${workspaceId} and id=${outcomeDefinitionId} and is_active=true and deleted_at is null`);
     if (!outcome) throw new BadRequestException('Target outcome is not an active canonical outcome definition');
   }
 
-  private async validateDestination(workspaceId: string, destination?: ActivationDestination) {
+  private async validateDestination(workspaceId: string, destination?: ActivationDestination, database: RadarDb = this.db) {
     if (!destination) return null;
     if (destination.capability !== 'activation') throw new BadRequestException('Unsupported activation capability');
-    const [connection] = await this.db.execute(sql`select id,capabilities from connector_connections where workspace_id=${workspaceId} and id=${destination.connectionId} and role in ('destination','bidirectional')`);
+    const [connection] = await database.execute(sql`select id,capabilities from connector_connections where workspace_id=${workspaceId} and id=${destination.connectionId} and role in ('destination','bidirectional')`);
     if (
       !connection
       || !Array.isArray((connection as { capabilities?: unknown }).capabilities)
@@ -524,9 +525,9 @@ export class RadarService {
     return { connectionId: destination.connectionId, capability: 'activation' as const };
   }
 
-  private async activationReadiness(workspaceId: string, destination: ActivationDestination | null) {
+  private async activationReadiness(workspaceId: string, destination: ActivationDestination | null, database: RadarDb = this.db) {
     if (!destination) return { status: 'not_configured' as const, reasonCode: null };
-    const [connection] = await this.db.execute(sql`select lifecycle_state,capabilities from connector_connections where workspace_id=${workspaceId} and id=${destination.connectionId} and role in ('destination','bidirectional')`);
+    const [connection] = await database.execute(sql`select lifecycle_state,capabilities from connector_connections where workspace_id=${workspaceId} and id=${destination.connectionId} and role in ('destination','bidirectional')`);
     if (
       !connection
       || !Array.isArray((connection as { capabilities?: unknown }).capabilities)

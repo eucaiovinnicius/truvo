@@ -6,7 +6,7 @@ let started = false;
 try {
   run('docker', ['run','--name',name,'-e','POSTGRES_PASSWORD=onboarding_test','-e','POSTGRES_DB=truvo_onboarding','-p',`${port}:5432`,'-d','postgres:16-alpine']); started = true;
   for (let i=0;i<60;i++) { const ready=spawnSync('docker',['exec',name,'pg_isready','-U','postgres','-d','truvo_onboarding'],{stdio:'ignore'}); if(ready.status===0) break; if(i===59) throw new Error('Postgres not ready'); await delay(500); }
-  const env={...process.env,DATABASE_URL:url}; run(pnpm,['--filter','@truvo/db','db:migrate'],{env}); run(pnpm,['--filter','@truvo/db','db:migrate'],{env}); run(pnpm,['--filter','@truvo/api','exec','tsx','--test','src/modules/onboarding/onboarding.runtime.test.ts'],{env});
+  const env={...process.env,DATABASE_URL:url}; run(pnpm,['--filter','@truvo/db','db:migrate'],{env}); run(pnpm,['--filter','@truvo/db','db:migrate'],{env}); run(pnpm,['--filter','@truvo/api','exec','tsx','--test','src/modules/onboarding/onboarding.runtime.test.ts','src/modules/auth/guards/workspace.guard.test.ts'],{env});
   run(pnpm,['--filter','@truvo/web','test'],{env});
   run(pnpm,['--filter','@truvo/web','test:onboarding:e2e'],{env});
 } finally { if(started) run('docker',['rm','-f',name]); }

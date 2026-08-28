@@ -1,29 +1,40 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowRight, CheckCircle2, LoaderCircle, RefreshCw, TriangleAlert } from 'lucide-react';
 import { api } from '@/lib/api';
 
-interface Props { onComplete: (workspaceName: string) => void; onCancel: () => void; showCancelButton: boolean }
+interface Props { workspaceId: string; onComplete: (workspaceName: string) => void; onCancel: () => void; showCancelButton: boolean }
 type Path = 'ecommerce' | 'saas' | 'custom';
 type Connection = { id: string; provider: string; displayName: string; lifecycleState: string; credentialStatus: string };
 type State = { progress: Record<string, any>; source: { state: string; healthy: boolean; provider: string | null }; ttfvMs: number | null; recommendations: Record<Path, string[]>; readiness?: any; counts?: Record<string, number>; detected?: boolean };
 const labels: Record<Path, [string, string]> = { ecommerce: ['Loja / ecommerce', 'Shopify, Stripe e Klaviyo'], saas: ['Assinatura / SaaS', 'Stripe, HubSpot e eventos do produto'], custom: ['Eventos personalizados / API', 'Truvo Events ou API de ingestão'] };
 
-export default function OnboardingFlow({ onComplete, onCancel, showCancelButton }: Props) {
+export default function OnboardingFlow({ workspaceId, onComplete, onCancel, showCancelButton }: Props) {
   const [state, setState] = useState<State | null>(null); const [connections, setConnections] = useState<Connection[]>([]);
   const [name, setName] = useState(''); const [outcomes, setOutcomes] = useState<Array<{ id: string; name: string }>>([]); const [outcomeId, setOutcomeId] = useState('');
   const [radarName, setRadarName] = useState('Meu primeiro Radar'); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
-  const workspaceId = typeof window === 'undefined' ? '' : localStorage.getItem('truvo_workspace') ?? '';
+  const generation = useRef(0); const pending = useRef<AbortController | null>(null);
   const load = useCallback(async () => {
-    const current = await api<State>('/v1/onboarding'); setState(current);
-    if (workspaceId) setConnections(await api<Connection[]>(`/v1/workspaces/${workspaceId}/connectors/connections`).catch(() => []));
-    const available = await api<Array<{ id: string; name: string }>>('/v1/radars/metadata/outcomes').catch(() => []); setOutcomes(available); setOutcomeId((old) => old || available[0]?.id || '');
+    const requestGeneration = generation.current; const controller = new AbortController(); pending.current?.abort(); pending.current = controller;
+    const current = await api<State>('/v1/onboarding', { signal: controller.signal });
+    const [nextConnections, available] = await Promise.all([
+      workspaceId ? api<Connection[]>(`/v1/workspaces/${workspaceId}/connectors/connections`, { signal: controller.signal }).catch(() => []) : [],
+      api<Array<{ id: string; name: string }>>('/v1/radars/metadata/outcomes', { signal: controller.signal }).catch(() => []),
+    ]);
+    if (controller.signal.aborted || requestGeneration !== generation.current) return;
+    setState(current); setConnections(nextConnections); setOutcomes(available); setOutcomeId(available[0]?.id || '');
   }, [workspaceId]);
-  useEffect(() => { void load().catch((e) => setError(e.message)); }, [load]);
+  useEffect(() => {
+    generation.current += 1; pending.current?.abort(); setState(null); setConnections([]); setOutcomes([]); setOutcomeId(''); setError(''); setBusy(false);
+    void load().catch((e) => { if ((e as Error).name !== 'AbortError') setError((e as Error).message); });
+    return () => { generation.current += 1; pending.current?.abort(); };
+  }, [workspaceId, load]);
   useEffect(() => { if (!state || !['syncing', 'waiting_for_data', 'blocked'].includes(String(state.progress.status))) return; const timer = window.setInterval(() => void load(), 5000); return () => clearInterval(timer); }, [state, load]);
-  const act = async (path: string, body?: unknown) => { setBusy(true); setError(''); try { setState(await api<State>(path, { method: 'POST', body: JSON.stringify(body ?? {}) })); } catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível continuar'); } finally { setBusy(false); } };
-  if (!state) return <div className="mx-auto max-w-3xl p-10 text-center" role="status"><LoaderCircle className="mx-auto animate-spin" /> Carregando seu progresso…</div>;
+  const act = async (path: string, body?: unknown) => { const requestGeneration = generation.current; const controller = new AbortController(); pending.current?.abort(); pending.current = controller; setBusy(true); setError(''); try { const next = await api<State>(path, { method: 'POST', body: JSON.stringify(body ?? {}), signal: controller.signal }); if (!controller.signal.aborted && requestGeneration === generation.current) setState(next); } catch (e) { if ((e as Error).name !== 'AbortError' && requestGeneration === generation.current) setError(e instanceof Error ? e.message : 'Não foi possível continuar'); } finally { if (requestGeneration === generation.current) setBusy(false); } };
+  if (!state) return error
+    ? <div className="mx-auto max-w-3xl rounded-xl border border-rose-200 bg-rose-50 p-6 text-rose-900" role="alert">{error}</div>
+    : <div className="mx-auto max-w-3xl p-10 text-center" role="status"><LoaderCircle className="mx-auto animate-spin" /> Carregando seu progresso…</div>;
   const step = String(state.progress.current_step); const path = state.progress.selected_path as Path | null;
   const compatible = connections.filter((c) => !path || state.recommendations[path].includes(c.provider));
   return <section className="mx-auto my-6 max-w-3xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl" aria-labelledby="onboarding-title" data-testid="onboarding-flow">

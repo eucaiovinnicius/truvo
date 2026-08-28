@@ -1,4 +1,4 @@
-import { ConflictException, Inject, Injectable } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Inject, Injectable, Optional } from '@nestjs/common';
 import { sql } from 'drizzle-orm';
 import { DRIZZLE, type Database } from '../auth/database.provider';
 import { WorkspacesService } from '../auth/workspaces.service';
@@ -9,10 +9,12 @@ import type { CreateFirstRadarDto, SelectPathDto } from './onboarding.dto';
 
 type Progress = Record<string, unknown> & { workspace_id: string; selected_path?: string | null; connection_id?: string | null; first_radar_id?: string | null; started_at?: Date | null; first_radar_created_at?: Date | null };
 const SAFE_METADATA = new Set(['path', 'provider', 'sourceStatus']);
+export const ONBOARDING_FAILURE_INJECTOR = Symbol('ONBOARDING_FAILURE_INJECTOR');
+export interface OnboardingFailureInjector { afterRadarPersistence?(workspaceId: string, radarId: string): Promise<void> | void }
 
 @Injectable()
 export class OnboardingService {
-  constructor(@Inject(DRIZZLE) private readonly db: Database, private readonly workspaces: WorkspacesService, private readonly connections: ConnectorConnectionService, private readonly quality: EventContextQualityService, private readonly radars: RadarService) {}
+  constructor(@Inject(DRIZZLE) private readonly db: Database, private readonly workspaces: WorkspacesService, private readonly connections: ConnectorConnectionService, private readonly quality: EventContextQualityService, private readonly radars: RadarService, @Optional() @Inject(ONBOARDING_FAILURE_INJECTOR) private readonly failureInjector?: OnboardingFailureInjector) {}
 
   private async ensure(workspaceId: string): Promise<Progress> {
     await this.db.execute(sql`insert into onboarding_progress (workspace_id) values (${workspaceId}) on conflict (workspace_id) do nothing`);
@@ -46,7 +48,8 @@ export class OnboardingService {
     return { progress: p, source, milestones, ttfvMs, recommendations: { ecommerce: ['shopify', 'stripe', 'klaviyo'], saas: ['stripe', 'hubspot', 'klaviyo'], custom: ['truvo_events', 'api_ingestion'] } };
   }
 
-  async start(workspaceId: string, userId: string | undefined, workspaceName?: string) {
+  async start(workspaceId: string, userId: string | undefined, workspaceName?: string, canRename = false) {
+    if (workspaceName && !canRename) throw new ForbiddenException('Only workspace owners and admins may rename a workspace');
     if (workspaceName) await this.workspaces.update(workspaceId, { name: workspaceName });
     await this.ensure(workspaceId);
     await this.db.execute(sql`update onboarding_progress set status=case when status='not_started' then 'in_progress' else status end,current_step=case when current_step='workspace_basics' then 'choose_path' else current_step end,started_at=coalesce(started_at,now()),updated_at=now() where workspace_id=${workspaceId}`);
@@ -100,16 +103,17 @@ export class OnboardingService {
       if (progress.first_radar_id) return { radar: await this.radars.get(workspaceId, String(progress.first_radar_id)), replay: true };
       if (progress.radar_idempotency_key && progress.radar_idempotency_key !== idempotencyKey) throw new ConflictException('First Radar creation is already in progress');
       await tx.execute(sql`update onboarding_progress set status='radar_in_progress',first_radar_initiated_at=coalesce(first_radar_initiated_at,now()),radar_idempotency_key=${idempotencyKey},updated_at=now() where workspace_id=${workspaceId}`);
-      const created = await this.radars.create(workspaceId, radarInput);
+      const created = await this.radars.create(workspaceId, radarInput, tx);
       const createdId = String((created as { radar?: { id?: string } }).radar?.id);
-      await this.radars.validate(workspaceId, createdId);
-      const radar = await this.radars.get(workspaceId, createdId);
-      const radarId = String((radar as { radar?: { id?: string } }).radar?.id);
+      await this.failureInjector?.afterRadarPersistence?.(workspaceId, createdId);
+      const radarId = createdId;
       await tx.execute(sql`update onboarding_progress set status='completed',current_step='completed',first_radar_id=${radarId},first_radar_created_at=coalesce(first_radar_created_at,now()),completed_at=coalesce(completed_at,now()),last_error_code=null,last_error_remediation=null,updated_at=now() where workspace_id=${workspaceId}`);
-      return { radar, replay: false };
+      return { radar: created, replay: false };
     });
     await this.milestone(workspaceId, userId, 'first_radar_initiated');
     await this.milestone(workspaceId, userId, 'first_radar_created'); await this.milestone(workspaceId, userId, 'onboarding_completed');
-    return { ...(await this.get(workspaceId)), ...result };
+    const radarId = String((result.radar as { radar?: { id?: string } }).radar?.id);
+    if (!result.replay) await this.radars.validate(workspaceId, radarId);
+    return { ...(await this.get(workspaceId)), radar: await this.radars.get(workspaceId, radarId), replay: result.replay };
   }
 }
