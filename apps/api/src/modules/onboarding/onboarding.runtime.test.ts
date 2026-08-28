@@ -53,6 +53,13 @@ describe('Order 120 onboarding runtime acceptance', { concurrency: 1 }, () => {
     const [counts] = await db.execute(sql`select (select count(*) from radars where workspace_id=${A})::int radars,(select count(*) from onboarding_milestones where workspace_id=${A} and milestone='first_radar_created')::int milestones`);
     assert.deepEqual({ radars: Number((counts as { radars: number }).radars), milestones: Number((counts as { milestones: number }).milestones) }, { radars: 1, milestones: 1 });
     const final = await onboarding.get(A); assert.equal(final.progress.status, 'completed'); assert.equal(final.progress.first_radar_id, ids[0]); assert.ok(final.ttfvMs! >= 0);
+    await db.execute(sql`update connector_connections set lifecycle_state='disconnected',credential_status='invalid' where workspace_id=${A} and id='shopify-a'`);
+    assert.equal((await onboarding.get(A)).progress.status, 'blocked');
+    await db.execute(sql`update connector_connections set lifecycle_state='healthy',credential_status='valid' where workspace_id=${A} and id='shopify-a'`);
+    const recovered = await onboarding.get(A); assert.equal(recovered.progress.status, 'completed'); assert.equal(recovered.progress.last_error_code, null);
+    const unavailable = new OnboardingService(db, {} as never, { get: async () => { throw new Error('connector_database_unavailable'); } } as never, quality, radars);
+    await assert.rejects(() => unavailable.get(A), /connector_database_unavailable/);
+    assert.equal((await onboarding.get(A)).progress.status, 'completed');
   });
 
   test('post-commit validation failure replays the same Radar and recovers its lifecycle', async () => {
@@ -64,6 +71,10 @@ describe('Order 120 onboarding runtime acceptance', { concurrency: 1 }, () => {
     const replay = await flaky.createFirstRadar(A, undefined, request); assert.equal((replay.radar as { radar: { id: string } }).radar.id, id);
     const [count] = await db.execute(sql`select count(*)::int count from radars where workspace_id=${A}`); assert.equal(Number((count as { count: number }).count), 1);
     assert.notEqual((await radars.get(A, id)).radar.status, 'draft');
+    await Promise.race([
+      Promise.all(Array.from({ length: 12 }, () => radars.validate(A, id))),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('concurrent_validation_pool_deadlock')), 15_000)),
+    ]);
   });
 
   test('owner/admin may rename, member may start but receives 403 on rename and cannot mutate another workspace', async () => {

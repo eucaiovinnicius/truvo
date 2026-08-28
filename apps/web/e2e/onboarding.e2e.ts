@@ -118,8 +118,11 @@ test('workspace B rejects delayed A state, data and polling after switch', async
   await expect(page.getByText('Estamos verificando seu Contexto')).toBeVisible(); releaseA?.();
   await expect(page.getByText('Envie um evento real')).toHaveCount(0); const callsAAfterSwitch = callsA;
   await expect.poll(() => callsB).toBeGreaterThanOrEqual(2); expect(callsA).toBe(callsAAfterSwitch);
+  const callsBeforeFailure = callsB; failB = true; await expect.poll(() => callsB, { timeout: 8_000 }).toBeGreaterThan(callsBeforeFailure);
+  const pollingAlert = page.getByTestId('onboarding-flow').getByRole('alert');
+  await expect(pollingAlert).toContainText('B unavailable'); await expect(page.getByText('Estamos verificando seu Contexto')).toBeVisible();
+  failB = false; await pollingAlert.getByRole('button', { name: 'Tentar novamente' }).click(); await expect(pollingAlert).toHaveCount(0); await expect(page.getByText('Estamos verificando seu Contexto')).toBeVisible();
   delayA = false; await page.locator('#workspace-switcher-btn').click(); await page.getByRole('button', { name: 'Workspace A' }).click(); await expect(page.getByLabel('Nome do workspace')).toBeVisible();
-  failB = true; await page.locator('#workspace-switcher-btn').click(); await page.getByRole('button', { name: 'Workspace B' }).click(); await expect(page.getByTestId('onboarding-load-error')).toContainText('B unavailable');
 });
 
 test('connections distinguish legitimate empty, failure and retry recovery', async ({ page }) => {

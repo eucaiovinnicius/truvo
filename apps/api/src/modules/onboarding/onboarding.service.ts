@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException, Inject, Injectable, Optional } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { sql } from 'drizzle-orm';
 import { DRIZZLE, type Database } from '../auth/database.provider';
 import { WorkspacesService } from '../auth/workspaces.service';
@@ -35,12 +35,16 @@ export class OnboardingService {
       const healthy = connection.lifecycleState === 'healthy' && connection.credentialStatus === 'valid';
       const blocked = connection.lifecycleState === 'disconnected' || ['invalid', 'expired'].includes(connection.credentialStatus);
       return { state: healthy ? 'healthy' : blocked ? 'error' : connection.lifecycleState, healthy, provider: connection.provider };
-    } catch { return { state: 'removed', healthy: false, provider: null }; }
+    } catch (error) {
+      if (error instanceof NotFoundException) return { state: 'removed', healthy: false, provider: null };
+      throw error;
+    }
   }
 
   async get(workspaceId: string) {
     const progress = await this.ensure(workspaceId); const source = await this.source(workspaceId, progress);
     if (progress.connection_id && !source.healthy && progress.first_radar_id) await this.db.execute(sql`update onboarding_progress set status='blocked',source_status=${source.state},last_error_code='source_unhealthy',last_error_remediation='Reconnect or replace the context source',updated_at=now() where workspace_id=${workspaceId}`);
+    if (progress.connection_id && source.healthy && progress.first_radar_id && progress.current_step === 'completed' && progress.status === 'blocked') await this.db.execute(sql`update onboarding_progress set status='completed',source_status='healthy',last_error_code=null,last_error_remediation=null,updated_at=now() where workspace_id=${workspaceId}`);
     const [fresh] = await this.db.execute(sql`select * from onboarding_progress where workspace_id=${workspaceId}`);
     const milestones = await this.db.execute(sql`select milestone,metadata,occurred_at from onboarding_milestones where workspace_id=${workspaceId} order by occurred_at`);
     const p = fresh as Progress;
