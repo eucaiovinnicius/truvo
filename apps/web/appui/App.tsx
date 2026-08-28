@@ -33,7 +33,6 @@ export default function App() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshSuccess, setRefreshSuccess] = useState(false);
   const [refreshError, setRefreshError] = useState(false);
-  const [onboardingUnavailable, setOnboardingUnavailable] = useState(false);
   const [dateRange, setDateRange] = useState('Last 7 Days');
 
   // Core business configurations
@@ -97,18 +96,13 @@ export default function App() {
 
   // Launch onboarding wizard trigger
   const handleStartOnboarding = () => {
-    if (session.isLive) {
-      setOnboardingUnavailable(true);
-      setTimeout(() => setOnboardingUnavailable(false), 3000);
-      return;
-    }
     setView('onboarding');
   };
 
   // Onboarding completion handler
   const handleCompleteOnboarding = (newWorkspaceName: string) => {
     setWorkspace(prev => ({ ...prev, name: newWorkspaceName }));
-    setView('dashboard');
+    setView('radars');
   };
 
   // Pipeline refresh simulation
@@ -229,11 +223,6 @@ export default function App() {
         {refreshError && (
           <div role="alert" className="fixed top-20 right-8 z-50 bg-amber-50 border border-amber-200 text-amber-900 text-xs px-4 py-2.5 rounded-xl shadow-xl flex items-center gap-2">
             A atualização manual ao vivo ainda não está conectada. Nenhum dado foi alterado.
-          </div>
-        )}
-        {onboardingUnavailable && (
-          <div role="alert" className="fixed top-20 right-8 z-50 bg-amber-50 border border-amber-200 text-amber-900 text-xs px-4 py-2.5 rounded-xl shadow-xl">
-            O assistente de onboarding ao vivo ainda não está conectado. Nenhuma integração foi simulada.
           </div>
         )}
 
