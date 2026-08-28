@@ -84,6 +84,20 @@ describe('Order 120 onboarding runtime acceptance', { concurrency: 1 }, () => {
     ]);
   });
 
+  test('concurrent path selection cannot regress a first Radar that commits under the onboarding lock', async () => {
+    await clean(); await onboarding.start(A, undefined); await onboarding.selectPath(A, undefined, { path: 'ecommerce' }); await onboarding.linkConnection(A, undefined, 'shopify-a'); await onboarding.verifyData(A); await onboarding.readiness(A, undefined, { outcomeKey: 'purchase' });
+    const request = { name: 'Locked first Radar', outcomeDefinitionId: 'purchase', predictionWindowDays: 30 as const, idempotencyKey: 'locked-first-radar' };
+    const [pathResult, radarResult] = await Promise.allSettled([
+      onboarding.selectPath(A, undefined, { path: 'saas' }),
+      onboarding.createFirstRadar(A, undefined, request),
+    ]);
+    assert.equal(radarResult.status, 'fulfilled');
+    if (pathResult.status === 'rejected') assert.equal((pathResult.reason as { getStatus(): number }).getStatus(), 409);
+    const final = await onboarding.get(A);
+    assert.equal(final.progress.status, 'completed'); assert.equal(final.progress.current_step, 'completed'); assert.ok(final.progress.first_radar_id);
+    const [count] = await db.execute(sql`select count(*)::int count from radars where workspace_id=${A}`); assert.equal(Number((count as { count: number }).count), 1);
+  });
+
   test('owner/admin may rename, member may start but receives 403 on rename and cannot mutate another workspace', async () => {
     await clean(); await db.execute(sql`update workspaces set name='Original A' where id=${A}`); await db.execute(sql`update workspaces set name='Original B' where id=${B}`);
     await onboarding.start(A, undefined, 'Owner rename', true); let [a] = await db.execute(sql`select name from workspaces where id=${A}`); assert.equal((a as { name: string }).name, 'Owner rename');

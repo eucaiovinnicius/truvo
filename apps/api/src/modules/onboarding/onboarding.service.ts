@@ -61,8 +61,13 @@ export class OnboardingService {
   }
 
   async selectPath(workspaceId: string, userId: string | undefined, input: SelectPathDto) {
-    const progress = await this.ensure(workspaceId); if (progress.first_radar_id) throw new ConflictException('Onboarding is already completed');
-    await this.db.execute(sql`update onboarding_progress set selected_path=${input.path},status='waiting_for_connection',current_step='connect_context',connection_id=null,source_status='not_connected',last_error_code=null,last_error_remediation=null,updated_at=now() where workspace_id=${workspaceId}`);
+    await this.ensure(workspaceId);
+    await this.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`onboarding:${workspaceId}`}))`);
+      const [progress] = await tx.execute(sql`select * from onboarding_progress where workspace_id=${workspaceId} for update`);
+      if ((progress as Progress | undefined)?.first_radar_id) throw new ConflictException('Onboarding is already completed');
+      await tx.execute(sql`update onboarding_progress set selected_path=${input.path},status='waiting_for_connection',current_step='connect_context',connection_id=null,source_status='not_connected',last_error_code=null,last_error_remediation=null,updated_at=now() where workspace_id=${workspaceId}`);
+    });
     await this.milestone(workspaceId, userId, 'onboarding_path_selected', { path: input.path }); return this.get(workspaceId);
   }
 
