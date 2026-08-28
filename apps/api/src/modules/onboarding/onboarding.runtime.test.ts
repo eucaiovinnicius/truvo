@@ -5,6 +5,7 @@ import { sql } from 'drizzle-orm';
 import { EventContextQualityService } from '../data-quality/event-context-quality.service';
 import { RadarService } from '../radars/radar.service';
 import { OnboardingService } from './onboarding.service';
+import { ConnectorConnectionService } from '../connectors/connector-connection.service';
 
 const A = '00000000-0000-0000-0000-000000001201'; const B = '00000000-0000-0000-0000-000000001202';
 let db: Database; let onboarding: OnboardingService; let quality: EventContextQualityService; let radars: RadarService;
@@ -54,6 +55,17 @@ describe('Order 120 onboarding runtime acceptance', { concurrency: 1 }, () => {
     const final = await onboarding.get(A); assert.equal(final.progress.status, 'completed'); assert.equal(final.progress.first_radar_id, ids[0]); assert.ok(final.ttfvMs! >= 0);
   });
 
+  test('post-commit validation failure replays the same Radar and recovers its lifecycle', async () => {
+    await clean(); await onboarding.start(A, undefined); await onboarding.selectPath(A, undefined, { path: 'ecommerce' }); await onboarding.linkConnection(A, undefined, 'shopify-a'); await onboarding.verifyData(A); await onboarding.readiness(A, undefined, { outcomeKey: 'purchase' });
+    const request = { name: 'Recover validation', outcomeDefinitionId: 'purchase', predictionWindowDays: 30 as const, idempotencyKey: 'recover-validation' }; let failed = true;
+    const flaky = new OnboardingService(db, {} as never, connections as never, quality, radars, { beforeRadarValidation: () => { if (failed) { failed = false; throw new Error('after_commit_validation_failure'); } } });
+    await assert.rejects(() => flaky.createFirstRadar(A, undefined, request), /after_commit_validation_failure/);
+    const [beforeReplay] = await db.execute(sql`select first_radar_id from onboarding_progress where workspace_id=${A}`); const id = String((beforeReplay as { first_radar_id: string }).first_radar_id); assert.ok(id);
+    const replay = await flaky.createFirstRadar(A, undefined, request); assert.equal((replay.radar as { radar: { id: string } }).radar.id, id);
+    const [count] = await db.execute(sql`select count(*)::int count from radars where workspace_id=${A}`); assert.equal(Number((count as { count: number }).count), 1);
+    assert.notEqual((await radars.get(A, id)).radar.status, 'draft');
+  });
+
   test('owner/admin may rename, member may start but receives 403 on rename and cannot mutate another workspace', async () => {
     await clean(); await db.execute(sql`update workspaces set name='Original A' where id=${A}`); await db.execute(sql`update workspaces set name='Original B' where id=${B}`);
     await onboarding.start(A, undefined, 'Owner rename', true); let [a] = await db.execute(sql`select name from workspaces where id=${A}`); assert.equal((a as { name: string }).name, 'Owner rename');
@@ -62,6 +74,16 @@ describe('Order 120 onboarding runtime acceptance', { concurrency: 1 }, () => {
     await assert.rejects(() => onboarding.start(A, undefined, 'Forbidden member rename', false), (error: unknown) => (error as { getStatus(): number }).getStatus() === 403);
     const [names] = await db.execute(sql`select (select name from workspaces where id=${A}) a,(select name from workspaces where id=${B}) b`);
     assert.deepEqual(names, { a: 'Admin rename', b: 'Original B' });
+  });
+
+  test('onboarding source discovery is tenant-scoped and never exposes credential material', async () => {
+    await db.execute(sql`update connector_connections set config=${JSON.stringify({ access_token: 'raw-token', client_secret: 'raw-secret', shop_domain: 'safe-but-raw-config-is-hidden' })}::jsonb, credentials_encrypted=${Buffer.from('encrypted-secret-payload')} where workspace_id=${A} and id='shopify-a'`);
+    const sources = await (new ConnectorConnectionService(db, {} as never, {} as never)).listOnboardingSources(A);
+    assert.equal(sources.length, 1); assert.equal(sources[0]!.id, 'shopify-a');
+    assert.deepEqual(Object.keys(sources[0]!).sort(), ['capabilities', 'credentialStatus', 'displayName', 'id', 'lifecycleState', 'provider']);
+    assert.deepEqual(sources[0], { id: 'shopify-a', provider: 'shopify', displayName: 'Shopify A', lifecycleState: 'healthy', credentialStatus: 'valid', capabilities: ['read'] });
+    assert.equal(JSON.stringify(sources).match(/encrypted|access_token|refresh_token|client_secret|api_key|oauth.*secret|raw-token|raw-secret|shop_domain/i), null);
+    assert.equal((await (new ConnectorConnectionService(db, {} as never, {} as never)).listOnboardingSources(B))[0]!.displayName, 'Shopify B');
   });
 
   test('tenant boundary, source revocation and retry reflect canonical truth', async () => {

@@ -10,7 +10,7 @@ import type { CreateFirstRadarDto, SelectPathDto } from './onboarding.dto';
 type Progress = Record<string, unknown> & { workspace_id: string; selected_path?: string | null; connection_id?: string | null; first_radar_id?: string | null; started_at?: Date | null; first_radar_created_at?: Date | null };
 const SAFE_METADATA = new Set(['path', 'provider', 'sourceStatus']);
 export const ONBOARDING_FAILURE_INJECTOR = Symbol('ONBOARDING_FAILURE_INJECTOR');
-export interface OnboardingFailureInjector { afterRadarPersistence?(workspaceId: string, radarId: string): Promise<void> | void }
+export interface OnboardingFailureInjector { afterRadarPersistence?(workspaceId: string, radarId: string): Promise<void> | void; beforeRadarValidation?(workspaceId: string, radarId: string): Promise<void> | void }
 
 @Injectable()
 export class OnboardingService {
@@ -113,7 +113,10 @@ export class OnboardingService {
     await this.milestone(workspaceId, userId, 'first_radar_initiated');
     await this.milestone(workspaceId, userId, 'first_radar_created'); await this.milestone(workspaceId, userId, 'onboarding_completed');
     const radarId = String((result.radar as { radar?: { id?: string } }).radar?.id);
-    if (!result.replay) await this.radars.validate(workspaceId, radarId);
+    if (!result.replay || await this.radars.requiresValidation(workspaceId, radarId)) {
+      await this.failureInjector?.beforeRadarValidation?.(workspaceId, radarId);
+      await this.radars.validate(workspaceId, radarId);
+    }
     return { ...(await this.get(workspaceId)), radar: await this.radars.get(workspaceId, radarId), replay: result.replay };
   }
 }

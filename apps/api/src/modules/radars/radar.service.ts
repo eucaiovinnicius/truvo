@@ -228,6 +228,10 @@ export class RadarService {
     };
   }
 
+  async requiresValidation(workspaceId: string, id: string) {
+    return ['draft', 'validating_data'].includes((await this.radar(workspaceId, id)).status);
+  }
+
   async list(workspaceId: string) {
     return this.db.execute(sql`select r.*, d.outcome_definition_id, d.prediction_window_days from radars r join radar_definition_versions d on d.workspace_id=r.workspace_id and d.radar_id=r.id and d.version=r.current_definition_version where r.workspace_id=${workspaceId} order by r.updated_at desc`);
   }
@@ -333,19 +337,23 @@ export class RadarService {
   }
 
   async validate(workspaceId: string, id: string) {
-    const { radar, definition } = await this.get(workspaceId, id);
-    this.transition(radar.status, 'validating_data');
-    const [started] = await this.db.execute(sql`update radars set status='validating_data',updated_at=now() where workspace_id=${workspaceId} and id=${id} and current_definition_version=${definition.version} and status=${radar.status} returning id`);
-    if (!started) throw new BadRequestException('Radar definition changed before validation started');
-    this.logger.log(`Radar validation requested workspace=${workspaceId} radar=${id} definition=${definition.version}`);
-
-    const readiness = await this.readinessForDefinition(workspaceId, definition);
-    this.transition('validating_data', readiness.status);
-    const [completed] = await this.db.execute(sql`update radars set status=${readiness.status},updated_at=now() where workspace_id=${workspaceId} and id=${id} and current_definition_version=${definition.version} and status='validating_data' returning id`);
-    if (!completed) throw new BadRequestException('Radar definition changed during validation');
-    await this.db.execute(sql`update radar_definition_versions set readiness=${JSON.stringify(readiness)}::jsonb where workspace_id=${workspaceId} and radar_id=${id} and version=${definition.version}`);
-    this.logger.log(`Radar validation completed workspace=${workspaceId} radar=${id} definition=${definition.version} status=${readiness.status}`);
-    return readiness;
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`radar-validation:${workspaceId}:${id}`}))`);
+      const { radar, definition } = await this.get(workspaceId, id, tx);
+      if (radar.status !== 'validating_data') {
+        this.transition(radar.status, 'validating_data');
+        const [started] = await tx.execute(sql`update radars set status='validating_data',updated_at=now() where workspace_id=${workspaceId} and id=${id} and current_definition_version=${definition.version} and status=${radar.status} returning id`);
+        if (!started) throw new BadRequestException('Radar definition changed before validation started');
+      }
+      this.logger.log(`Radar validation requested workspace=${workspaceId} radar=${id} definition=${definition.version}`);
+      const readiness = await this.readinessForDefinition(workspaceId, definition);
+      this.transition('validating_data', readiness.status);
+      const [completed] = await tx.execute(sql`update radars set status=${readiness.status},updated_at=now() where workspace_id=${workspaceId} and id=${id} and current_definition_version=${definition.version} and status='validating_data' returning id`);
+      if (!completed) throw new BadRequestException('Radar definition changed during validation');
+      await tx.execute(sql`update radar_definition_versions set readiness=${JSON.stringify(readiness)}::jsonb where workspace_id=${workspaceId} and radar_id=${id} and version=${definition.version}`);
+      this.logger.log(`Radar validation completed workspace=${workspaceId} radar=${id} definition=${definition.version} status=${readiness.status}`);
+      return readiness;
+    });
   }
 
   async train(workspaceId: string, id: string, key: string) {

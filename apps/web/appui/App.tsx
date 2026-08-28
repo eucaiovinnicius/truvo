@@ -234,6 +234,7 @@ export default function App() {
             {/* Conditional Sub-View Router */}
             {currentView === 'onboarding' && (
               <OnboardingFlow 
+                key={visibleWorkspace.id}
                 workspaceId={visibleWorkspace.id}
                 onComplete={handleCompleteOnboarding} 
                 onCancel={() => setView('dashboard')}
