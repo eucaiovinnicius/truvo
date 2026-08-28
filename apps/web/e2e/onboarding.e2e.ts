@@ -16,9 +16,10 @@ let failB = false;
 let releaseA: (() => void) | null = null;
 let callsA = 0;
 let callsB = 0;
+let completedBlocked = false;
 
 const progress = () => ({
-  progress: { current_step: step, status: step === 'completed' ? 'completed' : 'in_progress', selected_path: selectedPath },
+  progress: { current_step: step, status: completedBlocked ? 'blocked' : step === 'completed' ? 'completed' : 'in_progress', selected_path: selectedPath, last_error_remediation: completedBlocked ? 'Reconecte a fonte antes de abrir o Radar.' : null },
   source: { state: selectedPath ?? 'custom', healthy: true, provider: selectedPath === 'saas' ? 'stripe' : 'truvo_events' },
   ttfvMs: step === 'completed' ? 1200 : null,
   recommendations: { ecommerce: ['shopify'], saas: ['stripe'], custom: ['truvo_events'] },
@@ -84,7 +85,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); });
 test.beforeEach(async ({ page }, testInfo) => {
-  step = 'workspace_basics'; selectedPath = null; connectionsMode = 'ok'; outcomesMode = 'ok'; radarCreates = 0; onboardingCalls = 0; delayA = false; failB = false; releaseA = null; callsA = 0; callsB = 0;
+  step = 'workspace_basics'; selectedPath = null; connectionsMode = 'ok'; outcomesMode = 'ok'; radarCreates = 0; onboardingCalls = 0; delayA = false; failB = false; releaseA = null; callsA = 0; callsB = 0; completedBlocked = false;
   if (!testInfo.title.includes('demo')) await page.addInitScript(({ ws }) => { localStorage.setItem('truvo_mode', 'live'); localStorage.setItem('truvo_token', 'production-shaped-jwt'); localStorage.setItem('truvo_workspace', ws); }, { ws: workspace });
   await page.goto('/');
   if (!testInfo.title.includes('demo')) { await page.getByRole('button', { name: 'Launch Setup Wizard' }).click(); await expect(page.getByTestId('onboarding-flow')).toBeVisible(); }
@@ -137,4 +138,13 @@ test('outcomes distinguish legitimate empty, failure and retry recovery', async 
   await expect(page.getByText('Nenhum resultado alvo disponível')).toBeVisible(); await expect(page.getByRole('button', { name: 'Criar Radar real' })).toBeDisabled();
   outcomesMode = 'fail'; await reopen(page); await expect(page.getByTestId('onboarding-load-error')).toContainText('outcomes unavailable');
   outcomesMode = 'ok'; await page.getByRole('button', { name: 'Tentar novamente' }).click(); await expect(page.getByRole('option', { name: 'Compra real' })).toBeAttached(); await expect(page.getByRole('button', { name: 'Criar Radar real' })).toBeEnabled();
+});
+
+test('a completed but blocked onboarding shows remediation rather than a false success, then recovers', async ({ page }) => {
+  step = 'completed'; selectedPath = 'custom'; completedBlocked = true; await reopen(page);
+  await expect(page.getByText('Contexto indisponível')).toBeVisible();
+  await expect(page.getByText('Reconecte a fonte antes de abrir o Radar.')).toBeVisible();
+  await expect(page.getByText('Seu primeiro Radar foi criado')).toHaveCount(0);
+  completedBlocked = false; await page.getByRole('button', { name: 'Tentar novamente' }).click();
+  await expect(page.getByText('Seu primeiro Radar foi criado')).toBeVisible();
 });

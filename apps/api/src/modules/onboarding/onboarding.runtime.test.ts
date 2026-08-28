@@ -9,7 +9,7 @@ import { ConnectorConnectionService } from '../connectors/connector-connection.s
 
 const A = '00000000-0000-0000-0000-000000001201'; const B = '00000000-0000-0000-0000-000000001202';
 let db: Database; let onboarding: OnboardingService; let quality: EventContextQualityService; let radars: RadarService;
-const connections = { get: async (ws: string, id: string) => { const [row] = await db.execute(sql`select id,provider,display_name as "displayName",lifecycle_state as "lifecycleState",credential_status as "credentialStatus" from connector_connections where workspace_id=${ws} and id=${id}`); if (!row) throw new Error('not found'); return row; } };
+const connections = { get: async (ws: string, id: string) => { const [row] = await db.execute(sql`select id,provider,role,display_name as "displayName",lifecycle_state as "lifecycleState",credential_status as "credentialStatus" from connector_connections where workspace_id=${ws} and id=${id}`); if (!row) throw new Error('not found'); return row; } };
 
 async function clean() { await db.execute(sql`delete from onboarding_milestones where workspace_id in (${A},${B})`); await db.execute(sql`delete from onboarding_progress where workspace_id in (${A},${B})`); await db.execute(sql`delete from radar_definition_versions where workspace_id in (${A},${B})`); await db.execute(sql`delete from radars where workspace_id in (${A},${B})`); }
 async function seedCanonical(ws: string) {
@@ -50,9 +50,16 @@ describe('Order 120 onboarding runtime acceptance', { concurrency: 1 }, () => {
     const results = await Promise.all(Array.from({ length: 8 }, () => onboarding.createFirstRadar(A, undefined, request)));
     const ids = results.map((r) => String((r.radar as { radar: { id: string } }).radar.id)); assert.equal(new Set(ids).size, 1);
     const differentKey = await onboarding.createFirstRadar(A, undefined, { ...request, idempotencyKey: 'different-key-after-complete' }); assert.equal((differentKey.radar as { radar: { id: string } }).radar.id, ids[0]);
+    const replayed = await Promise.race([
+      Promise.all(Array.from({ length: 12 }, () => onboarding.createFirstRadar(A, undefined, request))),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('concurrent_first_radar_replay_pool_deadlock')), 15_000)),
+    ]);
+    assert.deepEqual(new Set(replayed.map((result) => (result.radar as { radar: { id: string } }).radar.id)), new Set([ids[0]]));
     const [counts] = await db.execute(sql`select (select count(*) from radars where workspace_id=${A})::int radars,(select count(*) from onboarding_milestones where workspace_id=${A} and milestone='first_radar_created')::int milestones`);
     assert.deepEqual({ radars: Number((counts as { radars: number }).radars), milestones: Number((counts as { milestones: number }).milestones) }, { radars: 1, milestones: 1 });
     const final = await onboarding.get(A); assert.equal(final.progress.status, 'completed'); assert.equal(final.progress.first_radar_id, ids[0]); assert.ok(final.ttfvMs! >= 0);
+    await assert.rejects(() => onboarding.selectPath(A, undefined, { path: 'saas' }), (error: unknown) => (error as { getStatus(): number }).getStatus() === 409);
+    assert.equal((await onboarding.get(A)).progress.first_radar_id, ids[0]);
     await db.execute(sql`update connector_connections set lifecycle_state='disconnected',credential_status='invalid' where workspace_id=${A} and id='shopify-a'`);
     assert.equal((await onboarding.get(A)).progress.status, 'blocked');
     await db.execute(sql`update connector_connections set lifecycle_state='healthy',credential_status='valid' where workspace_id=${A} and id='shopify-a'`);
@@ -106,6 +113,16 @@ describe('Order 120 onboarding runtime acceptance', { concurrency: 1 }, () => {
     const revoked = await onboarding.verifyData(A); assert.equal(revoked.progress.status, 'blocked'); assert.equal(revoked.source.state, 'error');
     await db.execute(sql`update connector_connections set lifecycle_state='healthy',credential_status='valid' where workspace_id=${A} and id='shopify-a'`);
     assert.equal((await onboarding.verifyData(A)).detected, true);
+  });
+
+  test('destination-only connectors cannot become onboarding context sources', async () => {
+    await clean();
+    await db.execute(sql`insert into connector_connections (workspace_id,id,provider,role,display_name,lifecycle_state,credential_status,capabilities) values (${B},'destination-b','stripe','destination','Stripe destination','healthy','valid','["activation"]') on conflict do nothing`);
+    await onboarding.start(B, undefined); await onboarding.selectPath(B, undefined, { path: 'saas' });
+    await assert.rejects(() => onboarding.linkConnection(B, undefined, 'destination-b'), (error: unknown) => (error as { getStatus(): number }).getStatus() === 409);
+    const state = await onboarding.get(B);
+    assert.equal(state.progress.connection_id, null);
+    assert.equal(state.progress.current_step, 'connect_context');
   });
 
   test('100-workspace lookup is indexed, bounded and telemetry contains no secrets or customer payload', async () => {

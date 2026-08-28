@@ -61,7 +61,7 @@ export class OnboardingService {
   }
 
   async selectPath(workspaceId: string, userId: string | undefined, input: SelectPathDto) {
-    await this.ensure(workspaceId);
+    const progress = await this.ensure(workspaceId); if (progress.first_radar_id) throw new ConflictException('Onboarding is already completed');
     await this.db.execute(sql`update onboarding_progress set selected_path=${input.path},status='waiting_for_connection',current_step='connect_context',connection_id=null,source_status='not_connected',last_error_code=null,last_error_remediation=null,updated_at=now() where workspace_id=${workspaceId}`);
     await this.milestone(workspaceId, userId, 'onboarding_path_selected', { path: input.path }); return this.get(workspaceId);
   }
@@ -72,6 +72,7 @@ export class OnboardingService {
     let connection;
     try { connection = await this.connections.get(workspaceId, connectionId); }
     catch (error) { await this.milestone(workspaceId, userId, 'context_connection_failed'); throw error; }
+    if (connection.role === 'destination') throw new ConflictException('Destination connectors cannot be used as onboarding sources');
     const healthy = connection.lifecycleState === 'healthy' && connection.credentialStatus === 'valid';
     await this.db.execute(sql`update onboarding_progress set connection_id=${connectionId},source_status=${healthy ? 'healthy' : connection.lifecycleState},status=${healthy ? 'waiting_for_data' : 'syncing'},current_step='verify_data',healthy_context_at=case when ${healthy} then coalesce(healthy_context_at,now()) else healthy_context_at end,last_error_code=${healthy ? null : 'source_not_ready'},last_error_remediation=${healthy ? null : 'Finish authorization and wait for the initial sync'},updated_at=now() where workspace_id=${workspaceId}`);
     await this.milestone(workspaceId, userId, healthy ? 'context_connection_succeeded' : 'context_connection_failed', { provider: connection.provider, sourceStatus: healthy ? 'healthy' : connection.lifecycleState });
@@ -104,7 +105,7 @@ export class OnboardingService {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`onboarding:${workspaceId}`}))`);
       const [p] = await tx.execute(sql`select * from onboarding_progress where workspace_id=${workspaceId} for update`);
       const progress = p as Progress | undefined; if (!progress?.readiness_viewed_at) throw new ConflictException('Review readiness first');
-      if (progress.first_radar_id) return { radar: await this.radars.get(workspaceId, String(progress.first_radar_id)), replay: true };
+      if (progress.first_radar_id) return { radar: await this.radars.get(workspaceId, String(progress.first_radar_id), tx), replay: true };
       if (progress.radar_idempotency_key && progress.radar_idempotency_key !== idempotencyKey) throw new ConflictException('First Radar creation is already in progress');
       await tx.execute(sql`update onboarding_progress set status='radar_in_progress',first_radar_initiated_at=coalesce(first_radar_initiated_at,now()),radar_idempotency_key=${idempotencyKey},updated_at=now() where workspace_id=${workspaceId}`);
       const created = await this.radars.create(workspaceId, radarInput, tx);
