@@ -9,7 +9,8 @@ const checksum = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd
 test('Order 095 registry promotes, rolls back, preserves provenance and isolates tenants', async (t) => {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required');
   const db = createDb(); const ws = '00000000-0000-0000-0000-000000000095'; const other = '00000000-0000-0000-0000-000000000096'; const radar = 'rad_registry_095';
-  const audit: Array<Record<string, unknown>> = []; const registry = new ModelRegistryService(db, { record: async (entry: Record<string, unknown>) => { audit.push(entry); } } as never, { verify: async () => ({ ok: true }) } as never);
+  let unavailableObjectKey: string | undefined;
+  const audit: Array<Record<string, unknown>> = []; const registry = new ModelRegistryService(db, { record: async (entry: Record<string, unknown>) => { audit.push(entry); } } as never, { verify: async (artifact: { artifactObjectKey: string }) => artifact.artifactObjectKey === unavailableObjectKey ? ({ ok: false, reason: 'checksum_mismatch' }) : ({ ok: true }) } as never);
   t.after(async () => { await db.execute(sql`delete from workspaces where id in (${ws},${other})`); await closeDb(db); });
   for (const [id, slug] of [[ws, 'order-095-registry'], [other, 'order-095-other']] as const) {
     await db.execute(sql`insert into workspaces (id,name,slug) values (${id},${slug},${slug})`);
@@ -23,6 +24,10 @@ test('Order 095 registry promotes, rolls back, preserves provenance and isolates
   await registry.promote(ws, radar, 'model-b', 'user-a', 'better calibration');
   let [models] = await db.execute(sql`select count(*) filter(where status='active')::int active,count(*) filter(where status='retired')::int retired from radar_model_versions where workspace_id=${ws} and radar_id=${radar}`);
   assert.deepEqual({ active: Number((models as { active:number }).active), retired: Number((models as { retired:number }).retired) }, { active: 1, retired: 1 });
+  unavailableObjectKey = 'model-a.joblib';
+  await assert.rejects(() => registry.rollback(ws, radar, 'model-a', 'user-a', 'unverified rollback'), /checksum_mismatch/);
+  assert.equal((await registry.active(ws, radar) as { id: string }).id, 'model-b', 'failed rollback must preserve the healthy active pointer');
+  unavailableObjectKey = undefined;
   await registry.rollback(ws, radar, 'model-a', 'user-a', 'rollback evidence');
   const current = await registry.active(ws, radar) as { id: string }; assert.equal(current.id, 'model-a');
   const detail = await registry.detail(ws, radar, 'model-a') as { provenance: Record<string, unknown>; artifact_reference?: string }; assert.equal(detail.provenance.worker_version, 'v1'); assert.equal('artifact_reference' in detail, false);

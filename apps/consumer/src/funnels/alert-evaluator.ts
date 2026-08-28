@@ -2,6 +2,7 @@
 // `schema/index.ts` re-exportar `./funnels` (integração M5 — ver openTODOs).
 import { createClickHouse, createDb, funnels, type ClickHouseClient, type Database, type Funnel } from '@truvo/db';
 import { overallConversion } from './funnel-calc';
+import { structuredLog } from '@truvo/observability';
 
 /**
  * M5 — Worker de alertas de funil. Varre os funis ATIVOS com alerta ligado,
@@ -59,9 +60,7 @@ export class FunnelAlertEvaluator {
           await this.dispatch(hit);
         }
       } catch (err) {
-        // TODO(live): ClickHouse/tabela `events` podem não estar no ar em dev.
-        // eslint-disable-next-line no-console
-        console.warn(`[truvo/consumer] alerta funil ${f.id}: ${(err as Error).message}`);
+        structuredLog('warn', 'funnel_alert_evaluation_failed', { workspaceId: f.workspaceId, funnelId: f.id, errorType: (err as Error).name });
       }
     }
     return hits;
@@ -97,10 +96,7 @@ export class FunnelAlertEvaluator {
    * de-dup/rate-limit; aqui apenas registramos.
    */
   private async dispatch(hit: FunnelAlertHit): Promise<void> {
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[truvo/consumer] ALERTA funil ${hit.funnel_id}: conversão ${hit.observed_conversion_rate}% < ${hit.threshold}% (ws=${hit.workspace_id}, n=${hit.entered})`,
-    );
+    structuredLog('warn', 'funnel_conversion_alert', { workspaceId: hit.workspace_id, funnelId: hit.funnel_id, observedConversionRate: hit.observed_conversion_rate, threshold: hit.threshold, entered: hit.entered });
   }
 
   async close(): Promise<void> {

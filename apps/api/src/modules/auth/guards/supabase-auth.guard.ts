@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../supabase.provider';
+import { verifySupabaseJwt } from '../supabase-jwt.verifier';
 
 /**
  * SupabaseAuthGuard — valida o JWT do Supabase (header `Authorization: Bearer <jwt>`)
@@ -35,11 +36,23 @@ export class SupabaseAuthGuard implements CanActivate {
       throw new UnauthorizedException('Bearer token ausente');
     }
 
-    const { data, error } = await this.supabase.auth.getUser(token);
-    if (error || !data?.user) {
-      throw new UnauthorizedException('Token inválido ou expirado');
+    const jwtSecret = process.env.SUPABASE_JWT_SECRET?.trim();
+    if (jwtSecret) {
+      try {
+        const issuer = process.env.SUPABASE_URL
+          ? `${process.env.SUPABASE_URL.replace(/\/$/, '')}/auth/v1`
+          : undefined;
+        const claims = verifySupabaseJwt(token, jwtSecret, { issuer });
+        req.user = { id: claims.sub, email: claims.email };
+        req.accessToken = token;
+        return true;
+      } catch {
+        throw new UnauthorizedException('Token inválido ou expirado');
+      }
     }
 
+    const { data, error } = await this.supabase.auth.getUser(token);
+    if (error || !data?.user) throw new UnauthorizedException('Token inválido ou expirado');
     req.user = { id: data.user.id, email: data.user.email };
     req.accessToken = token;
     return true;

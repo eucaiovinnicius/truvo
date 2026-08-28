@@ -23,6 +23,7 @@ import { PropensityDispatchService } from '../radars/propensity-dispatch.service
 import { ModelRegistryService } from '../radars/model-registry.service';
 import { OpportunitiesService } from '../opportunities/opportunities.service';
 import { DecisionsService } from '../decisions/decisions.service';
+import { OutcomeOwnershipReconcilerService } from '../identity/outcome-ownership-reconciler.service';
 
 interface Job {
   name: string;
@@ -65,6 +66,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     @Optional() private readonly modelRegistry?: ModelRegistryService,
     @Optional() private readonly opportunities?: OpportunitiesService,
     @Optional() private readonly decisions?: DecisionsService,
+    @Optional() private readonly outcomeOwnership?: OutcomeOwnershipReconcilerService,
   ) {}
 
   onModuleInit(): void {
@@ -91,6 +93,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       { name: 'propensity-recovery-scoring', intervalMs: HOUR, lockKey: 'truvo:cron:propensity-recovery-scoring', run: () => this.sweepPerWorkspace(async (ws) => { await this.propensity?.sweepWorkspace(ws); await this.modelRegistry?.maintainWorkspace(ws); }) },
       { name: 'opportunity-refresh', intervalMs: 24 * HOUR, lockKey: 'truvo:cron:opportunity-refresh', run: () => this.sweepPerWorkspace(async (ws) => { await this.opportunities?.sweepWorkspace(ws); }) },
       { name: 'decision-reward-reconciliation', intervalMs: HOUR, lockKey: 'truvo:cron:decision-reward-reconciliation', run: () => this.sweepPerWorkspace(async (ws) => { await this.decisions?.reconcileRewards(ws); }) },
+      { name: 'identity-outcome-ownership', intervalMs: HOUR, lockKey: 'truvo:cron:identity-outcome-ownership', run: () => this.sweepPerWorkspace(async (ws) => { await this.outcomeOwnership?.reconcileWorkspace(ws); }) },
     ];
     for (const job of jobs) this.schedule(job);
     this.logger.log(`scheduler ligado: ${jobs.map((j) => j.name).join(', ')}`);

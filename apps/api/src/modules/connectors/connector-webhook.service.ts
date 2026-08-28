@@ -45,7 +45,7 @@ export class ConnectorWebhookService {
     // 1. verify BEFORE any processing — fail closed, observable.
     const valid = adapter.verifyWebhook(connection, credentials, request);
     if (!valid) {
-      metrics.increment('connector_webhook_verification_failures_total', { provider: connection.provider });
+      metrics.increment('connector_webhook_verification_failures_total', { provider: connection.provider, reason: 'invalid_signature' });
       structuredLog('warn', 'connector_webhook_invalid_signature', { workspaceId, connectionId, provider: connection.provider });
       return { status: 'rejected', reason: 'invalid_signature' };
     }

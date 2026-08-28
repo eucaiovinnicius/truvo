@@ -19,7 +19,7 @@ import {
   type WebhookProvider,
 } from './constants';
 import { decryptJson } from './crypto/aes';
-import { verifySignature } from './crypto/signature';
+import { recordWebhookVerificationFailure, verifySignatureResult } from './crypto/signature';
 import { KafkaProducerService } from './kafka-producer.service';
 import { normalize, providerEventType, type Normalized } from './normalizers';
 import { RateLimiterService } from './rate-limiter.service';
@@ -133,7 +133,7 @@ export class WebhooksService {
       throw new UnauthorizedException('segredo de assinatura não configurado');
     }
 
-    const signatureValid = verifySignature(provider, {
+    const verification = verifySignatureResult(provider, {
       raw,
       headers,
       query,
@@ -141,7 +141,9 @@ export class WebhooksService {
       url: requestUrl,
       method,
     });
+    const signatureValid = verification.valid;
     if (!signatureValid) {
+      recordWebhookVerificationFailure(provider, verification.reason as 'invalid_signature' | 'timestamp' | 'replay');
       await this.log({
         provider,
         workspaceId,

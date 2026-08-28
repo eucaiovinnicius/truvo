@@ -9,6 +9,7 @@ import {
   type StitchEntry,
 } from './stitch-queue';
 import { runRetroStitch } from './retro-stitch';
+import { structuredLog } from '@truvo/observability';
 
 const CONSUMER_NAME =
   process.env.IDENTITY_STITCH_CONSUMER ?? `stitch-${process.env.HOSTNAME ?? 'local'}-${process.pid}`;
@@ -34,8 +35,7 @@ export class StitchWorker {
     const redis = getRedis();
     await ensureConsumerGroup(redis);
     this.running = true;
-    // eslint-disable-next-line no-console
-    console.log(`[truvo/consumer] identity stitch worker no ar (consumer=${CONSUMER_NAME})`);
+    structuredLog('info', 'identity_stitch_worker_ready', { consumer: CONSUMER_NAME });
 
     while (this.running) {
       try {
@@ -48,8 +48,7 @@ export class StitchWorker {
         await this.process(redis, fresh.entries, fresh.malformed);
       } catch (err) {
         // TODO(live): backoff/alerta. Não derruba o loop por blip de Redis/ClickHouse.
-        // eslint-disable-next-line no-console
-        console.error(`[truvo/consumer] stitch loop erro: ${(err as Error).message}`);
+        structuredLog('error', 'identity_stitch_loop_failed', { errorType: (err as Error).name, retryAfterMs: 1000 });
         await sleep(1000);
       }
     }
@@ -57,8 +56,7 @@ export class StitchWorker {
 
   private async process(redis: Redis, entries: StitchEntry[], malformed: string[]): Promise<void> {
     for (const id of malformed) {
-      // eslint-disable-next-line no-console
-      console.warn(`[truvo/consumer] stitch entry malformada id=${id} — descartada (ack)`);
+      structuredLog('warn', 'identity_stitch_entry_malformed', { entryId: id, disposition: 'ack' });
       await ackEntry(redis, id);
     }
 
@@ -66,17 +64,11 @@ export class StitchWorker {
       try {
         const res = await runRetroStitch(this.ch, job);
         await ackEntry(redis, id);
-        // eslint-disable-next-line no-console
-        console.log(
-          `[truvo/consumer] stitch ok ws=${res.workspace_id} canonical=${res.canonical_id} losers=${res.losers}`,
-        );
+        structuredLog('info', 'identity_stitch_completed', { workspaceId: res.workspace_id, canonicalId: res.canonical_id, mergedCount: res.losers });
       } catch (err) {
         // NÃO ACKa: a entrada fica PENDING e será reivindicada/reprocessada.
         // TODO(live): após N tentativas (XPENDING delivery count), mover p/ dead-letter.
-        // eslint-disable-next-line no-console
-        console.error(
-          `[truvo/consumer] stitch falhou (requeue) canonical=${job.canonical_id}: ${(err as Error).message}`,
-        );
+        structuredLog('error', 'identity_stitch_failed', { workspaceId: job.workspace_id, canonicalId: job.canonical_id, errorType: (err as Error).name, disposition: 'requeue' });
       }
     }
   }

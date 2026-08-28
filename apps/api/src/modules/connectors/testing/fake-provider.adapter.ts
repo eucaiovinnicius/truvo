@@ -56,7 +56,7 @@ const DEFINITION: ConnectorDefinition = {
   provider: FAKE_PROVIDER,
   displayName: 'Fake Provider (contract test kit)',
   role: 'bidirectional',
-  capabilities: ['webhook_ingest', 'initial_backfill', 'incremental_pull', 'outbound_profile', 'outbound_event'],
+  capabilities: ['webhook_ingest', 'initial_backfill', 'incremental_pull', 'outbound_profile', 'outbound_event', 'outbound_audience'],
   credentialKind: 'api_key',
 };
 

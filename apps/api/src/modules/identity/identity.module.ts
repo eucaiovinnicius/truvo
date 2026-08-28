@@ -5,6 +5,7 @@ import { IdentityService } from './identity.service';
 import { IdentityGraphService } from './identity-graph.service';
 import { InternalAuthGuard } from './guards/internal-auth.guard';
 import { CustomerContextModule } from '../customer-context/customer-context.module';
+import { OutcomeOwnershipReconcilerService } from './outcome-ownership-reconciler.service';
 
 /**
  * M8 — IDENTITY RESOLUTION + DEDUP avançado (lado da API).
@@ -20,7 +21,7 @@ import { CustomerContextModule } from '../customer-context/customer-context.modu
 @Module({
   imports: [CustomerContextModule],
   controllers: [IdentityController, IdentityInternalController],
-  providers: [IdentityService, IdentityGraphService, InternalAuthGuard],
-  exports: [IdentityService, IdentityGraphService],
+  providers: [IdentityService, IdentityGraphService, OutcomeOwnershipReconcilerService, InternalAuthGuard],
+  exports: [IdentityService, IdentityGraphService, OutcomeOwnershipReconcilerService],
 })
 export class IdentityModule {}

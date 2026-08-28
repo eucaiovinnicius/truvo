@@ -211,6 +211,7 @@ class PostgresRepository:
         return sorted(snapshots, key=lambda row: (row.cutoff, row.customer_id))
 
     def build_scoring_dataset(self, job: TrainingJob, scoring_cutoff: datetime, chunk_size: int = 500) -> list[Snapshot]:
+        max_snapshots = int(os.getenv("PROPENSITY_MAX_SNAPSHOTS", "200000"))
         snapshots: list[Snapshot] = []
         last_id = ""
         with self._connect() as connection:
@@ -228,6 +229,8 @@ class PostgresRepository:
                     prior_outcomes = {definition for observed, definition in outcomes[customer["id"]] if utc(observed) <= scoring_cutoff}
                     if self._audience_matches(job.audience_ast, customer, trait_values, prior_outcomes):
                         snapshots.append(build_snapshot(job.dispatch.workspace_id, customer["id"], scoring_cutoff, job.prediction_window_days, observations[customer["id"]], "target", with_label=False))
+                        if len(snapshots) > max_snapshots:
+                            raise ValueError("dataset_exceeds_bounded_snapshot_limit")
                 last_id = ids[-1]
         return snapshots
 

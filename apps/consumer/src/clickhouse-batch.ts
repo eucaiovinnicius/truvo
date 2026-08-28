@@ -142,8 +142,7 @@ export class ClickHouseBatcher {
     try {
       await this.ch.insert({ table: 'events', values: rows, format: 'JSONEachRow' });
       metrics.increment('storage_writes_total', { storage: 'clickhouse', result: 'success' });
-      // eslint-disable-next-line no-console
-      console.log(`[truvo/consumer] inseridas ${rows.length} linha(s) no ClickHouse`);
+      structuredLog('info', 'storage_write_completed', { storage: 'clickhouse', rowCount: rows.length });
     } catch (err) {
       // Recoloca no início do buffer p/ nova tentativa. TODO(live): DLQ/backoff.
       this.buffer = rows.concat(this.buffer);
@@ -151,8 +150,6 @@ export class ClickHouseBatcher {
       metrics.increment('storage_writes_total', { storage: 'clickhouse', result: 'failure' });
       metrics.gauge('consumer_retry_buffer_rows', this.buffer.length);
       structuredLog('error', 'storage_write_failed', { storage: 'clickhouse', retryable: failure.kind === 'transient', retryAfterMs: failure.retryAfterMs, bufferedRows: this.buffer.length });
-      // eslint-disable-next-line no-console
-      console.error(`[truvo/consumer] falha no insert ClickHouse (requeue): ${(err as Error).message}`);
       throw err;
     }
   }

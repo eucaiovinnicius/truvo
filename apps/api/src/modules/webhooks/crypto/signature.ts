@@ -1,5 +1,6 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { WebhookProvider } from '../constants';
+import { metrics, structuredLog } from '@truvo/observability';
 
 /**
  * Verificação de assinatura HMAC-SHA256 dos webhooks (regra 6 / PRD §7 M4 e §12:
@@ -133,7 +134,27 @@ const VERIFIERS: Record<WebhookProvider, (input: VerifyInput) => boolean> = {
   hubspot: verifyHubspot,
 };
 
+export type WebhookVerificationReason = 'valid' | 'invalid_signature' | 'timestamp' | 'replay';
+
+export function recordWebhookVerificationFailure(provider: WebhookProvider, reason: Exclude<WebhookVerificationReason, 'valid'>): void {
+  metrics.increment('webhook_verification_failures_total', { provider, reason });
+  structuredLog('warn', 'webhook_verification_failed', { provider, reason });
+}
+
+export function verifySignatureResult(
+  provider: WebhookProvider,
+  input: VerifyInput,
+): { valid: boolean; reason: WebhookVerificationReason } {
+  if (provider === 'hubspot' && input.headers['x-hubspot-signature-v3']) {
+    const timestamp = Number(input.headers['x-hubspot-request-timestamp']);
+    if (!Number.isFinite(timestamp)) return { valid: false, reason: 'timestamp' };
+    if (Math.abs(Date.now() - timestamp) > 5 * 60_000) return { valid: false, reason: 'replay' };
+  }
+  const valid = VERIFIERS[provider](input);
+  return { valid, reason: valid ? 'valid' : 'invalid_signature' };
+}
+
 /** Dispatcher: verifica a assinatura conforme o provedor. */
 export function verifySignature(provider: WebhookProvider, input: VerifyInput): boolean {
-  return VERIFIERS[provider](input);
+  return verifySignatureResult(provider, input).valid;
 }

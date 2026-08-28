@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { and, eq, isNull, lt, inArray, not } from 'drizzle-orm';
+import { and, eq, isNull, lt, inArray, not, sql } from 'drizzle-orm';
 import {
   customers,
   customerIdentifiers,
@@ -20,6 +20,12 @@ export interface RetentionSweepResult {
   skipped: boolean;
   purged: Record<string, number>;
 }
+
+export const OPERATIONAL_LOG_RETENTION_DAYS = {
+  profile_access_log: 730,
+  integration_out_logs: 180,
+  webhook_logs: 30,
+} as const;
 
 /**
  * Order 055 §5 — RETENTION ENFORCEMENT. Turns the tombstone-then-purge model
@@ -60,6 +66,7 @@ export class RetentionEnforcementService {
       outcome_definitions: await this.purgeTable(outcomeDefinitions, workspaceId, cutoff),
       customers: await this.purgeTable(customers, workspaceId, cutoff),
       identity_links: await this.purgeIdentityLinks(workspaceId, cutoff),
+      ...(await this.purgeOperationalLogs(workspaceId)),
     };
 
     // PII-free by construction: only table names + row counts + the cutoff — never
@@ -74,6 +81,34 @@ export class RetentionEnforcementService {
     });
 
     return { skipped: false, purged };
+  }
+
+  /** Operational logs have explicit repository-owned policy windows rather than
+   * inheriting the subject-data tombstone window. Every statement is tenant scoped,
+   * capped at BATCH_SIZE and naturally resumable/idempotent. Terminal webhook retry
+   * bodies are removed eagerly because IDs/statuses are sufficient provenance. */
+  private async purgeOperationalLogs(workspaceId: string): Promise<Record<string, number>> {
+    const counts: Record<string, number> = {};
+    await this.db.execute(sql`
+      update webhook_logs set retry_payload=null
+      where workspace_id=${workspaceId} and retry_payload is not null
+        and status in ('processed','failed','rejected','received','verified')
+    `);
+    for (const [table, days] of Object.entries(OPERATIONAL_LOG_RETENTION_DAYS)) {
+      const timestampColumn = table === 'profile_access_log' ? 'at' : table === 'webhook_logs' ? 'received_at' : 'created_at';
+      let processed = 0;
+      for (let batch = 0; batch < MAX_BATCHES; batch++) {
+        const result = await this.db.execute(sql.raw(
+          `delete from ${table} where id in (` +
+          `select id from ${table} where workspace_id = ${sqlString(workspaceId)} ` +
+          `and ${timestampColumn} < now() - interval '${days} days' limit ${BATCH_SIZE}) returning id`,
+        )) as unknown as unknown[];
+        processed += result.length;
+        if (result.length < BATCH_SIZE) break;
+      }
+      counts[table] = processed;
+    }
+    return counts;
   }
 
   /** Batched, bounded hard-delete of tombstoned rows past `cutoff`. Idempotent by
@@ -112,4 +147,8 @@ export class RetentionEnforcementService {
     }
     return processed;
   }
+}
+
+function sqlString(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
 }

@@ -47,8 +47,7 @@ export class EventPipelineConsumer {
   async start(): Promise<void> {
     await this.consumer.connect();
     await this.consumer.subscribe({ topic: TOPIC, fromBeginning: false });
-    // eslint-disable-next-line no-console
-    console.log(`[truvo/consumer] consumindo topic=${TOPIC} group=${GROUP_ID}`);
+    structuredLog('info', 'consumer_started', { topic: TOPIC, group: GROUP_ID });
 
     await this.consumer.run({
       // Flush do ClickHouse acontece dentro do handler; offsets só resolvem se o
@@ -79,16 +78,14 @@ export class EventPipelineConsumer {
         // Dead-letter em vez de perda silenciosa (inspeção/replay depois).
         await deadLetter(`schema_invalido: ${parsed.error.issues[0]?.message ?? 'inválido'}`, rawValue);
         metrics.increment('ingestion_rejected_total', { reason: 'schema' });
-        // eslint-disable-next-line no-console
-        console.warn('[truvo/consumer] evento inválido → DLQ');
+        structuredLog('warn', 'consumer_event_rejected', { reason: 'schema' });
         return;
       }
       event = parsed.data;
     } catch {
       await deadLetter('payload_nao_json', rawValue);
       metrics.increment('ingestion_rejected_total', { reason: 'json' });
-      // eslint-disable-next-line no-console
-      console.warn('[truvo/consumer] payload não-JSON → DLQ');
+      structuredLog('warn', 'consumer_event_rejected', { reason: 'json' });
       return;
     }
 
@@ -100,10 +97,10 @@ export class EventPipelineConsumer {
     // 3. dedup por order_id (prioridade de fonte)
     const decision = await resolveOrderId(event);
     if (!decision.winner) {
-      // eslint-disable-next-line no-console
-      console.log(
-        `[truvo/consumer] descarte order_id=${event.order_id}: fonte '${event.source}' perde p/ '${decision.incumbentSource}'`,
-      );
+      structuredLog('info', 'consumer_order_deduplicated', {
+        source: event.source,
+        incumbentSource: decision.incumbentSource,
+      });
       return; // conversão de fonte menos confiável — descartada (regra 2)
     }
 

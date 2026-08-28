@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import tracemalloc
 import unittest
 
 import numpy as np
@@ -80,6 +81,19 @@ class PropensityCoreTests(unittest.TestCase):
         self.assertLessEqual(len(codes), 3)
         self.assertFalse(any(term in code for code in codes for term in ("email_address", "phone", "name", "cause", "increase_conversion")))
         self.assertEqual(reloaded.signal_codes(smoke[0]), reloaded.signal_codes(smoke[0]))
+
+    def test_realistic_prebeta_batch_of_10000_is_bounded_and_scoreable(self):
+        rows = synthetic_rows(10_000)
+        tracemalloc.start()
+        result = train(rows, MinimumDataPolicy(1_000, 400, 400))
+        probabilities = result.selected.bundle.predict(rows)
+        _, peak_bytes = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        payload = serialize_bundle(result.selected.bundle)
+        self.assertEqual(len(probabilities), 10_000)
+        self.assertTrue(np.all((probabilities >= 0) & (probabilities <= 1)))
+        self.assertLess(peak_bytes, 256 * 1024 * 1024)
+        self.assertLess(len(payload), 16 * 1024 * 1024)
 
 
 if __name__ == "__main__": unittest.main()

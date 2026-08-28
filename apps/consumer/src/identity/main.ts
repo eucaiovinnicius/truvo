@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { StitchWorker } from './stitch-worker';
 import { getRedis } from '../redis';
+import { structuredLog } from '@truvo/observability';
 
 /**
  * Worker dedicado do M8 — STITCHING RETROATIVO.
@@ -18,8 +19,7 @@ async function main() {
   const worker = new StitchWorker();
 
   const shutdown = async (signal: string) => {
-    // eslint-disable-next-line no-console
-    console.log(`[truvo/consumer] identity worker: ${signal} recebido — encerrando...`);
+    structuredLog('info', 'identity_worker_shutdown', { signal });
     await worker.stop();
     await getRedis().quit().catch(() => undefined);
     process.exit(0);
@@ -30,9 +30,7 @@ async function main() {
   try {
     await worker.start();
   } catch (err) {
-    // TODO(live): Redis + ClickHouse no ar (docker-compose).
-    // eslint-disable-next-line no-console
-    console.error(`[truvo/consumer] identity worker falhou ao iniciar: ${(err as Error).message}`);
+    structuredLog('error', 'identity_worker_start_failed', { errorType: (err as Error).name });
     process.exit(1);
   }
 }

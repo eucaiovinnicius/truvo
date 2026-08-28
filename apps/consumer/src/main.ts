@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { EventPipelineConsumer } from './consumer';
+import { structuredLog } from '@truvo/observability';
 
 /**
  * Worker consumidor do M2 — Event Pipeline.
@@ -9,8 +10,7 @@ async function main() {
   const consumer = new EventPipelineConsumer();
 
   const shutdown = async (signal: string) => {
-    // eslint-disable-next-line no-console
-    console.log(`[truvo/consumer] ${signal} recebido — encerrando...`);
+    structuredLog('info', 'consumer_shutdown', { signal });
     await consumer.stop();
     process.exit(0);
   };
@@ -19,12 +19,10 @@ async function main() {
 
   try {
     await consumer.start();
-    // eslint-disable-next-line no-console
-    console.log('[truvo/consumer] worker no ar');
+    structuredLog('info', 'consumer_ready');
   } catch (err) {
     // TODO(live): Redpanda/Kafka + Redis + ClickHouse no ar (docker-compose).
-    // eslint-disable-next-line no-console
-    console.error(`[truvo/consumer] falha ao iniciar: ${(err as Error).message}`);
+    structuredLog('error', 'consumer_start_failed', { reason: err instanceof Error ? err.name : 'unknown' });
     process.exit(1);
   }
 }

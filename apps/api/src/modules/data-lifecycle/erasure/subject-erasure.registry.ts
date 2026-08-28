@@ -10,6 +10,7 @@ import {
   identityConflicts,
   identityMergeEvents,
   commerceOrders,
+  profileAccessLog,
   type IdentityMergeEvidence,
 } from '@truvo/db';
 import type { Database } from '../../auth/database.provider';
@@ -216,6 +217,21 @@ export const eraseDecisionLearningContext: StoreErasureHandler = async (ctx) => 
   return ok(snapshots.length + pointers.length);
 };
 
+/** Operational access audit is legally retained but must stop identifying the
+ * erased subject. Actor/account audit remains intact; only the viewed customer
+ * pointer and potentially subject-derived metadata are redacted. Other operational
+ * log families intentionally persist no canonical customer id or raw PII. */
+export const redactOperationalLogSubject: StoreErasureHandler = async (ctx) => {
+  const updated = await ctx.db.update(profileAccessLog).set({
+    canonicalId: REDACTED_MARKER,
+    metadata: { subjectErased: true },
+  }).where(and(
+    eq(profileAccessLog.workspaceId, ctx.workspaceId),
+    eq(profileAccessLog.canonicalId, ctx.customerId),
+  )).returning({ id: profileAccessLog.id });
+  return ok(updated.length);
+};
+
 /** Order 055 §2 "Derived / ML artifacts" — explicitly enumerated: `user_profiles`
  * (M15) is a lazily-recomputed cache (regenerates from source on next read, per
  * `DATA_LIFECYCLE_LINEAGE.md`) and the ClickHouse materialized views (`*_daily`,
@@ -230,4 +246,5 @@ export const SUBJECT_ERASURE_STORES: ReadonlyArray<{ store: string; handler: Sto
   { store: 'clickhouse_events_touchpoints', handler: eraseClickHouseEventsAndTouchpoints },
   { store: 'commerce_order_attribution', handler: eraseCommerceOrderAttribution },
   { store: 'decision_learning_provenance', handler: eraseDecisionLearningContext },
+  { store: 'operational_log_subject', handler: redactOperationalLogSubject },
 ];

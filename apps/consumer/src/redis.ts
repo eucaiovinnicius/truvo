@@ -1,4 +1,5 @@
 import Redis from 'ioredis';
+import { structuredLog } from '@truvo/observability';
 
 /** Client Redis compartilhado do consumer (dedup + contador de billing). */
 let _redis: Redis | undefined;
@@ -9,8 +10,7 @@ export function getRedis(): Redis {
       enableReadyCheck: true,
     });
     _redis.on('error', (err: Error) => {
-      // eslint-disable-next-line no-console
-      console.error(`[truvo/consumer] Redis error: ${err.message}`);
+      structuredLog('error', 'consumer_dependency_error', { dependency: 'redis', errorType: err.name });
     });
   }
   return _redis;

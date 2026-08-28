@@ -28,6 +28,16 @@ const OPTIONAL: EnvRule[] = [
 
 const isSet = (key: string): boolean => (process.env[key] ?? '').trim().length > 0;
 
+export function productionSafetyProblems(env: NodeJS.ProcessEnv = process.env): string[] {
+  if (env.NODE_ENV !== 'production') return [];
+  const problems: string[] = [];
+  if (!(env.CORS_ORIGINS ?? '').trim()) problems.push('CORS_ORIGINS (obrigatória em production)');
+  if (env.TRUVO_DEV_AUTH_BYPASS === '1') problems.push('TRUVO_DEV_AUTH_BYPASS não pode ser 1 em production');
+  if (!(env.RELEASE_COMMIT ?? '').trim() || env.RELEASE_COMMIT === 'unknown') problems.push('RELEASE_COMMIT exato é obrigatório em production');
+  if (!(env.RELEASE_VERSION ?? '').trim() || env.RELEASE_VERSION === 'unknown') problems.push('RELEASE_VERSION exata é obrigatória em production');
+  return problems;
+}
+
 export function validateEnv(): void {
   const logger = new Logger('EnvValidation');
   const missing: string[] = REQUIRED.filter((k) => !isSet(k));
@@ -46,12 +56,7 @@ export function validateEnv(): void {
   }
 
   if (process.env.NODE_ENV === 'production') {
-    if (!isSet('CORS_ORIGINS')) {
-      missing.push('CORS_ORIGINS (obrigatória em production)');
-    }
-    if (process.env.TRUVO_DEV_AUTH_BYPASS === '1') {
-      missing.push('TRUVO_DEV_AUTH_BYPASS não pode ser 1 em production');
-    }
+    missing.push(...productionSafetyProblems());
   }
 
   if (missing.length > 0) {
