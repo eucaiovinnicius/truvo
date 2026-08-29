@@ -59,6 +59,8 @@ test.beforeAll(async () => {
       if (outcomesMode === 'empty') return json(res, []);
       return json(res, ws === workspaceB ? [{ id: 'renewal-b', name: 'Renewal B' }] : [{ id: 'purchase', name: 'Compra real' }]);
     }
+    if (path === '/v1/integrations') return json(res, [{ id: 'hubspot-main', type: 'hubspot', name: 'HubSpot CRM', status: 'active', lastEventAt: new Date().toISOString(), hasCredentials: true }]);
+    if (path === '/v1/integrations-out/status') return json(res, { platforms: [] });
     if (path === '/v1/onboarding' && req.method === 'GET') {
       onboardingCalls++;
       if (delayA && ws === workspace) {
@@ -131,6 +133,16 @@ test('connections distinguish legitimate empty, failure and retry recovery', asy
   await expect(page.getByText(/Nenhuma fonte compatível foi configurada/)).toBeVisible();
   connectionsMode = 'fail'; await reopen(page); await expect(page.getByTestId('onboarding-load-error')).toContainText('sources unavailable'); await expect(page.getByText(/Nenhuma fonte compatível/)).toHaveCount(0);
   connectionsMode = 'ok'; await page.getByRole('button', { name: 'Tentar novamente' }).click(); await expect(page.getByText('Shopify A safe')).toBeVisible();
+});
+
+test('integration remediation opens Integrations instead of dashboard', async ({ page }) => {
+  step = 'connect_context'; selectedPath = 'ecommerce'; connectionsMode = 'empty'; await reopen(page);
+  await expect(page.getByText(/Nenhuma fonte compatível foi configurada/)).toBeVisible();
+  await page.getByRole('button', { name: 'Abrir Integrações' }).click();
+  await expect(page.locator('#integrations-view-container')).toBeVisible();
+  await expect(page.locator('#nav-link-integrations')).toHaveClass(/bg-teal-50/);
+  await expect(page.locator('#nav-link-dashboard')).not.toHaveClass(/bg-teal-50/);
+  await expect(page.getByText('Multi-Channel Attribution Feed')).toHaveCount(0);
 });
 
 test('outcomes distinguish legitimate empty, failure and retry recovery', async ({ page }) => {

@@ -100,7 +100,7 @@ export class OnboardingService {
   async readiness(workspaceId: string, userId: string | undefined, request: { outcomeNamespace?: string; outcomeKey?: string; historicalWindowDays?: number }) {
     const progress = await this.ensure(workspaceId); if (!progress.data_verified_at) throw new ConflictException('Verify incoming data first');
     const result = await this.quality.evaluate(workspaceId, request);
-    await this.db.execute(sql`update onboarding_progress set status='readiness_available',current_step='create_radar',readiness_viewed_at=coalesce(readiness_viewed_at,now()),updated_at=now() where workspace_id=${workspaceId}`);
+    await this.db.execute(sql`update onboarding_progress set status=case when first_radar_id is null then 'readiness_available' else status end,current_step=case when first_radar_id is null then 'create_radar' else current_step end,readiness_viewed_at=coalesce(readiness_viewed_at,now()),updated_at=now() where workspace_id=${workspaceId}`);
     await this.milestone(workspaceId, userId, 'readiness_viewed'); return { ...(await this.get(workspaceId)), readiness: result };
   }
 

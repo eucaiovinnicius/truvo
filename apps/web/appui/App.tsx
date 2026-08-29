@@ -238,6 +238,7 @@ export default function App() {
                 workspaceId={visibleWorkspace.id}
                 onComplete={handleCompleteOnboarding} 
                 onCancel={() => setView('dashboard')}
+                onOpenIntegrations={() => setView('integrations')}
                 showCancelButton={true}
               />
             )}
