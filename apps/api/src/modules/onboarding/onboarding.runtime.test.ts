@@ -101,10 +101,12 @@ describe('Order 120 onboarding runtime acceptance', { concurrency: 1 }, () => {
   test('late readiness completion cannot regress completed first Radar onboarding', async () => {
     await clean(); await onboarding.start(A, undefined); await onboarding.selectPath(A, undefined, { path: 'ecommerce' }); await onboarding.linkConnection(A, undefined, 'shopify-a'); await onboarding.verifyData(A); await onboarding.readiness(A, undefined, { outcomeKey: 'purchase' });
     let releaseReadiness: (() => void) | undefined;
-    const slowQuality = { evaluate: async (workspaceId: string, request: { outcomeKey?: string }) => { await new Promise<void>((resolve) => { releaseReadiness = resolve; }); return quality.evaluate(workspaceId, request); } };
+    let enteredReadiness: (() => void) | undefined;
+    const readinessEntered = new Promise<void>((resolve) => { enteredReadiness = resolve; });
+    const slowQuality = { evaluate: async (workspaceId: string, request: { outcomeKey?: string }) => { enteredReadiness?.(); await new Promise<void>((resolve) => { releaseReadiness = resolve; }); return quality.evaluate(workspaceId, request); } };
     const slowOnboarding = new OnboardingService(db, {} as never, connections as never, slowQuality as never, radars);
     const lateReadiness = slowOnboarding.readiness(A, undefined, { outcomeKey: 'purchase' });
-    await Promise.resolve();
+    await readinessEntered;
     const request = { name: 'Race-proof first Radar', outcomeDefinitionId: 'purchase', predictionWindowDays: 30 as const, idempotencyKey: 'readiness-race-first-radar' };
     const created = await onboarding.createFirstRadar(A, undefined, request);
     const firstRadarId = String((created.radar as { radar: { id: string } }).radar.id);
@@ -113,6 +115,55 @@ describe('Order 120 onboarding runtime acceptance', { concurrency: 1 }, () => {
     assert.equal(late.progress.status, 'completed');
     assert.equal(late.progress.current_step, 'completed');
     assert.equal(late.progress.first_radar_id, firstRadarId);
+    const replay = await onboarding.createFirstRadar(A, undefined, request);
+    assert.equal((replay.radar as { radar: { id: string } }).radar.id, firstRadarId);
+    assert.equal(replay.replay, true);
+    const [count] = await db.execute(sql`select count(*)::int count from radars where workspace_id=${A}`); assert.equal(Number((count as { count: number }).count), 1);
+  });
+
+  test('late connection linking cannot reopen completed first Radar onboarding', async () => {
+    await clean(); await onboarding.start(A, undefined); await onboarding.selectPath(A, undefined, { path: 'ecommerce' }); await onboarding.linkConnection(A, undefined, 'shopify-a'); await onboarding.verifyData(A); await onboarding.readiness(A, undefined, { outcomeKey: 'purchase' });
+    let releaseConnection: (() => void) | undefined;
+    let enteredConnection: (() => void) | undefined;
+    const connectionEntered = new Promise<void>((resolve) => { enteredConnection = resolve; });
+    let blockedOnce = false;
+    const slowConnections = { get: async (workspaceId: string, connectionId: string) => { if (!blockedOnce) { blockedOnce = true; enteredConnection?.(); await new Promise<void>((resolve) => { releaseConnection = resolve; }); } return connections.get(workspaceId, connectionId); } };
+    const slowOnboarding = new OnboardingService(db, {} as never, slowConnections as never, quality, radars);
+    const lateLink = slowOnboarding.linkConnection(A, undefined, 'shopify-a');
+    await connectionEntered;
+    const request = { name: 'Link race-proof Radar', outcomeDefinitionId: 'purchase', predictionWindowDays: 30 as const, idempotencyKey: 'link-race-first-radar' };
+    const created = await onboarding.createFirstRadar(A, undefined, request);
+    const firstRadarId = String((created.radar as { radar: { id: string } }).radar.id);
+    releaseConnection?.();
+    const late = await lateLink;
+    assert.equal(late.progress.status, 'completed');
+    assert.equal(late.progress.current_step, 'completed');
+    assert.equal(late.progress.first_radar_id, firstRadarId);
+    const replay = await onboarding.createFirstRadar(A, undefined, request);
+    assert.equal((replay.radar as { radar: { id: string } }).radar.id, firstRadarId);
+    assert.equal(replay.replay, true);
+    const [count] = await db.execute(sql`select count(*)::int count from radars where workspace_id=${A}`); assert.equal(Number((count as { count: number }).count), 1);
+  });
+
+  test('late data verification cannot regress completed first Radar onboarding', async () => {
+    await clean(); await onboarding.start(A, undefined); await onboarding.selectPath(A, undefined, { path: 'ecommerce' }); await onboarding.linkConnection(A, undefined, 'shopify-a'); await onboarding.verifyData(A); await onboarding.readiness(A, undefined, { outcomeKey: 'purchase' });
+    let releaseConnection: (() => void) | undefined;
+    let enteredConnection: (() => void) | undefined;
+    const connectionEntered = new Promise<void>((resolve) => { enteredConnection = resolve; });
+    let blockedOnce = false;
+    const slowConnections = { get: async (workspaceId: string, connectionId: string) => { if (!blockedOnce) { blockedOnce = true; enteredConnection?.(); await new Promise<void>((resolve) => { releaseConnection = resolve; }); } return connections.get(workspaceId, connectionId); } };
+    const slowOnboarding = new OnboardingService(db, {} as never, slowConnections as never, quality, radars);
+    const lateVerify = slowOnboarding.verifyData(A);
+    await connectionEntered;
+    const request = { name: 'Verify race-proof Radar', outcomeDefinitionId: 'purchase', predictionWindowDays: 30 as const, idempotencyKey: 'verify-race-first-radar' };
+    const created = await onboarding.createFirstRadar(A, undefined, request);
+    const firstRadarId = String((created.radar as { radar: { id: string } }).radar.id);
+    releaseConnection?.();
+    const late = await lateVerify;
+    assert.equal(late.progress.status, 'completed');
+    assert.equal(late.progress.current_step, 'completed');
+    assert.equal(late.progress.first_radar_id, firstRadarId);
+    assert.equal(late.detected, true);
     const replay = await onboarding.createFirstRadar(A, undefined, request);
     assert.equal((replay.radar as { radar: { id: string } }).radar.id, firstRadarId);
     assert.equal(replay.replay, true);
