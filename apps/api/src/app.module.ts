@@ -25,6 +25,7 @@ import { ConnectorsModule } from './modules/connectors/connectors.module';
 import { RadarsModule } from './modules/radars/radars.module';
 import { OpportunitiesModule } from './modules/opportunities/opportunities.module';
 import { DecisionsModule } from './modules/decisions/decisions.module';
+import { OnboardingModule } from './modules/onboarding/onboarding.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { DecisionsModule } from './modules/decisions/decisions.module';
     RadarsModule,
     OpportunitiesModule,
     DecisionsModule,
+    OnboardingModule, // Order 120 — durable guided setup over canonical domains
     DataQualityModule,
     FunnelsModule,
     MetricsModule,

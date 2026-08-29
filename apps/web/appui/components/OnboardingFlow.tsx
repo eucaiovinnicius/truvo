@@ -1,412 +1,53 @@
 'use client';
 
-import React, { useState } from 'react';
-import { 
-  Check, 
-  Code2, 
-  Copy, 
-  Database, 
-  ArrowRight, 
-  CheckCircle, 
-  Loader2, 
-  Sparkles, 
-  Building,
-  CheckSquare,
-  Square,
-  ExternalLink,
-  HelpCircle,
-  Play
-} from 'lucide-react';
-import { WorkspaceConfig } from '../types';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowRight, CheckCircle2, LoaderCircle, RefreshCw, TriangleAlert } from 'lucide-react';
+import { api } from '@/lib/api';
 
-interface OnboardingFlowProps {
-  onComplete: (workspaceName: string) => void;
-  onCancel: () => void;
-  showCancelButton: boolean;
-}
+interface Props { workspaceId: string; onComplete: (workspaceName: string) => void; onCancel: () => void; onOpenIntegrations: () => void; showCancelButton: boolean }
+type Path = 'ecommerce' | 'saas' | 'custom';
+type Connection = { id: string; provider: string; displayName: string; lifecycleState: string; credentialStatus: string };
+type State = { progress: Record<string, any>; source: { state: string; healthy: boolean; provider: string | null }; ttfvMs: number | null; recommendations: Record<Path, string[]>; readiness?: any; counts?: Record<string, number>; detected?: boolean };
+const labels: Record<Path, [string, string]> = { ecommerce: ['Loja / ecommerce', 'Shopify, Stripe e Klaviyo'], saas: ['Assinatura / SaaS', 'Stripe, HubSpot e eventos do produto'], custom: ['Eventos personalizados / API', 'Truvo Events ou API de ingestão'] };
 
-/*
- * TODO(live): este wizard é 100% simulado. Para ligá-lo à API real seriam
- * necessários vários passos (fora do escopo mínimo desta fase):
- *  - Step 1: PATCH /v1/workspaces/:id (nome/segmento) — hoje o nome só volta via onComplete.
- *  - Step 2: POST /v1/api-keys para gerar a chave real do pixel (em vez do pk_live_… fixo)
- *            e escutar o 1º evento (GET /v1/events/volume) em vez do botão de simulação.
- *  - Step 3: "Connect Meta/Google" mapeia para PUT /v1/integrations-out/:platform, que hoje
- *            falha-fechado sem INTEGRATIONS_ENCRYPTION_KEY (mesmo bloqueio da IntegrationsView).
- * Como envolve um fluxo multi-etapas com credenciais e tratamento de erro por passo,
- * priorizamos as telas 1–4 (TrackingView/Funnels/Settings/Reports) e deixamos isto anotado.
- */
-
-export default function OnboardingFlow({ onComplete, onCancel, showCancelButton }: OnboardingFlowProps) {
-  const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
-  const [workspaceName, setWorkspaceName] = useState('Truvo Global Store');
-  const [industry, setIndustry] = useState('E-commerce');
-  const [spendTier, setSpendTier] = useState('$5k - $20k');
-
-  // Step 2 Pixel states
-  const [pixelStatus, setPixelStatus] = useState<'listening' | 'received'>('listening');
-  const [copied, setCopied] = useState(false);
-
-  // Step 3 Ad connectors
-  const [metaConnected, setMetaConnected] = useState(false);
-  const [googleConnected, setGoogleConnected] = useState(false);
-  const [metaConnecting, setMetaConnecting] = useState(false);
-  const [googleConnecting, setGoogleConnecting] = useState(false);
-
-  const handleCopyPixel = () => {
-    navigator.clipboard.writeText(`tr('init', 'pk_live_68798e98b7a9f2'); tr('track', 'PageView');`);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const handleSimulatePixelHit = () => {
-    setPixelStatus('received');
-  };
-
-  const handleConnectMeta = () => {
-    setMetaConnecting(true);
-    setTimeout(() => {
-      setMetaConnecting(false);
-      setMetaConnected(true);
-    }, 1200);
-  };
-
-  const handleConnectGoogle = () => {
-    setGoogleConnecting(true);
-    setTimeout(() => {
-      setGoogleConnecting(false);
-      setGoogleConnected(true);
-    }, 1200);
-  };
-
-  const handleFinish = () => {
-    onComplete(workspaceName);
-  };
-
-  return (
-    <div id="onboarding-flow-container" className="max-w-xl mx-auto bg-white rounded-3xl border border-slate-100 shadow-2xl p-8 my-8 animate-fadeIn">
-      {/* Header and cancel */}
-      <div className="flex items-center justify-between pb-6 border-b border-slate-50">
-        <div>
-          <div className="flex items-center gap-1.5 text-teal-600">
-            <Sparkles className="w-4.5 h-4.5" />
-            <span className="text-[10px] font-mono font-bold uppercase tracking-widest">Truvo Setup Agent</span>
-          </div>
-          <h2 className="text-base font-bold text-slate-800 tracking-tight mt-1">Workspace Verification Wizard</h2>
-        </div>
-
-        {showCancelButton && (
-          <button
-            onClick={onCancel}
-            className="text-xs text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
-          >
-            Skip Setup
-          </button>
-        )}
-      </div>
-
-      {/* Progress Dots Bar */}
-      <div className="flex items-center gap-2 my-6">
-        {([1, 2, 3, 4] as const).map((s) => (
-          <div key={s} className="flex-1 flex items-center gap-1.5">
-            <div className={`h-1.5 rounded-full transition-all ${
-              s === step 
-                ? 'w-8 bg-teal-600' 
-                : s < step 
-                ? 'w-4 bg-emerald-500' 
-                : 'w-4 bg-slate-200'
-            }`} />
-            <span className={`text-[9px] font-mono font-bold ${
-              s === step ? 'text-teal-700' : 'text-slate-400'
-            }`}>
-              S{s}
-            </span>
-          </div>
-        ))}
-      </div>
-
-      {/* STEP 1: Brand Info */}
-      {step === 1 && (
-        <div className="space-y-5">
-          <div>
-            <h3 className="text-sm font-bold text-slate-800 tracking-tight flex items-center gap-1.5">
-              <Building className="w-4 h-4 text-slate-400" />
-              <span>Step 1: Tell us about your brand</span>
-            </h3>
-            <p className="text-xs text-slate-500 leading-normal mt-1">Configure your primary tracking domain and analytics settings.</p>
-          </div>
-
-          <div className="space-y-4 pt-2">
-            <div>
-              <label className="text-[10px] font-mono text-slate-400 uppercase font-bold block mb-1.5">E-commerce Brand Label</label>
-              <input
-                type="text"
-                value={workspaceName}
-                onChange={(e) => setWorkspaceName(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:border-teal-500 outline-none"
-                placeholder="e.g. My Premium Apparel"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-[10px] font-mono text-slate-400 uppercase font-bold block mb-1.5">Industry Category</label>
-                <select
-                  value={industry}
-                  onChange={(e) => setIndustry(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 bg-white outline-none"
-                >
-                  <option value="E-commerce">E-commerce (Shopify/etc)</option>
-                  <option value="SaaS">SaaS Platform</option>
-                  <option value="B2B Lead Gen">B2B Lead Generation</option>
-                  <option value="Infoproducts">Digital Infoproducts</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-mono text-slate-400 uppercase font-bold block mb-1.5">Estimated Ad Spend / mo</label>
-                <select
-                  value={spendTier}
-                  onChange={(e) => setSpendTier(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 bg-white outline-none"
-                >
-                  <option value="Under $5k">Under $5,000 / month</option>
-                  <option value="$5k - $20k">$5,000 - $20,000 / month</option>
-                  <option value="$20k - $100k">$20,000 - $100,000 / month</option>
-                  <option value="$100k+">$100,000+ / month</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-          <div className="pt-4 border-t border-slate-50 flex justify-end">
-            <button
-              onClick={() => setStep(2)}
-              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
-            >
-              <span>Verify & Continue</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* STEP 2: JS Pixel */}
-      {step === 2 && (
-        <div className="space-y-5">
-          <div>
-            <h3 className="text-sm font-bold text-slate-800 tracking-tight flex items-center gap-1.5">
-              <Code2 className="w-4 h-4 text-slate-400" />
-              <span>Step 2: Mount the Truvo JS tracking pixel</span>
-            </h3>
-            <p className="text-xs text-slate-500 leading-normal mt-1">To identify UTM source drop-offs, paste our code snippet inside your store template headers.</p>
-          </div>
-
-          {/* Code snippet block */}
-          <div className="bg-slate-900 rounded-2xl p-4 border border-slate-850 relative">
-            <pre className="text-[10px] font-mono text-slate-300 leading-normal">
-{`<script>
-  !function(t,r,u,v,o){t.Truvo=o, ...
-  tr('init', 'pk_live_68798e98b7a9f2');
-  tr('track', 'PageView');
-</script>`}
-            </pre>
-            <button
-              onClick={handleCopyPixel}
-              className="absolute top-3 right-3 p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
-            >
-              {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-            </button>
-          </div>
-
-          {/* Connection listening box */}
-          <div className="p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 transition-all bg-slate-50/50 border-slate-150">
-            <div className="flex items-center gap-3">
-              {pixelStatus === 'listening' ? (
-                <Loader2 className="w-5 h-5 text-teal-600 animate-spin shrink-0" />
-              ) : (
-                <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0" />
-              )}
-              <div>
-                <h4 className="text-xs font-bold text-slate-800">
-                  {pixelStatus === 'listening' ? 'Listening for test connection event...' : 'Pixel received test event!'}
-                </h4>
-                <p className="text-[10px] text-slate-500 mt-0.5 leading-normal">
-                  {pixelStatus === 'listening' 
-                    ? 'Submit a dummy page hit or click the simulation button below.' 
-                    : 'Success! Your website pixel is actively transmitting web transactions.'}
-                </p>
-              </div>
-            </div>
-
-            {pixelStatus === 'listening' && (
-              <button
-                onClick={handleSimulatePixelHit}
-                className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer shadow-xs shrink-0 self-start sm:self-auto"
-              >
-                <Play className="w-3 h-3 fill-current" />
-                <span>Trigger Simulation</span>
-              </button>
-            )}
-          </div>
-
-          <div className="pt-4 border-t border-slate-50 flex items-center justify-between">
-            <button
-              onClick={() => setStep(1)}
-              className="text-xs text-slate-500 hover:text-slate-800 transition-colors"
-            >
-              Back
-            </button>
-
-            <button
-              onClick={() => setStep(3)}
-              disabled={pixelStatus === 'listening'}
-              className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1 transition-all ${
-                pixelStatus === 'received' 
-                  ? 'bg-slate-900 hover:bg-slate-800 text-white cursor-pointer' 
-                  : 'bg-slate-100 text-slate-400 cursor-not-allowed'
-              }`}
-            >
-              <span>Connect Channels</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* STEP 3: Ad Channels */}
-      {step === 3 && (
-        <div className="space-y-5">
-          <div>
-            <h3 className="text-sm font-bold text-slate-800 tracking-tight flex items-center gap-1.5">
-              <Database className="w-4 h-4 text-slate-400" />
-              <span>Step 3: Connect marketing ad channels</span>
-            </h3>
-            <p className="text-xs text-slate-500 leading-normal mt-1">Authorize server integration pipelines to overlay ad cost calculations over verified pixel sales.</p>
-          </div>
-
-          <div className="space-y-3 pt-2">
-            {/* Meta connector */}
-            <div className="p-4 border border-slate-100 rounded-2xl bg-slate-50/40 flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center font-bold text-indigo-700 text-xs">
-                  M
-                </div>
-                <div>
-                  <h4 className="text-xs font-bold text-slate-800">Meta Ads API Integration</h4>
-                  <p className="text-[10px] text-slate-400 mt-0.5">
-                    {metaConnected ? 'Account Connected: Alex Mercer (ID: 9481)' : 'Requires business manager profile access.'}
-                  </p>
-                </div>
-              </div>
-
-              <button
-                onClick={handleConnectMeta}
-                disabled={metaConnected || metaConnecting}
-                className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all ${
-                  metaConnected 
-                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
-                    : metaConnecting 
-                    ? 'bg-slate-100 text-slate-400' 
-                    : 'bg-white border border-slate-200 hover:border-slate-300 text-slate-700 cursor-pointer shadow-2xs'
-                }`}
-              >
-                {metaConnecting ? 'Connecting...' : metaConnected ? 'Connected' : 'Connect Account'}
-              </button>
-            </div>
-
-            {/* Google connector */}
-            <div className="p-4 border border-slate-100 rounded-2xl bg-slate-50/40 flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-red-50 border border-red-100 flex items-center justify-center font-bold text-red-700 text-xs">
-                  G
-                </div>
-                <div>
-                  <h4 className="text-xs font-bold text-slate-800">Google Ads API Integration</h4>
-                  <p className="text-[10px] text-slate-400 mt-0.5">
-                    {googleConnected ? 'Account Connected: MCC ID 8903-1124' : 'Sync MCC networks, search and display ads.'}
-                  </p>
-                </div>
-              </div>
-
-              <button
-                onClick={handleConnectGoogle}
-                disabled={googleConnected || googleConnecting}
-                className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all ${
-                  googleConnected 
-                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
-                    : googleConnecting 
-                    ? 'bg-slate-100 text-slate-400' 
-                    : 'bg-white border border-slate-200 hover:border-slate-300 text-slate-700 cursor-pointer shadow-2xs'
-                }`}
-              >
-                {googleConnecting ? 'Connecting...' : googleConnected ? 'Connected' : 'Connect Account'}
-              </button>
-            </div>
-          </div>
-
-          <div className="pt-4 border-t border-slate-50 flex items-center justify-between">
-            <button
-              onClick={() => setStep(2)}
-              className="text-xs text-slate-500 hover:text-slate-800 transition-colors"
-            >
-              Back
-            </button>
-
-            <button
-              onClick={() => setStep(4)}
-              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
-            >
-              <span>Complete Setup</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* STEP 4: Celebration Success */}
-      {step === 4 && (
-        <div className="text-center space-y-5 py-4">
-          <div className="w-16 h-16 bg-emerald-50 border border-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-md animate-bounce">
-            <Check className="w-8 h-8" />
-          </div>
-
-          <div className="space-y-2">
-            <span className="text-[10px] font-mono text-emerald-700 font-bold uppercase tracking-wider">WORKSPACE VERIFIED</span>
-            <h3 className="text-lg font-bold text-slate-800 tracking-tight">Truvo Engine is Live!</h3>
-            <p className="text-xs text-slate-500 leading-relaxed max-w-sm mx-auto">
-              Your server pipelines have established sync tunnels with Meta and Google. Ad spends are now calculated directly over Shopify purchase timestamps.
-            </p>
-          </div>
-
-          <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100/70 text-left space-y-2 max-w-md mx-auto">
-            <div className="flex justify-between text-[11px] font-mono text-slate-500">
-              <span>Primary Workspace:</span>
-              <span className="font-bold text-slate-800">{workspaceName}</span>
-            </div>
-            <div className="flex justify-between text-[11px] font-mono text-slate-500">
-              <span>Pixel Connection status:</span>
-              <span className="font-bold text-emerald-600">Active (Stream)</span>
-            </div>
-            <div className="flex justify-between text-[11px] font-mono text-slate-500">
-              <span>Ad cost pipelines:</span>
-              <span className="font-bold text-slate-800">
-                {metaConnected && googleConnected ? 'Meta & Google connected' :
-                 metaConnected ? 'Meta connected' :
-                 googleConnected ? 'Google connected' : 'Local tracking only'}
-              </span>
-            </div>
-          </div>
-
-          <button
-            onClick={handleFinish}
-            className="w-full py-2.5 bg-linear-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-teal-500/10 cursor-pointer flex items-center justify-center gap-1.5"
-          >
-            <span>Launch Performance Intelligence</span>
-            <ArrowRight className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-    </div>
-  );
+export default function OnboardingFlow({ workspaceId, onComplete, onCancel, onOpenIntegrations, showCancelButton }: Props) {
+  const [state, setState] = useState<State | null>(null); const [connections, setConnections] = useState<Connection[]>([]);
+  const [name, setName] = useState(''); const [outcomes, setOutcomes] = useState<Array<{ id: string; name: string }>>([]); const [outcomeId, setOutcomeId] = useState('');
+  const [radarName, setRadarName] = useState('Meu primeiro Radar'); const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [metadataError, setMetadataError] = useState('');
+  const generation = useRef(0); const pending = useRef<AbortController | null>(null);
+  const load = useCallback(async () => {
+    const requestGeneration = generation.current; const controller = new AbortController(); pending.current?.abort(); pending.current = controller;
+    const current = await api<State>('/v1/onboarding', { signal: controller.signal });
+    let nextConnections: Connection[] = []; let available: Array<{ id: string; name: string }> = [];
+    try { [nextConnections, available] = await Promise.all([workspaceId ? api<Connection[]>(`/v1/workspaces/${workspaceId}/connectors/onboarding-sources`, { signal: controller.signal }) : [], api<Array<{ id: string; name: string }>>('/v1/radars/metadata/outcomes', { signal: controller.signal })]); } catch (e) { if ((e as Error).name !== 'AbortError') setMetadataError(e instanceof Error ? e.message : 'Falha ao carregar metadados'); throw e; }
+    if (controller.signal.aborted || requestGeneration !== generation.current) return;
+    setState(current); setConnections(nextConnections); setOutcomes(available); setOutcomeId(available[0]?.id || ''); setMetadataError(''); setError('');
+  }, [workspaceId]);
+  useEffect(() => {
+    generation.current += 1; pending.current?.abort(); setState(null); setConnections([]); setOutcomes([]); setOutcomeId(''); setError(''); setMetadataError(''); setBusy(false);
+    void load().catch((e) => { if ((e as Error).name !== 'AbortError') setError((e as Error).message); });
+    return () => { generation.current += 1; pending.current?.abort(); };
+  }, [workspaceId, load]);
+  useEffect(() => { if (!state || busy || !['syncing', 'waiting_for_data', 'blocked'].includes(String(state.progress.status))) return; const timer = window.setInterval(() => void load().catch((e) => { if ((e as Error).name !== 'AbortError') setError(e instanceof Error ? e.message : 'Falha ao atualizar o progresso'); }), 5000); return () => clearInterval(timer); }, [state, load, busy]);
+  const act = async (path: string, body?: unknown) => { const requestGeneration = generation.current; const controller = new AbortController(); pending.current?.abort(); pending.current = controller; setBusy(true); setError(''); try { const next = await api<State>(path, { method: 'POST', body: JSON.stringify(body ?? {}), signal: controller.signal }); if (!controller.signal.aborted && requestGeneration === generation.current) setState(next); } catch (e) { if ((e as Error).name !== 'AbortError' && requestGeneration === generation.current) setError(e instanceof Error ? e.message : 'Não foi possível continuar'); } finally { if (requestGeneration === generation.current) setBusy(false); } };
+  if (!state) return (error || metadataError)
+    ? <div data-testid="onboarding-load-error" className="mx-auto max-w-3xl rounded-xl border border-rose-200 bg-rose-50 p-6 text-rose-900" role="alert">{error || metadataError} <button onClick={() => void load()} className="font-bold underline">Tentar novamente</button></div>
+    : <div className="mx-auto max-w-3xl p-10 text-center" role="status"><LoaderCircle className="mx-auto animate-spin" /> Carregando seu progresso…</div>;
+  const step = String(state.progress.current_step); const path = state.progress.selected_path as Path | null;
+  const compatible = connections.filter((c) => !path || state.recommendations[path].includes(c.provider));
+  return <section className="mx-auto my-6 max-w-3xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl" aria-labelledby="onboarding-title" data-testid="onboarding-flow">
+    <header className="border-b border-slate-100 p-5 sm:p-7"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-widest text-teal-700">Primeiros passos</p><h1 id="onboarding-title" className="mt-1 text-2xl font-bold text-slate-900">Conheça quem vai comprar em seguida</h1><p className="mt-2 text-sm text-slate-600">Conecte Contexto → verifique os dados → crie seu primeiro Radar.</p></div>{showCancelButton && <button onClick={onCancel} className="rounded-lg px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-teal-600">Sair</button>}</div>
+      <ol className="mt-6 grid grid-cols-3 gap-2 text-xs font-semibold" aria-label="Progresso"><li className="rounded-lg bg-teal-50 p-2 text-teal-800">1. Conectar Contexto</li><li className="rounded-lg bg-slate-50 p-2">2. Verificar dados</li><li className="rounded-lg bg-slate-50 p-2">3. Criar Radar</li></ol></header>
+    <div className="space-y-5 p-5 sm:p-7">
+      {error && <div role="alert" className="flex gap-2 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900"><TriangleAlert className="h-5 w-5 shrink-0" /><span>{error} <button onClick={() => void load()} className="font-bold underline">Tentar novamente</button></span></div>}
+      {step === 'workspace_basics' && <form onSubmit={(e) => { e.preventDefault(); void act('/v1/onboarding/start', { workspaceName: name || undefined }); }} className="space-y-4"><div><label htmlFor="workspace-name" className="text-sm font-bold">Nome do workspace</label><input id="workspace-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Minha empresa" className="mt-1 w-full rounded-xl border border-slate-300 px-4 py-3 focus:ring-2 focus:ring-teal-600" /></div><button disabled={busy} className="rounded-xl bg-slate-900 px-5 py-3 font-bold text-white disabled:opacity-50">Continuar <ArrowRight className="inline h-4 w-4" /></button></form>}
+      {step === 'choose_path' && <div><h2 className="text-lg font-bold">Como sua empresa gera receita?</h2><div className="mt-4 grid gap-3 sm:grid-cols-3">{(Object.keys(labels) as Path[]).map((p) => <button key={p} disabled={busy} onClick={() => void act('/v1/onboarding/path', { path: p })} className="rounded-xl border border-slate-200 p-4 text-left hover:border-teal-600 focus:ring-2 focus:ring-teal-600"><span className="block font-bold">{labels[p][0]}</span><span className="mt-1 block text-xs text-slate-500">{labels[p][1]}</span></button>)}</div></div>}
+      {step === 'connect_context' && path === 'custom' && <div className="space-y-4"><h2 className="text-lg font-bold">Envie um evento real</h2><p className="text-sm text-slate-600">Crie ou reutilize uma chave em Configurações e envie dados pela API/Truvo Events. A criação da chave, sozinha, não marca esta etapa como concluída.</p><button disabled={busy} onClick={() => void act('/v1/onboarding/verify')} className="rounded-xl bg-teal-700 px-5 py-3 font-bold text-white">Verificar dados recebidos</button></div>}
+      {step === 'connect_context' && path !== 'custom' && <div className="space-y-4"><h2 className="text-lg font-bold">Conecte uma fonte existente</h2>{compatible.length === 0 ? <div className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900">Nenhuma fonte compatível foi configurada. Abra Integrações, autorize uma fonte e volte; somente uma conexão válida e saudável avançará.</div> : compatible.map((c) => <button key={c.id} disabled={busy} onClick={() => void act('/v1/onboarding/connection', { connectionId: c.id })} className="flex w-full items-center justify-between rounded-xl border p-4 text-left focus:ring-2 focus:ring-teal-600"><span><b>{c.displayName}</b><small className="block text-slate-500">{c.provider} · {c.lifecycleState} · credencial {c.credentialStatus}</small></span><ArrowRight /></button>)}<button onClick={onOpenIntegrations} className="text-sm font-semibold text-teal-700">Abrir Integrações</button></div>}
+      {step === 'verify_data' && <div className="space-y-4"><h2 className="text-lg font-bold">Estamos verificando seu Contexto</h2><p className="text-sm text-slate-600">Fonte: {state.source.state}. O avanço depende de clientes, resultados ou eventos canônicos realmente persistidos.</p>{state.progress.last_error_remediation && <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">{state.progress.last_error_remediation}</p>}<button disabled={busy} onClick={() => void act('/v1/onboarding/verify')} className="rounded-xl bg-teal-700 px-5 py-3 font-bold text-white"><RefreshCw className="mr-2 inline h-4 w-4" />Verificar agora</button></div>}
+      {step === 'readiness' && <div className="space-y-4"><h2 className="text-lg font-bold">Dados encontrados</h2><p className="text-sm text-slate-600">Agora calcularemos Data Health, cobertura de Contexto, identidade e prontidão para previsão usando os dados reais.</p><button disabled={busy} onClick={() => void act('/v1/onboarding/readiness', {})} className="rounded-xl bg-teal-700 px-5 py-3 font-bold text-white">Ver prontidão</button></div>}
+      {step === 'create_radar' && <div className="space-y-4"><h2 className="text-lg font-bold">Crie seu primeiro Radar</h2>{state.readiness?.radarReadiness?.status === 'not_ready' && <p className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900">Encontramos dados, mas ainda não há histórico suficiente para previsões. Você pode criar o Radar agora e validar novamente depois.</p>}<label className="block text-sm font-bold">Nome<input value={radarName} onChange={(e) => setRadarName(e.target.value)} className="mt-1 w-full rounded-xl border p-3" /></label>{outcomes.length === 0 ? <p className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900">Nenhum resultado alvo disponível. Configure um outcome canônico e tente novamente.</p> : <label className="block text-sm font-bold">Resultado alvo<select value={outcomeId} onChange={(e) => setOutcomeId(e.target.value)} className="mt-1 w-full rounded-xl border p-3">{outcomes.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}</select></label>}<button disabled={busy || !outcomeId} onClick={() => void act('/v1/onboarding/radar', { name: radarName, outcomeDefinitionId: outcomeId, predictionWindowDays: 30, idempotencyKey: `first-radar-${workspaceId}` })} className="rounded-xl bg-slate-900 px-5 py-3 font-bold text-white disabled:opacity-50">Criar Radar real</button></div>}
+      {step === 'completed' && state.progress.status !== 'blocked' && <div className="space-y-4 text-center"><CheckCircle2 className="mx-auto h-12 w-12 text-emerald-600" /><h2 className="text-xl font-bold">Seu primeiro Radar foi criado</h2><p className="text-sm text-slate-600">Abra o Radar para acompanhar a prontidão real e o próximo passo. Nenhuma oportunidade foi fabricada.</p><button onClick={() => onComplete(name)} className="rounded-xl bg-teal-700 px-5 py-3 font-bold text-white">Ver Radars</button>{state.ttfvMs != null && <p className="text-xs text-slate-500">Tempo até primeiro valor: {Math.round(state.ttfvMs / 1000)}s</p>}</div>}
+      {step === 'completed' && state.progress.status === 'blocked' && <div className="space-y-4 rounded-xl bg-rose-50 p-5 text-center text-rose-900"><TriangleAlert className="mx-auto h-10 w-10" /><h2 className="text-xl font-bold">Contexto indisponível</h2><p>{state.progress.last_error_remediation || 'A fonte precisa ser reconectada antes de continuar.'}</p><button onClick={() => void load()} className="rounded-xl bg-rose-700 px-5 py-3 font-bold text-white">Tentar novamente</button></div>}
+    </div></section>;
 }

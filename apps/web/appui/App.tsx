@@ -33,7 +33,6 @@ export default function App() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshSuccess, setRefreshSuccess] = useState(false);
   const [refreshError, setRefreshError] = useState(false);
-  const [onboardingUnavailable, setOnboardingUnavailable] = useState(false);
   const [dateRange, setDateRange] = useState('Last 7 Days');
 
   // Core business configurations
@@ -63,7 +62,7 @@ export default function App() {
   const handleLoginSuccess = (newProfile: ProfileConfig, mode: 'live' | 'demo') => {
     setProfile(newProfile);
     localStorage.setItem('truvo_profile', JSON.stringify(newProfile));
-    setView(mode === 'live' ? 'dashboard' : 'onboarding');
+    setView('dashboard');
   };
 
   const handleLogout = () => {
@@ -97,18 +96,14 @@ export default function App() {
 
   // Launch onboarding wizard trigger
   const handleStartOnboarding = () => {
-    if (session.isLive) {
-      setOnboardingUnavailable(true);
-      setTimeout(() => setOnboardingUnavailable(false), 3000);
-      return;
-    }
+    if (session.mode === 'demo') { setView('dashboard'); return; }
     setView('onboarding');
   };
 
   // Onboarding completion handler
   const handleCompleteOnboarding = (newWorkspaceName: string) => {
     setWorkspace(prev => ({ ...prev, name: newWorkspaceName }));
-    setView('dashboard');
+    setView('radars');
   };
 
   // Pipeline refresh simulation
@@ -231,11 +226,6 @@ export default function App() {
             A atualização manual ao vivo ainda não está conectada. Nenhum dado foi alterado.
           </div>
         )}
-        {onboardingUnavailable && (
-          <div role="alert" className="fixed top-20 right-8 z-50 bg-amber-50 border border-amber-200 text-amber-900 text-xs px-4 py-2.5 rounded-xl shadow-xl">
-            O assistente de onboarding ao vivo ainda não está conectado. Nenhuma integração foi simulada.
-          </div>
-        )}
 
         {/* Main Body content with padding offsets */}
         <main className="flex-1 p-8 ml-64 overflow-y-auto">
@@ -244,8 +234,11 @@ export default function App() {
             {/* Conditional Sub-View Router */}
             {currentView === 'onboarding' && (
               <OnboardingFlow 
+                key={visibleWorkspace.id}
+                workspaceId={visibleWorkspace.id}
                 onComplete={handleCompleteOnboarding} 
                 onCancel={() => setView('dashboard')}
+                onOpenIntegrations={() => setView('integrations')}
                 showCancelButton={true}
               />
             )}

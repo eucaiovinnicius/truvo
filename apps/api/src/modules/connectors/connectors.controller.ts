@@ -45,6 +45,10 @@ export class ConnectorsController {
     return this.connections.list(workspaceId);
   }
 
+  @Get('onboarding-sources')
+  @Roles('owner', 'admin', 'member')
+  listOnboardingSources(@Param('id') workspaceId: string) { return this.connections.listOnboardingSources(workspaceId); }
+
   @Get('connections/:connectionId')
   @Roles('owner', 'admin')
   get(@Param('id') workspaceId: string, @Param('connectionId') connectionId: string) {

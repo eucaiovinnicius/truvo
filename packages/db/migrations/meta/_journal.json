@@ -169,6 +169,13 @@
       "when": 1787869540666,
       "tag": "0023_boring_redwing",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1787890796114,
+      "tag": "0024_noisy_mindworm",
+      "breakpoints": true
     }
   ]
 }

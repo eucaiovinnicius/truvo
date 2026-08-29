@@ -90,6 +90,11 @@ export class ConnectorConnectionService {
     return rows.map((r) => this.sanitize(r));
   }
 
+  async listOnboardingSources(workspaceId: string) {
+    const rows = await this.db.select().from(connectorConnections).where(eq(connectorConnections.workspaceId, workspaceId));
+    return rows.filter((row) => row.role !== 'destination').map((row) => ({ id: row.id, provider: row.provider, displayName: row.displayName, lifecycleState: row.lifecycleState, credentialStatus: row.credentialStatus, capabilities: row.capabilities }));
+  }
+
   private async findOwnedRaw(workspaceId: string, id: string): Promise<ConnectorConnectionRow> {
     const [row] = await this.db
       .select()
