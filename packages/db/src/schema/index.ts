@@ -31,4 +31,5 @@ export * from './ai'; // M17 — ai_objectives, ai_journey_runs, ai_insights, ai
 export * from './event-context-quality'; // Order 070
 export * from './opportunities'; // Order 100
 export * from './decisions'; // Order 110
+export * from './onboarding'; // Order 120 - durable workspace setup progress and narrow telemetry
 export * from './radars'; // Order 080 â€” versioned prediction questions

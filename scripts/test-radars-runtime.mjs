@@ -39,7 +39,7 @@ async function main() {
     await waitForPostgres();
     const env = { ...process.env, DATABASE_URL: databaseUrl };
     run(executable, ['--filter', '@truvo/db', 'db:migrate'], { env });
-    run(executable, ['exec', 'tsx', '--test', 'src/modules/radars/radar.runtime.test.ts'], { env });
+    run(executable, ['--filter', '@truvo/api', 'exec', 'tsx', '--test', 'src/modules/radars/radar.runtime.test.ts'], { env });
   } finally {
     if (started) {
       const cleanup = spawnSync('docker', ['rm', '-f', containerName], { stdio: 'inherit' });

@@ -1,6 +1,6 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { ClickHouseClient } from '@truvo/db';
-import { identityLinks, identityMerges, identityConflicts, identityMergeEvents, connectorConnections, integrations, integrationOutConfigs } from '@truvo/db';
+import { identityLinks, identityMerges, identityConflicts, identityMergeEvents, connectorConnections, integrations, integrationOutConfigs, onboardingMilestones, onboardingProgress } from '@truvo/db';
 import type { Database } from '../../auth/database.provider';
 
 /**
@@ -59,6 +59,16 @@ export const eraseWorkspaceIntegrations: WorkspaceErasureHandler = async (ctx) =
   return ok(inbound.length + outbound.length);
 };
 
+/** Explicit registration documents lifecycle ownership; both tables also have
+ * workspace ON DELETE CASCADE as a final integrity backstop. */
+export const eraseWorkspaceOnboarding: WorkspaceErasureHandler = async (ctx) => {
+  // `::text` keeps the established erasure harness' legacy non-UUID tenant IDs
+  // retry-safe; production workspace IDs remain UUID-backed and FK constrained.
+  const milestones = await ctx.db.delete(onboardingMilestones).where(sql`${onboardingMilestones.workspaceId}::text = ${ctx.workspaceId}`).returning({ id: onboardingMilestones.id });
+  const progress = await ctx.db.delete(onboardingProgress).where(sql`${onboardingProgress.workspaceId}::text = ${ctx.workspaceId}`).returning({ id: onboardingProgress.workspaceId });
+  return ok(milestones.length + progress.length);
+};
+
 export const eraseWorkspaceClickHouse: WorkspaceErasureHandler = async (ctx) => {
   try {
     await ctx.ch.command({
@@ -82,5 +92,6 @@ export const WORKSPACE_ERASURE_EXTRA_STORES: ReadonlyArray<{ store: string; hand
   { store: 'identity_graph_v2_ws', handler: eraseWorkspaceIdentityGraphV2 },
   { store: 'connectors_ws', handler: eraseWorkspaceConnectors },
   { store: 'integrations_ws', handler: eraseWorkspaceIntegrations },
+  { store: 'onboarding_ws', handler: eraseWorkspaceOnboarding },
   { store: 'clickhouse_ws', handler: eraseWorkspaceClickHouse },
 ];

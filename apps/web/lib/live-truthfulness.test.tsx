@@ -119,5 +119,6 @@ test('repository policy scan finds no remaining silent live-to-mock fallback', (
   const funnels = readFileSync(join(componentsDir, 'FunnelsView.tsx'), 'utf8');
   assert.match(funnels, /O detalhamento por canal, campanha e criativo ainda não está disponível/);
   const app = readFileSync(join(process.cwd(), 'appui', 'App.tsx'), 'utf8');
-  assert.match(app, /mode === 'live' \? 'dashboard' : 'onboarding'/);
+  assert.match(app, /setView\('dashboard'\)/);
+  assert.match(app, /session\.mode === 'demo'/);
 });
