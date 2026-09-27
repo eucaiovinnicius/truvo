@@ -120,6 +120,7 @@ interface CustomerProfile {
   deviceList: CustomerDevice[];
   weekly: WeeklyActivity[];
   timeline: TimelineEvent[];
+  timelineUnavailable?: boolean;
 }
 
 // ----------------------------------------------------------------------------
@@ -224,6 +225,23 @@ const EVENT_META: Record<EventKind, EventMeta> = {
     dot: 'bg-rose-400',
   },
 };
+
+const DEFAULT_EVENT_META: EventMeta = {
+  label: 'Evento',
+  icon: Activity,
+  ring: 'bg-slate-50 text-slate-600 border-slate-150',
+  dot: 'bg-slate-300',
+};
+
+function getEventMeta(kind: string): EventMeta {
+  if (kind && kind in EVENT_META) {
+    return EVENT_META[kind as EventKind];
+  }
+  return {
+    ...DEFAULT_EVENT_META,
+    label: kind ? kind.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'Evento',
+  };
+}
 
 const STATUS_META: Record<CustomerStatus, { label: string; cls: string }> = {
   vip: { label: 'VIP', cls: 'bg-teal-100 text-teal-800' },
@@ -448,6 +466,16 @@ interface ApiProfileSearchResponse {
   results: ApiProfileCandidate[];
 }
 
+interface ApiProfileDevice {
+  device_id?: string;
+  device_type?: string;
+  os?: string;
+  browser?: string;
+  first_seen?: string;
+  first_seen_at?: string;
+  last_seen_at?: string;
+}
+
 interface ApiProfileView {
   canonical_id: string;
   status: 'identified' | 'anonymous';
@@ -455,7 +483,7 @@ interface ApiProfileView {
   phone_hash: string | null;
   identity?: {
     anonymous_ids?: string[];
-    devices?: Array<{ device_id?: string; type?: string; os?: string; browser?: string; first_seen_at?: string; last_seen_at?: string }>;
+    devices?: ApiProfileDevice[];
     order_ids?: string[];
     click_ids?: string[];
   };
@@ -488,6 +516,7 @@ interface ApiTimelineItem {
 
 interface ApiTimelineResponse {
   canonical_id: string;
+  clickhouse_available?: boolean;
   events?: ApiTimelineItem[];
   groups?: Array<{ day: string; count: number; events: ApiTimelineItem[] }>;
 }
@@ -502,7 +531,7 @@ interface ApiIdentitiesResponse {
     user_ids?: string[];
     order_ids?: string[];
     click_ids?: string[];
-    devices?: Array<{ device_id?: string; type?: string; os?: string; browser?: string; first_seen_at?: string; last_seen_at?: string }>;
+    devices?: ApiProfileDevice[];
   };
 }
 
@@ -573,12 +602,18 @@ function adaptCanonicalProfile(
   }));
 
   const rawDevices = identities?.identity?.devices || p.identity?.devices || [];
-  const mappedDevices = rawDevices.map((d, i) => ({
-    name: `Dispositivo ${i + 1}`,
-    os: `${d.os || 'OS'} · ${d.browser || 'Browser'}`,
-    lastSeen: d.last_seen_at || '',
-    type: (d.type as 'mobile' | 'desktop' | 'tablet') || 'mobile',
-  }));
+  const mappedDevices = rawDevices.map((d, i) => {
+    const rawType = (d.device_type || '').toLowerCase();
+    const type: 'mobile' | 'desktop' | 'tablet' =
+      rawType.includes('desktop') ? 'desktop' : rawType.includes('tablet') ? 'tablet' : 'mobile';
+    const lastSeen = d.first_seen || d.last_seen_at || d.first_seen_at || '';
+    return {
+      name: `Dispositivo ${i + 1}`,
+      os: `${d.os || 'OS'} · ${d.browser || 'Browser'}`,
+      lastSeen,
+      type,
+    };
+  });
 
   return {
     name: identified ? 'Perfil Identificado' : 'Visitante Anônimo',
@@ -601,6 +636,7 @@ function adaptCanonicalProfile(
     deviceList: mappedDevices,
     weekly: [],
     timeline: mappedTimeline,
+    timelineUnavailable: timeline ? timeline.clickhouse_available === false : false,
   };
 }
 
@@ -727,13 +763,13 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
   ]);
 
   const activeStates = canonicalId
-    ? [canonicalProfileLive]
+    ? [canonicalProfileLive, canonicalTimelineLive, canonicalIdentitiesLive]
     : submittedSearch
       ? [searchLive]
       : [];
 
   const liveLoading = canonicalId
-    ? canonicalProfileLive.status === 'loading'
+    ? canonicalProfileLive.status === 'loading' || canonicalTimelineLive.status === 'loading' || canonicalIdentitiesLive.status === 'loading'
     : !!submittedSearch && searchLive.status === 'loading';
 
   const liveHasResult = canonicalId
@@ -1074,9 +1110,20 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
                 </button>
               </div>
 
+              {profile.timelineUnavailable && (
+                <div
+                  className="mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2 font-mono"
+                  role="region"
+                  aria-label="Aviso de disponibilidade de eventos"
+                >
+                  <Activity className="w-4 h-4 shrink-0 text-amber-600" />
+                  <span>Armazenamento de eventos (ClickHouse) temporariamente indisponível. A linha do tempo pode estar incompleta.</span>
+                </div>
+              )}
+
               <ol className="relative">
                 {orderedTimeline.map((ev, idx) => {
-                  const meta = EVENT_META[ev.kind];
+                  const meta = getEventMeta(ev.kind);
                   const Icon = meta.icon;
                   const isLast = idx === orderedTimeline.length - 1;
                   return (

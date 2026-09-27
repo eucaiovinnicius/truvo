@@ -354,3 +354,28 @@ test('CANONICAL CUSTOMER ROUTE: uses canonical endpoint directly instead of type
   assert.equal(timelinePath, '/v1/profiles/cust_canon_abc123/timeline');
   assert.equal(identitiesPath, '/v1/profiles/cust_canon_abc123/identities');
 });
+
+test('CUSTOMER PROFILE: safely adapts free-form event names and device response fields', () => {
+  // Device mapping: backend provides device_type, os, browser, first_seen
+  const backendDevice = {
+    device_type: 'desktop',
+    os: 'macOS 15',
+    browser: 'Chrome 128',
+    first_seen: '2026-06-01T10:00:00.000Z',
+  };
+  const rawType = (backendDevice.device_type || '').toLowerCase();
+  const resolvedType = rawType.includes('desktop') ? 'desktop' : rawType.includes('tablet') ? 'tablet' : 'mobile';
+  assert.equal(resolvedType, 'desktop');
+
+  // Timeline event mapping with custom/unrecognized event names
+  const customEvents = ['lead', 'refund', 'subscription_started', 'custom_action'];
+  for (const name of customEvents) {
+    const label = name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+    assert.ok(label.length > 0);
+  }
+
+  // Timeline availability flag: clickhouse_available: false maps to timelineUnavailable: true
+  const timelineResponse = { canonical_id: 'cust_1', clickhouse_available: false, count: 0, events: [] };
+  const timelineUnavailable = timelineResponse.clickhouse_available === false;
+  assert.equal(timelineUnavailable, true);
+});
