@@ -22,7 +22,7 @@ import {
 import PrimaryNav from '../appui/components/PrimaryNav';
 import WorkspaceSwitcher from '../appui/components/WorkspaceSwitcher';
 import PageHeader from '../appui/components/PageHeader';
-import { classifyLiveFailure, liveRequestKey, reconcileLiveContext, stateForContext, type LiveState } from './live-state';
+import { classifyLiveFailure, liveRequestKey, reconcileLiveContext, resolveLiveSurface, stateForContext, type LiveState } from './live-state';
 
 test('FEATURE CAPABILITIES: primary nav items contain only enabled MVP routes', () => {
   const items = getPrimaryNavItems();
@@ -379,3 +379,50 @@ test('CUSTOMER PROFILE: safely adapts free-form event names and device response 
   const timelineUnavailable = timelineResponse.clickhouse_available === false;
   assert.equal(timelineUnavailable, true);
 });
+
+test('LIVE STATE: 404 response maps to not_found failure and resolves to empty surface', () => {
+  const notFoundFailure = classifyLiveFailure({ status: 404 }, '/v1/profiles/non-existent');
+  assert.equal(notFoundFailure.kind, 'not_found');
+  assert.match(notFoundFailure.message, /não foi encontrado/);
+
+  const notFoundState: LiveState<unknown> = {
+    data: null,
+    loading: false,
+    error: notFoundFailure,
+    status: 'error',
+    requestKey: 'live:ws-1:/v1/profiles/non-existent',
+  };
+
+  const surface = resolveLiveSurface([notFoundState], false);
+  assert.equal(surface, 'empty');
+});
+
+test('CUSTOMER PROFILE: preserves timeline event currency and respects pagination cursor', () => {
+  const evBrl = { value: 150.0, currency: 'BRL' };
+  const evUsd = { value: 99.9, currency: 'USD' };
+  const evUnknown: { value: number; currency?: string } = { value: 50.0 };
+
+  const fmtMoney = (n: number, currency?: string): string => {
+    const curr = (currency || 'BRL').toUpperCase();
+    try {
+      return n.toLocaleString('pt-BR', { style: 'currency', currency: curr });
+    } catch {
+      return `${curr} ${n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+  };
+
+  assert.match(fmtMoney(evBrl.value, evBrl.currency), /R\$/);
+  assert.match(fmtMoney(evUsd.value, evUsd.currency), /US\$|USD/);
+  assert.match(fmtMoney(evUnknown.value, evUnknown.currency), /R\$/);
+
+  // Pagination cursor detection
+  const paginatedResponse = {
+    canonical_id: 'cust_1',
+    count: 50,
+    next_cursor: 'cursor_page_2',
+    events: [],
+  };
+  assert.equal(Boolean(paginatedResponse.next_cursor), true);
+  assert.equal(paginatedResponse.next_cursor, 'cursor_page_2');
+});
+

@@ -78,7 +78,8 @@ interface TimelineEvent {
   device: string;
   detail?: string;
   order?: string;
-  value?: number; // BRL
+  value?: number;
+  currency?: string;
   utm?: UtmData;
 }
 
@@ -121,6 +122,8 @@ interface CustomerProfile {
   weekly: WeeklyActivity[];
   timeline: TimelineEvent[];
   timelineUnavailable?: boolean;
+  hasMoreTimeline?: boolean;
+  nextTimelineCursor?: string | null;
 }
 
 // ----------------------------------------------------------------------------
@@ -129,6 +132,15 @@ interface CustomerProfile {
 
 const brl = (n: number): string =>
   n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+const fmtMoney = (n: number, currency?: string): string => {
+  const curr = (currency || 'BRL').toUpperCase();
+  try {
+    return n.toLocaleString('pt-BR', { style: 'currency', currency: curr });
+  } catch {
+    return `${curr} ${n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+};
 
 const num = (n: number): string => n.toLocaleString('pt-BR');
 
@@ -517,6 +529,8 @@ interface ApiTimelineItem {
 interface ApiTimelineResponse {
   canonical_id: string;
   clickhouse_available?: boolean;
+  count?: number;
+  next_cursor?: string | null;
   events?: ApiTimelineItem[];
   groups?: Array<{ day: string; count: number; events: ApiTimelineItem[] }>;
 }
@@ -598,6 +612,7 @@ function adaptCanonicalProfile(
     detail: `Evento: ${ev.event_name}${ev.source ? ` (${ev.source})` : ''}`,
     order: ev.order_id || undefined,
     value: ev.value || undefined,
+    currency: ev.currency || undefined,
     utm: ev.context ? { source: ev.context.utm_source, medium: ev.context.utm_medium, campaign: ev.context.utm_campaign } : undefined,
   }));
 
@@ -637,6 +652,8 @@ function adaptCanonicalProfile(
     weekly: [],
     timeline: mappedTimeline,
     timelineUnavailable: timeline ? timeline.clickhouse_available === false : false,
+    hasMoreTimeline: Boolean(timeline?.next_cursor),
+    nextTimelineCursor: timeline?.next_cursor || null,
   };
 }
 
@@ -729,7 +746,7 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
       if (candidate?.canonical_id && candidate.canonical_id !== canonicalId) {
         setCanonicalId(candidate.canonical_id);
         if (typeof window !== 'undefined' && window.location.pathname.startsWith('/app/customers')) {
-          window.history.pushState(null, '', `/app/customers/${candidate.canonical_id}`);
+          window.history.pushState(null, '', `/app/customers/${encodeURIComponent(candidate.canonical_id)}`);
         }
       }
     }
@@ -1168,7 +1185,7 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
                               }`}
                             >
                               {ev.kind === 'purchase' ? '+' : ''}
-                              {brl(ev.value)}
+                              {fmtMoney(ev.value, ev.currency)}
                             </span>
                           )}
                         </div>
@@ -1192,6 +1209,13 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
                   );
                 })}
               </ol>
+
+              {profile.hasMoreTimeline && (
+                <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 font-mono">
+                  <span>Mostrando os 50 eventos mais recentes deste cliente.</span>
+                  <span className="text-[11px] bg-slate-100 text-slate-600 px-2 py-1 rounded-md">Mais histórico disponível</span>
+                </div>
+              )}
             </div>
 
             {/* Rail lateral */}

@@ -1,7 +1,7 @@
 import type { SessionMode } from './session';
 
 export type LiveStatus = 'idle' | 'demo' | 'loading' | 'success' | 'error';
-export type LiveFailureKind = 'auth' | 'permission' | 'unavailable';
+export type LiveFailureKind = 'auth' | 'permission' | 'not_found' | 'unavailable';
 
 export interface LiveFailure {
   kind: LiveFailureKind;
@@ -45,13 +45,22 @@ export function classifyLiveFailure(error: unknown, path: string): LiveFailure {
     typeof error === 'object' && error !== null && 'status' in error
       ? Number((error as { status?: unknown }).status)
       : undefined;
-  const kind: LiveFailureKind = status === 401 ? 'auth' : status === 403 ? 'permission' : 'unavailable';
+  const kind: LiveFailureKind =
+    status === 401
+      ? 'auth'
+      : status === 403
+        ? 'permission'
+        : status === 404
+          ? 'not_found'
+          : 'unavailable';
   const message =
     kind === 'auth'
       ? 'Sua sessão expirou. Entre novamente para continuar.'
       : kind === 'permission'
         ? 'Você não tem permissão para acessar estes dados.'
-        : 'Os dados ao vivo estão indisponíveis no momento. Tente novamente mais tarde.';
+        : kind === 'not_found'
+          ? 'O registro solicitado não foi encontrado.'
+          : 'Os dados ao vivo estão indisponíveis no momento. Tente novamente mais tarde.';
   const safePath = path.split('?')[0] ?? path;
   const code = typeof error === 'object' && error !== null && 'code' in error && typeof (error as { code?: unknown }).code === 'string'
     ? (error as { code: string }).code : undefined;
@@ -88,6 +97,7 @@ export function resolveLiveSurface(states: LiveState<unknown>[], empty: boolean)
   const failures = states.flatMap((state) => (state.status === 'error' && state.error ? [state.error] : []));
   if (failures.some((failure) => failure.kind === 'auth')) return 'auth';
   if (failures.some((failure) => failure.kind === 'permission')) return 'permission';
+  if (failures.some((failure) => failure.kind === 'not_found')) return 'empty';
   if (failures.length > 0) return 'error';
   if (states.some((state) => state.status === 'loading')) return 'loading';
   return empty ? 'empty' : 'content';
