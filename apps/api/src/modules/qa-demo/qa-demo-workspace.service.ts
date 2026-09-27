@@ -60,8 +60,10 @@ export function isExplicitDemoSlug(slug?: string): boolean {
 }
 
 @Injectable()
-export class QaDemoWorkspaceService implements OnModuleInit {
+export class QaDemoWorkspaceService {
   private readonly logger = new Logger(QaDemoWorkspaceService.name);
+  private readonly demoRegistry: ConnectorRegistryService;
+  private readonly demoOpportunities: OpportunitiesService;
 
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
@@ -71,19 +73,23 @@ export class QaDemoWorkspaceService implements OnModuleInit {
     private readonly models: ModelRegistryService,
     private readonly opportunities: OpportunitiesService,
     private readonly decisions: DecisionsService,
-    @Optional() private readonly connectorRegistry?: ConnectorRegistryService,
-  ) {}
-
-  onModuleInit(): void {
-    this.ensureFakeAdapterRegistered();
+    @Optional() customRegistry?: ConnectorRegistryService,
+  ) {
+    // Isolated registry dedicated exclusively to QA/Demo workspaces — keeps fake_provider out of live registry
+    this.demoRegistry = customRegistry ?? new ConnectorRegistryService();
+    if (!this.demoRegistry.getDestinationAdapter(FAKE_PROVIDER)) {
+      const state = createFakeProviderState();
+      this.demoRegistry.registerSource(createFakeSourceAdapter(state));
+      this.demoRegistry.registerDestination(createFakeDestinationAdapter(state));
+    }
+    const audit = new AuditService(db);
+    const connections = new ConnectorConnectionService(db, audit, this.demoRegistry);
+    const destination = new ConnectorDestinationService(db, connections, this.demoRegistry, audit);
+    this.demoOpportunities = new OpportunitiesService(db, audit, connections, this.demoRegistry, destination, decisions);
   }
 
-  private ensureFakeAdapterRegistered(): void {
-    if (this.connectorRegistry && !this.connectorRegistry.getDestinationAdapter(FAKE_PROVIDER)) {
-      const state = createFakeProviderState();
-      this.connectorRegistry.registerSource(createFakeSourceAdapter(state));
-      this.connectorRegistry.registerDestination(createFakeDestinationAdapter(state));
-    }
+  getDemoRegistry(): ConnectorRegistryService {
+    return this.demoRegistry;
   }
 
   /**
@@ -128,7 +134,6 @@ export class QaDemoWorkspaceService implements OnModuleInit {
    * Creates or resets the deterministic demo workspace.
    */
   async createOrResetDemoWorkspace(options: DemoWorkspaceOptions = {}): Promise<DemoWorkspaceSeedResult> {
-    this.ensureFakeAdapterRegistered();
     const workspaceId = options.workspaceId ?? DEMO_WORKSPACE_DEFAULT_ID;
     const [existingWs] = await this.db.execute(sql`
       select id, slug from workspaces where id = ${workspaceId}
@@ -535,15 +540,15 @@ export class QaDemoWorkspaceService implements OnModuleInit {
     }
 
     // 8. Materialize Revenue Opportunities
-    const oppBatch = await this.opportunities.materialize(workspaceId, radarId, 'qa-demo-seed');
+    const oppBatch = await this.demoOpportunities.materialize(workspaceId, radarId, 'qa-demo-seed');
 
     // 9. Activation & Outbound Export
-    const oppList = await this.opportunities.list(workspaceId, radarId, { sort: 'probability', limit: 10 });
+    const oppList = await this.demoOpportunities.list(workspaceId, radarId, { sort: 'probability', limit: 10 });
     const selectedOppIds = oppList.items.map((item) => item.id);
 
     let decisionBatchId = '';
     if (selectedOppIds.length > 0) {
-      const actRes = await this.opportunities.activate(workspaceId, operatorId, {
+      const actRes = await this.demoOpportunities.activate(workspaceId, operatorId, {
         radarId,
         selection: { mode: 'selected', batchId: oppBatch.id, ids: selectedOppIds },
         correlationId: `corr_demo_activation_${workspaceId.slice(-6)}`,

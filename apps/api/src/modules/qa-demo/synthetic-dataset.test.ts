@@ -110,9 +110,9 @@ test('DEMO DATA: zero real PII and zero secrets in dataset', () => {
   }
 });
 
-test('DEMO SERVICE: registers fake provider in Nest-provided ConnectorRegistryService', () => {
-  const registry = new ConnectorRegistryService();
-  assert.equal(registry.getDestinationAdapter(FAKE_PROVIDER), undefined);
+test('DEMO SERVICE: keeps fake provider strictly isolated from live ConnectorRegistryService', () => {
+  const liveRegistry = new ConnectorRegistryService();
+  assert.equal(liveRegistry.getDestinationAdapter(FAKE_PROVIDER), undefined);
 
   const service = new QaDemoWorkspaceService(
     {} as never,
@@ -122,9 +122,14 @@ test('DEMO SERVICE: registers fake provider in Nest-provided ConnectorRegistrySe
     {} as never,
     {} as never,
     {} as never,
-    registry,
   );
-  service.onModuleInit();
-  assert.ok(registry.getDestinationAdapter(FAKE_PROVIDER), 'Destination adapter must be registered');
-  assert.ok(registry.getSourceAdapter(FAKE_PROVIDER), 'Source adapter must be registered');
+
+  // Live registry remains clean without fake provider
+  assert.equal(liveRegistry.getDestinationAdapter(FAKE_PROVIDER), undefined);
+  assert.equal(liveRegistry.getSourceAdapter(FAKE_PROVIDER), undefined);
+
+  // Demo service has dedicated demo registry with fake adapter available
+  const demoRegistry = service.getDemoRegistry();
+  assert.ok(demoRegistry.getDestinationAdapter(FAKE_PROVIDER), 'Demo registry must have fake destination adapter');
+  assert.ok(demoRegistry.getSourceAdapter(FAKE_PROVIDER), 'Demo registry must have fake source adapter');
 });

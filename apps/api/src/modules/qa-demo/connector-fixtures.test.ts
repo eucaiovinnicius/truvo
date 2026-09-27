@@ -155,10 +155,15 @@ test('CONNECTOR FIXTURES: invalid/incompatible payloads are handled safely witho
     },
   );
 
-  // 2. Stripe invalid payload
-  const stripeResult = mapStripeSubscription(STRIPE_PAYLOAD_INVALID);
-  assert.equal(stripeResult.identifiers.length, 0);
-  assert.equal(stripeResult.billingSubscription?.providerSubscriptionId, undefined);
+  // 2. Stripe invalid payload missing id is rejected at adapter boundary
+  assert.throws(
+    () => mapStripeSubscription(STRIPE_PAYLOAD_INVALID),
+    (err: Error) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, /missing required id/i);
+      return true;
+    },
+  );
 
   // 3. HubSpot invalid node
   const hubspotResult = mapHubspotContact(HUBSPOT_PAYLOAD_INVALID as never, []);
