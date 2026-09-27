@@ -38,11 +38,28 @@ test('GOLDEN E2E: complete 9-step canonical journey on deterministic demo worksp
     // Domain Assertion: Workspace and personas created
     assert.equal(seedResult.workspaceId, GOLDEN_WS);
     assert.equal(seedResult.datasetVersion, '1.0.0');
-    assert.equal(seedResult.entityCounts.customers, 6);
+
+    // Prove returned entityCounts == actual database inventory
+    const [dbCustCount] = await db.execute<{ count: number }>(sql`select count(*)::int as count from customers where workspace_id = ${GOLDEN_WS}`);
+    const [dbAccCount] = await db.execute<{ count: number }>(sql`select count(*)::int as count from crm_accounts where workspace_id = ${GOLDEN_WS}`);
+    const [dbTraitCount] = await db.execute<{ count: number }>(sql`select count(*)::int as count from customer_traits where workspace_id = ${GOLDEN_WS}`);
+    const [dbIdentCount] = await db.execute<{ count: number }>(sql`select count(*)::int as count from customer_identifiers where workspace_id = ${GOLDEN_WS}`);
+    const [dbOrderCount] = await db.execute<{ count: number }>(sql`select count(*)::int as count from commerce_orders where workspace_id = ${GOLDEN_WS}`);
+    const [dbSubCount] = await db.execute<{ count: number }>(sql`select count(*)::int as count from billing_context_subscriptions where workspace_id = ${GOLDEN_WS}`);
+    const [dbEngCount] = await db.execute<{ count: number }>(sql`select count(*)::int as count from engagement_events where workspace_id = ${GOLDEN_WS}`);
+    const [dbMergeCount] = await db.execute<{ count: number }>(sql`select count(*)::int as count from identity_merge_events where workspace_id = ${GOLDEN_WS}`);
+
+    assert.equal(seedResult.entityCounts.customers, dbCustCount.count, 'customers count must match DB');
+    assert.equal(seedResult.entityCounts.accounts, dbAccCount.count, 'accounts count must match DB');
+    assert.equal(seedResult.entityCounts.traits, dbTraitCount.count, 'traits count must match DB');
+    assert.equal(seedResult.entityCounts.identifiers, dbIdentCount.count, 'identifiers count must match DB');
+    assert.equal(seedResult.entityCounts.orders, dbOrderCount.count, 'orders count must match DB');
+    assert.equal(seedResult.entityCounts.subscriptions, dbSubCount.count, 'subscriptions count must match DB');
+    assert.equal(seedResult.entityCounts.engagementEvents, dbEngCount.count, 'engagementEvents count must match DB');
+    assert.equal(seedResult.entityCounts.identityMerges, dbMergeCount.count, 'identityMerges count must match DB');
+
+    assert.equal(seedResult.entityCounts.customers, 7, 'Must count 6 personas + 1 anonymous transition customer');
     assert.equal(seedResult.entityCounts.accounts, 2);
-    assert.ok(seedResult.entityCounts.traits >= 15);
-    assert.ok(seedResult.entityCounts.orders >= 3);
-    assert.ok(seedResult.entityCounts.subscriptions >= 2);
     assert.equal(seedResult.entityCounts.identityMerges, 1);
 
     // Step 3: Canonical Context Records Verification
@@ -50,6 +67,13 @@ test('GOLDEN E2E: complete 9-step canonical journey on deterministic demo worksp
       select id, status from customers where workspace_id = ${GOLDEN_WS} and id = ${seedResult.personas.likely_buyer.customerId}
     `) as Array<{ id: string; status: string }>;
     assert.equal(likelyCustomer?.status, 'identified');
+
+    // Verify anonymous transition customer exists in DB and was marked merged
+    const anonId = dataset.personas.likely_buyer.identityTransition!.anonymousCustomerId;
+    const [anonCustomer] = await db.execute(sql`
+      select id, status from customers where workspace_id = ${GOLDEN_WS} and id = ${anonId}
+    `) as Array<{ id: string; status: string }>;
+    assert.equal(anonCustomer?.status, 'merged', 'Anonymous customer must exist and be marked merged');
 
     // Step 3b: Canonical B2B Accounts Verification (crm_accounts)
     const accounts = await db.execute(sql`

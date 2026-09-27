@@ -1,4 +1,4 @@
-import { Injectable, type OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import { ConnectorRegistryService } from '../../connector-registry.service';
 import { createKlaviyoAdapter } from './klaviyo.adapter';
 
@@ -7,7 +7,7 @@ import { createKlaviyoAdapter } from './klaviyo.adapter';
  * adapter instance, mirroring `HubspotBootstrapService`. */
 @Injectable()
 export class KlaviyoBootstrapService implements OnModuleInit {
-  constructor(private readonly registry: ConnectorRegistryService) {}
+  constructor(@Inject(ConnectorRegistryService) private readonly registry: ConnectorRegistryService) {}
   onModuleInit(): void {
     const adapter = createKlaviyoAdapter();
     this.registry.registerSource(adapter);

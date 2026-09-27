@@ -65,6 +65,7 @@ export class QaDemoWorkspaceService {
   private readonly logger = new Logger(QaDemoWorkspaceService.name);
   private readonly demoRegistry: ConnectorRegistryService;
   private readonly demoOpportunities: OpportunitiesService;
+  private readonly demoModels: ModelRegistryService;
 
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
@@ -75,7 +76,7 @@ export class QaDemoWorkspaceService {
     private readonly opportunities: OpportunitiesService,
     private readonly decisions: DecisionsService,
   ) {
-    // Isolated registry dedicated exclusively to QA/Demo workspaces — keeps fake_provider 100% out of live registry
+    // 1. Isolated connector registry dedicated exclusively to QA/Demo workspaces — keeps fake_provider 100% out of live registry
     this.demoRegistry = new ConnectorRegistryService();
     const state = createFakeProviderState();
     this.demoRegistry.registerSource(createFakeSourceAdapter(state));
@@ -85,10 +86,19 @@ export class QaDemoWorkspaceService {
     const connections = new ConnectorConnectionService(db, audit, this.demoRegistry);
     const destination = new ConnectorDestinationService(db, connections, this.demoRegistry, audit);
     this.demoOpportunities = new OpportunitiesService(db, audit, connections, this.demoRegistry, destination, decisions);
+
+    // 2. Isolated demo-scoped model registry with deterministic artifact verifier
+    // Prevents synthetic demo model artifacts from requiring live S3/GCS or failing in Nest-managed DI
+    const demoArtifactVerifier = { verify: async () => ({ ok: true as const }) };
+    this.demoModels = new ModelRegistryService(db, audit, demoArtifactVerifier as never);
   }
 
   getDemoRegistry(): ConnectorRegistryService {
     return this.demoRegistry;
+  }
+
+  getDemoModels(): ModelRegistryService {
+    return this.demoModels;
   }
 
   /**
@@ -150,28 +160,60 @@ export class QaDemoWorkspaceService {
       throw new BadRequestException(`Slug "${effectiveSlug}" is already in use by workspace "${slugOwner.id}".`);
     }
 
-    if (options.cleanBeforeSeed !== false) {
-      await this.cleanWorkspaceData(workspaceId, effectiveSlug);
-    }
+    return await this.db.transaction(async (tx) => {
+      if (options.cleanBeforeSeed !== false) {
+        await this.cleanWorkspaceData(workspaceId, effectiveSlug, tx);
+      }
 
+      if (options.injectFailureAfterCleanup) {
+        throw new Error('Deterministic injected failure after cleanup for rollback proof');
+      }
+
+      return await this.seedDemoWorkspace(workspaceId, effectiveSlug, name, operatorId, tx);
+    });
+  }
+
+  /**
+   * Internal worker: seeds dataset entities deterministically.
+   */
+  async seedDemoWorkspace(
+    workspaceId: string,
+    effectiveSlug: string,
+    name: string,
+    operatorId: string,
+    tx?: Database,
+  ): Promise<DemoWorkspaceSeedResult> {
+    const dbExec = tx ?? this.db;
     const dataset = getSyntheticDatasetV1();
     const fixedClock = dataset.fixedClock;
 
+    // Scoped transaction-aware services so uncommitted seed entities are visible to helpers
+    const audit = new AuditService(dbExec);
+    const suppression = new SuppressionService(dbExec);
+    const context = new CustomerContextService(dbExec, suppression);
+    const identityGraph = new IdentityGraphService(dbExec, context, suppression);
+    const connections = new ConnectorConnectionService(dbExec, audit, this.demoRegistry);
+    const destination = new ConnectorDestinationService(dbExec, connections, this.demoRegistry, audit);
+    const decisions = new DecisionsService(dbExec, audit);
+    const demoOpportunities = new OpportunitiesService(dbExec, audit, connections, this.demoRegistry, destination, decisions);
+    const demoArtifactVerifier = { verify: async () => ({ ok: true as const }) };
+    const demoModels = new ModelRegistryService(dbExec, audit, demoArtifactVerifier as never);
+
     // 1. Workspace & Operator User
     const operatorEmail = `demo-operator-${operatorId}@example.invalid`;
-    await this.db.execute(sql`
+    await dbExec.execute(sql`
       insert into users (id, email)
       values (${operatorId}, ${operatorEmail})
       on conflict (id) do nothing
     `);
 
-    await this.db.execute(sql`
+    await dbExec.execute(sql`
       insert into workspaces (id, name, slug, created_by)
       values (${workspaceId}, ${name}, ${effectiveSlug}, ${operatorId})
       on conflict (id) do update set name = excluded.name, slug = excluded.slug
     `);
 
-    await this.db.execute(sql`
+    await dbExec.execute(sql`
       insert into workspace_members (workspace_id, user_id, role, status)
       values (${workspaceId}, ${operatorId}, 'owner', 'active')
       on conflict (workspace_id, user_id) do update set role = 'owner', status = 'active'
@@ -179,7 +221,7 @@ export class QaDemoWorkspaceService {
 
     // 2. Target Outcome Definitions
     for (const outcome of dataset.targetOutcomes) {
-      await this.db.execute(sql`
+      await dbExec.execute(sql`
         insert into outcome_definitions (
           workspace_id, id, outcome_namespace, outcome_key, name, kind, definition, source_namespace
         )
@@ -198,7 +240,7 @@ export class QaDemoWorkspaceService {
     const connectionCrmId = `conn_crm_${workspaceId.slice(-6)}`;
     const connectionDestId = `conn_dest_${workspaceId.slice(-6)}`;
 
-    await this.db.execute(sql`
+    await dbExec.execute(sql`
       insert into connector_connections (
         workspace_id, id, provider, role, display_name, lifecycle_state, credential_status, capabilities
       )
@@ -224,7 +266,7 @@ export class QaDemoWorkspaceService {
 
     // Seed B2B Accounts
     for (const acc of dataset.accounts) {
-      await this.db.execute(sql`
+      await dbExec.execute(sql`
         insert into crm_accounts (
           workspace_id, id, connection_id, provider_namespace, provider_object_id,
           name, traits, source_namespace, observed_at
@@ -247,7 +289,7 @@ export class QaDemoWorkspaceService {
       personaCustomerMap[pKey] = { customerId: cust.id, externalId: cust.externalId };
 
       // Insert Customer
-      await this.db.execute(sql`
+      await dbExec.execute(sql`
         insert into customers (
           workspace_id, id, status, source_namespace, first_seen_at, last_seen_at
         )
@@ -259,7 +301,7 @@ export class QaDemoWorkspaceService {
       customersCount += 1;
 
       // Customer Identifiers: External ID
-      await this.db.execute(sql`
+      await dbExec.execute(sql`
         insert into customer_identifiers (
           workspace_id, id, customer_id, provider_namespace, identifier_type, identifier_value, source_namespace, first_seen_at, last_seen_at
         )
@@ -272,7 +314,7 @@ export class QaDemoWorkspaceService {
 
       // Customer Identifiers: Email Hash
       const emailHash = hashContact(cust.email);
-      await this.db.execute(sql`
+      await dbExec.execute(sql`
         insert into customer_identifiers (
           workspace_id, id, customer_id, provider_namespace, identifier_type, identifier_value, source_namespace, first_seen_at, last_seen_at
         )
@@ -286,7 +328,7 @@ export class QaDemoWorkspaceService {
       // Customer Identifiers: Phone Hash if present
       if (cust.phone) {
         const phoneHash = hashContact(cust.phone);
-        await this.db.execute(sql`
+        await dbExec.execute(sql`
           insert into customer_identifiers (
             workspace_id, id, customer_id, provider_namespace, identifier_type, identifier_value, source_namespace, first_seen_at, last_seen_at
           )
@@ -300,7 +342,7 @@ export class QaDemoWorkspaceService {
 
       // Customer Traits
       for (const trait of persona.traits) {
-        await this.db.execute(sql`
+        await dbExec.execute(sql`
           insert into customer_traits (
             workspace_id, id, customer_id, trait_namespace, trait_key, value_type,
             value, source_namespace, observed_at
@@ -320,7 +362,7 @@ export class QaDemoWorkspaceService {
       // Orders if present (Persona: repeat_buyer)
       if (persona.orders) {
         for (const order of persona.orders) {
-          await this.db.execute(sql`
+          await dbExec.execute(sql`
             insert into commerce_orders (
               workspace_id, id, connection_id, customer_id, provider_namespace,
               provider_order_id, financial_status, currency, total_amount, order_timestamp, source_namespace
@@ -335,7 +377,7 @@ export class QaDemoWorkspaceService {
           ordersCount += 1;
 
           for (const [idx, item] of order.lineItems.entries()) {
-            await this.db.execute(sql`
+            await dbExec.execute(sql`
               insert into commerce_order_line_items (
                 workspace_id, id, order_id, provider_line_item_id, provider_product_id,
                 name, quantity, price, currency
@@ -353,7 +395,7 @@ export class QaDemoWorkspaceService {
       // Subscriptions if present (Persona: subscription_upgrade_candidate & churn_like_history)
       if (persona.subscriptions) {
         for (const sub of persona.subscriptions) {
-          await this.db.execute(sql`
+          await dbExec.execute(sql`
             insert into billing_context_subscriptions (
               workspace_id, id, connection_id, customer_id, provider_namespace,
               provider_subscription_id, status, current_period_end, source_updated_at
@@ -371,7 +413,7 @@ export class QaDemoWorkspaceService {
       // Engagement events if present
       if (persona.engagementEvents) {
         for (const evt of persona.engagementEvents) {
-          await this.db.execute(sql`
+          await dbExec.execute(sql`
             insert into engagement_events (
               workspace_id, id, connection_id, customer_id, provider_namespace,
               provider_event_id, metric_name, engagement_kind, occurred_at
@@ -391,7 +433,7 @@ export class QaDemoWorkspaceService {
       if (persona.identityTransition) {
         const trans = persona.identityTransition;
         // 1. Create anonymous customer
-        await this.db.execute(sql`
+        await dbExec.execute(sql`
           insert into customers (
             workspace_id, id, status, source_namespace, first_seen_at, last_seen_at
           )
@@ -401,9 +443,10 @@ export class QaDemoWorkspaceService {
           )
           on conflict (workspace_id, id) do nothing
         `);
+        customersCount += 1;
 
         // 2. Attach anonymous cookie identifier
-        await this.db.execute(sql`
+        await dbExec.execute(sql`
           insert into customer_identifiers (
             workspace_id, id, customer_id, provider_namespace, identifier_type,
             identifier_value, source_namespace, first_seen_at, last_seen_at
@@ -415,9 +458,10 @@ export class QaDemoWorkspaceService {
           )
           on conflict (workspace_id, id) do nothing
         `);
+        identifiersCount += 1;
 
         // 3. Perform canonical merge via IdentityGraphService
-        await this.identityGraph.mergeCustomers({
+        await identityGraph.mergeCustomers({
           workspaceId,
           sourceCustomerId: trans.anonymousCustomerId,
           targetCustomerId: cust.id,
@@ -433,14 +477,14 @@ export class QaDemoWorkspaceService {
     const radarId = `rad_demo_${workspaceId.slice(-6)}`;
     const outcomeDefinitionId = 'outcome_purchase';
 
-    await this.db.execute(sql`
+    await dbExec.execute(sql`
       insert into radars (workspace_id, id, name, status, current_definition_version)
       values (${workspaceId}, ${radarId}, 'Purchase Propensity Radar (30d)', 'ready_to_train', 1)
       on conflict (workspace_id, id) do update set
         status = case when radars.status = 'active' then 'active' else excluded.status end
     `);
 
-    await this.db.execute(sql`
+    await dbExec.execute(sql`
       insert into radar_definition_versions (
         workspace_id, radar_id, version, outcome_definition_id, audience_ast,
         prediction_window_days, optimization_goal, activation_destination, readiness
@@ -458,7 +502,7 @@ export class QaDemoWorkspaceService {
     const trainingRequestId = `rtr_demo_${workspaceId.slice(-6)}`;
     const modelId = `mdl_demo_${workspaceId.slice(-6)}`;
 
-    await this.db.execute(sql`
+    await dbExec.execute(sql`
       insert into radar_training_requests (
         workspace_id, id, radar_id, definition_version, idempotency_key, status, correlation_id
       )
@@ -469,7 +513,7 @@ export class QaDemoWorkspaceService {
       on conflict (workspace_id, id) do nothing
     `);
 
-    await this.db.execute(sql`
+    await dbExec.execute(sql`
       insert into radar_model_versions (
         workspace_id, id, radar_id, definition_version, training_request_id,
         target_outcome_definition_id, prediction_window_days, status, estimator_type,
@@ -489,22 +533,22 @@ export class QaDemoWorkspaceService {
       on conflict (workspace_id, id) do nothing
     `);
 
-    // Promote model to active only if not already active (idempotent for replay)
-    const [existingModel] = await this.db.execute<{ status: string }>(sql`
+    // Promote model to active using the isolated demo model registry (deterministic artifact verifier)
+    const [existingModel] = await dbExec.execute<{ status: string }>(sql`
       select status from radar_model_versions
       where workspace_id = ${workspaceId} and id = ${modelId}
       limit 1
     `);
-    const [currentRadar] = await this.db.execute<{ status: string; current_model_reference: string | null }>(sql`
+    const [currentRadar] = await dbExec.execute<{ status: string; current_model_reference: string | null }>(sql`
       select status, current_model_reference from radars
       where workspace_id = ${workspaceId} and id = ${radarId}
       limit 1
     `);
 
     if (existingModel?.status !== 'active') {
-      await this.models.promote(workspaceId, radarId, modelId, operatorId, 'demo-workspace-activation');
+      await demoModels.promote(workspaceId, radarId, modelId, operatorId, 'demo-workspace-activation');
     } else if (currentRadar?.status !== 'active' || currentRadar?.current_model_reference !== modelId) {
-      await this.db.execute(sql`
+      await dbExec.execute(sql`
         update radars
         set status = 'active', current_model_reference = ${modelId}, updated_at = now()
         where workspace_id = ${workspaceId} and id = ${radarId}
@@ -515,7 +559,7 @@ export class QaDemoWorkspaceService {
     const scoreBatchId = `batch_score_${workspaceId.slice(-6)}`;
     const scoreCutoff = fixedClock;
 
-    await this.db.execute(sql`
+    await dbExec.execute(sql`
       insert into radar_score_batches (
         workspace_id, radar_id, definition_version, model_version_id,
         scoring_cutoff, status, scored_customer_count, completed_at
@@ -529,7 +573,7 @@ export class QaDemoWorkspaceService {
 
     for (const persona of Object.values(dataset.personas)) {
       if (persona.expectedPropensityScore !== null) {
-        await this.db.execute(sql`
+        await dbExec.execute(sql`
           insert into radar_propensity_scores (
             workspace_id, radar_id, definition_version, model_version_id, customer_id,
             scoring_cutoff, probability, feature_schema_version, reason_codes, scored_at
@@ -546,16 +590,16 @@ export class QaDemoWorkspaceService {
     }
 
     // 8. Materialize Revenue Opportunities
-    const oppBatch = await this.demoOpportunities.materialize(workspaceId, radarId, 'qa-demo-seed');
+    const oppBatch = await demoOpportunities.materialize(workspaceId, radarId, 'qa-demo-seed');
 
     // 9. Activation & Outbound Export
-    const oppList = await this.demoOpportunities.list(workspaceId, radarId, { sort: 'probability', limit: 10 });
+    const oppList = await demoOpportunities.list(workspaceId, radarId, { sort: 'probability', limit: 10 });
     const selectedOppIds = oppList.items.map((item) => item.id);
 
     const actIdempKey = `idemp_demo_act_${workspaceId.slice(-6)}`;
     let decisionBatchId = '';
     if (selectedOppIds.length > 0) {
-      const actRes = await this.demoOpportunities.activate(workspaceId, operatorId, {
+      const actRes = await demoOpportunities.activate(workspaceId, operatorId, {
         radarId,
         selection: { mode: 'selected', batchId: oppBatch.id, ids: selectedOppIds },
         correlationId: `corr_demo_activation_${workspaceId.slice(-6)}`,
@@ -567,7 +611,7 @@ export class QaDemoWorkspaceService {
     }
     if (decisionBatchId) {
       const likelyBuyerId = personaCustomerMap.likely_buyer.customerId;
-      const [decisionRow] = await this.db.execute(sql`
+      const [decisionRow] = await dbExec.execute(sql`
         select d.id as decision_id, d.customer_id, e.id as execution_id, e.remote_id
         from decision_records d
         join action_executions e on e.workspace_id = d.workspace_id and e.decision_id = d.id
@@ -579,7 +623,7 @@ export class QaDemoWorkspaceService {
 
       if (decisionRow) {
         // Set decision created_at and reward_window_end so outcome fits cleanly inside the closed window
-        await this.db.execute(sql`
+        await dbExec.execute(sql`
           update decision_records
           set created_at = now() - interval '10 seconds',
               reward_window_end = now() - interval '1 millisecond'
@@ -587,7 +631,7 @@ export class QaDemoWorkspaceService {
         `);
 
         // Record exposure
-        await this.db.execute(sql`
+        await dbExec.execute(sql`
           insert into exposure_observations (
             workspace_id, id, decision_id, execution_id, kind, source_confidence, provider_event_id, occurred_at
           )
@@ -600,7 +644,7 @@ export class QaDemoWorkspaceService {
 
         // Record customer outcome (purchase confirmed) inside the decision's reward window
         const outcomeEventId = `evt_purchase_${workspaceId.slice(-6)}`;
-        await this.db.execute(sql`
+        await dbExec.execute(sql`
           insert into customer_outcomes (
             workspace_id, id, customer_id, outcome_definition_id, outcome_namespace,
             outcome_key, dedupe_key, event_id, value, currency, source_namespace, provenance, observed_at
@@ -615,11 +659,11 @@ export class QaDemoWorkspaceService {
         `);
 
         // Reconcile decision reward
-        await this.decisions.reconcileDecision(workspaceId, decisionRow.decision_id);
+        await decisions.reconcileDecision(workspaceId, decisionRow.decision_id);
       }
     }
 
-    const [finalRadar] = await this.db.execute<{ status: string; current_model_reference: string | null }>(sql`
+    const [finalRadar] = await dbExec.execute<{ status: string; current_model_reference: string | null }>(sql`
       select status, current_model_reference from radars where workspace_id = ${workspaceId} and id = ${radarId} limit 1
     `);
 
