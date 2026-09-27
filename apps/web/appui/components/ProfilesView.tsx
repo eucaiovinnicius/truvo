@@ -448,6 +448,64 @@ interface ApiProfileSearchResponse {
   results: ApiProfileCandidate[];
 }
 
+interface ApiProfileView {
+  canonical_id: string;
+  status: 'identified' | 'anonymous';
+  email_hash: string | null;
+  phone_hash: string | null;
+  identity?: {
+    anonymous_ids?: string[];
+    devices?: Array<{ device_id?: string; type?: string; os?: string; browser?: string; first_seen_at?: string; last_seen_at?: string }>;
+    order_ids?: string[];
+    click_ids?: string[];
+  };
+  cross_device_stitched?: boolean;
+  first_touch?: unknown;
+  last_touch?: unknown;
+  created_at?: string | null;
+  last_seen_at?: string | null;
+  metrics?: ApiProfileMetrics | null;
+  confidence?: unknown;
+}
+
+interface ApiTimelineItem {
+  event_id: string;
+  event_name: string;
+  source: string;
+  timestamp: string | null;
+  day: string | null;
+  order_id: string | null;
+  value: number;
+  currency: string;
+  context?: {
+    utm_source?: string;
+    utm_medium?: string;
+    utm_campaign?: string;
+    device_type?: string;
+    os?: string;
+  };
+}
+
+interface ApiTimelineResponse {
+  canonical_id: string;
+  events?: ApiTimelineItem[];
+  groups?: Array<{ day: string; count: number; events: ApiTimelineItem[] }>;
+}
+
+interface ApiIdentitiesResponse {
+  canonical_id: string;
+  status: 'identified' | 'anonymous';
+  email_hashes?: string[];
+  phone_hashes?: string[];
+  identity?: {
+    anonymous_ids?: string[];
+    user_ids?: string[];
+    order_ids?: string[];
+    click_ids?: string[];
+    devices?: Array<{ device_id?: string; type?: string; os?: string; browser?: string; first_seen_at?: string; last_seen_at?: string }>;
+  };
+}
+
 /** Encurta um hash para exibição (font-mono) sem quebrar em null. */
 const shortHash = (h: string | null | undefined): string =>
   h ? `${h.slice(0, 12)}…` : '—';
@@ -486,6 +544,63 @@ function adaptCandidate(c: ApiProfileCandidate): CustomerProfile {
     deviceList: [],
     weekly: [],
     timeline: [],
+  };
+}
+
+function adaptCanonicalProfile(
+  p: ApiProfileView,
+  timeline?: ApiTimelineResponse | null,
+  identities?: ApiIdentitiesResponse | null,
+): CustomerProfile {
+  const m = p.metrics;
+  const identified = p.status === 'identified';
+  const tags: string[] = [];
+  if (identified) tags.push('Identificado');
+  else tags.push('Anônimo');
+  if ((m?.orders_count ?? 0) > 0) tags.push('Comprador');
+  if (p.cross_device_stitched) tags.push('Cross-device');
+
+  const rawEvents: ApiTimelineItem[] = timeline?.events ?? (timeline?.groups ? timeline.groups.flatMap((g) => g.events) : []);
+  const mappedTimeline: TimelineEvent[] = rawEvents.map((ev) => ({
+    id: ev.event_id,
+    kind: (ev.event_name as EventKind) || 'page_view',
+    timestamp: ev.timestamp || '',
+    device: ev.context?.device_type ? `${ev.context.device_type} · ${ev.context.os || ''}` : 'Dispositivo desconhecido',
+    detail: `Evento: ${ev.event_name}${ev.source ? ` (${ev.source})` : ''}`,
+    order: ev.order_id || undefined,
+    value: ev.value || undefined,
+    utm: ev.context ? { source: ev.context.utm_source, medium: ev.context.utm_medium, campaign: ev.context.utm_campaign } : undefined,
+  }));
+
+  const rawDevices = identities?.identity?.devices || p.identity?.devices || [];
+  const mappedDevices = rawDevices.map((d, i) => ({
+    name: `Dispositivo ${i + 1}`,
+    os: `${d.os || 'OS'} · ${d.browser || 'Browser'}`,
+    lastSeen: d.last_seen_at || '',
+    type: (d.type as 'mobile' | 'desktop' | 'tablet') || 'mobile',
+  }));
+
+  return {
+    name: identified ? 'Perfil Identificado' : 'Visitante Anônimo',
+    initials: identified ? 'ID' : 'AN',
+    canonicalId: p.canonical_id ?? '—',
+    emailMasked: shortHash(p.email_hash || identities?.email_hashes?.[0]),
+    phoneMasked: shortHash(p.phone_hash || identities?.phone_hashes?.[0]),
+    devices: mappedDevices.length || identities?.identity?.anonymous_ids?.length || p.identity?.anonymous_ids?.length || 0,
+    firstTouch: p.created_at ?? '',
+    lastTouch: p.last_seen_at ?? '',
+    status: identified ? 'ativo' : 'novo',
+    ltv: m?.ltv ?? 0,
+    orders: m?.orders_count ?? 0,
+    avgTicket: m?.aov ?? 0,
+    sessions: m?.sessions_count ?? 0,
+    events: m?.events_count ?? 0,
+    daysSinceFirstTouch: m?.days_since_first_touch ?? 0,
+    tags,
+    channels: [],
+    deviceList: mappedDevices,
+    weekly: [],
+    timeline: mappedTimeline,
   };
 }
 
@@ -530,17 +645,16 @@ function UtmChip({ prefix, value }: { prefix: string; value: string }) {
 // ----------------------------------------------------------------------------
 
 export default function ProfilesView({ initialCustomerId }: { initialCustomerId?: string } = {}) {
+  const [canonicalId, setCanonicalId] = useState<string | null>(() => initialCustomerId || null);
   const [query, setQuery] = useState<string>(() => initialCustomerId || '');
-  const [searchType, setSearchType] = useState<SearchType>(() => (initialCustomerId ? 'user_id' : 'email'));
+  const [searchType, setSearchType] = useState<SearchType>('email');
   // Estado da simulação demo (loading/resultado). Em 'live' o gating vem do fetch.
   const [demoLoading, setDemoLoading] = useState<boolean>(false);
   const [demoHasResult, setDemoHasResult] = useState<boolean>(() => Boolean(initialCustomerId));
   const [order, setOrder] = useState<'recent' | 'chrono'>('recent');
   const [copied, setCopied] = useState<boolean>(false);
-  // Busca submetida (dispara o useLive). null até o primeiro "Buscar".
-  const [submitted, setSubmitted] = useState<{ q: string; type: SearchType } | null>(() =>
-    initialCustomerId ? { q: initialCustomerId, type: 'user_id' } : null,
-  );
+  // Busca submetida (dispara o useLive de busca quando não há canonicalId direto).
+  const [submittedSearch, setSubmittedSearch] = useState<{ q: string; type: SearchType } | null>(null);
 
   const { isLive } = useSession();
 
@@ -554,22 +668,78 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
     };
   }, []);
 
-  // Live usa apenas o resultado submetido; demo seleciona o perfil sintético explicitamente.
-  const livePath = submitted
-    ? `/v1/profiles/search?q=${encodeURIComponent(submitted.q)}&type=${API_SEARCH_TYPE[submitted.type]}`
+  // 1. Resolução canônica direta (/app/customers/:canonicalId):
+  const canonicalPath = canonicalId ? `/v1/profiles/${encodeURIComponent(canonicalId)}` : null;
+  const canonicalProfileLive = useLive<ApiProfileView>(canonicalPath, [canonicalId]);
+  const canonicalTimelineLive = useLive<ApiTimelineResponse>(
+    canonicalId ? `/v1/profiles/${encodeURIComponent(canonicalId)}/timeline` : null,
+    [canonicalId],
+  );
+  const canonicalIdentitiesLive = useLive<ApiIdentitiesResponse>(
+    canonicalId ? `/v1/profiles/${encodeURIComponent(canonicalId)}/identities` : null,
+    [canonicalId],
+  );
+
+  // 2. Busca por identificador (/v1/profiles/search?q=&type=):
+  const searchPath = submittedSearch
+    ? `/v1/profiles/search?q=${encodeURIComponent(submittedSearch.q)}&type=${API_SEARCH_TYPE[submittedSearch.type]}`
     : null;
-  const search = useLive<ApiProfileSearchResponse>(livePath, [submitted?.q, submitted?.type]);
+  const searchLive = useLive<ApiProfileSearchResponse>(searchPath, [submittedSearch?.q, submittedSearch?.type]);
 
-  const candidate = isLive && search.status === 'success' ? (search.data?.results?.[0] ?? null) : null;
-  const profile = search.status === 'demo'
-    ? MOCK_PROFILE
-    : candidate
-      ? adaptCandidate(candidate)
-      : EMPTY_PROFILE;
+  // Quando a busca encontra um candidato, adota o canonical_id e atualiza a rota:
+  useEffect(() => {
+    if (isLive && searchLive.status === 'success' && searchLive.data?.results?.length) {
+      const candidate = searchLive.data.results[0];
+      if (candidate?.canonical_id && candidate.canonical_id !== canonicalId) {
+        setCanonicalId(candidate.canonical_id);
+        if (typeof window !== 'undefined' && window.location.pathname.startsWith('/app/customers')) {
+          window.history.pushState(null, '', `/app/customers/${candidate.canonical_id}`);
+        }
+      }
+    }
+  }, [isLive, searchLive.status, searchLive.data, canonicalId]);
 
-  // Gating do render: em 'live' derivado do fetch; em demo, da simulação.
-  const liveLoading = !!submitted && search.status === 'loading';
-  const liveHasResult = search.status === 'success' && !!search.data?.results?.length;
+  const profile: CustomerProfile = useMemo(() => {
+    if (!isLive) {
+      return (demoHasResult || initialCustomerId) ? MOCK_PROFILE : EMPTY_PROFILE;
+    }
+    if (canonicalProfileLive.status === 'success' && canonicalProfileLive.data) {
+      return adaptCanonicalProfile(
+        canonicalProfileLive.data,
+        canonicalTimelineLive.data,
+        canonicalIdentitiesLive.data,
+      );
+    }
+    if (searchLive.status === 'success' && searchLive.data?.results?.[0]) {
+      return adaptCandidate(searchLive.data.results[0]);
+    }
+    return EMPTY_PROFILE;
+  }, [
+    isLive,
+    demoHasResult,
+    initialCustomerId,
+    canonicalProfileLive.status,
+    canonicalProfileLive.data,
+    canonicalTimelineLive.data,
+    canonicalIdentitiesLive.data,
+    searchLive.status,
+    searchLive.data,
+  ]);
+
+  const activeStates = canonicalId
+    ? [canonicalProfileLive]
+    : submittedSearch
+      ? [searchLive]
+      : [];
+
+  const liveLoading = canonicalId
+    ? canonicalProfileLive.status === 'loading'
+    : !!submittedSearch && searchLive.status === 'loading';
+
+  const liveHasResult = canonicalId
+    ? canonicalProfileLive.status === 'success' && !!canonicalProfileLive.data
+    : searchLive.status === 'success' && !!searchLive.data?.results?.length;
+
   const loading = isLive ? liveLoading : demoLoading;
   const hasResult = isLive ? liveHasResult && !liveLoading : demoHasResult;
 
@@ -577,7 +747,8 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
     const q = query.trim();
     if (!q) return;
     if (timerRef.current) clearTimeout(timerRef.current);
-    setSubmitted({ q, type: searchType });
+    setCanonicalId(null);
+    setSubmittedSearch({ q, type: searchType });
     if (!isLive) {
       setDemoLoading(true);
       setDemoHasResult(false);
@@ -597,7 +768,8 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
     setSearchType(type);
     setQuery(value);
     if (timerRef.current) clearTimeout(timerRef.current);
-    setSubmitted({ q: value.trim(), type });
+    setCanonicalId(null);
+    setSubmittedSearch({ q: value.trim(), type });
     if (!isLive) {
       setDemoLoading(true);
       setDemoHasResult(false);
@@ -633,8 +805,12 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
 
   return (
     <LiveDataBoundary
-      states={submitted ? [search] : []}
-      empty={!!submitted && search.status === 'success' && !candidate}
+      states={activeStates}
+      empty={
+        canonicalId
+          ? canonicalProfileLive.status === 'success' && !canonicalProfileLive.data
+          : !!submittedSearch && searchLive.status === 'success' && !searchLive.data?.results?.length
+      }
       label="Busca de perfil"
     >
     <div className="space-y-6">

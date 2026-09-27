@@ -53,6 +53,8 @@ interface SessionState {
   signup: (email: string, password: string, name?: string) => Promise<AuthResult>;
   demo: () => void;
   selectWorkspace: (workspaceId: string) => void;
+  adoptWorkspace: (workspace: Workspace) => void;
+  refreshWorkspaces: () => Promise<void>;
   logout: () => void;
 }
 
@@ -221,6 +223,45 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [mode, workspaces],
   );
 
+  const adoptWorkspace = useCallback(
+    (ws: Workspace) => {
+      if (!ws || !ws.id || mode !== 'live') return;
+      setWorkspaces((prev) => {
+        const exists = prev.some((candidate) => candidate.id === ws.id);
+        return exists ? prev.map((c) => (c.id === ws.id ? ws : c)) : [...prev, ws];
+      });
+      localStorage.setItem(WS_KEY, ws.id);
+      setWorkspace(ws);
+    },
+    [mode],
+  );
+
+  const refreshWorkspaces = useCallback(async () => {
+    if (mode !== 'live') return;
+    try {
+      const me = await api<MeResponse>('/v1/users/me');
+      const list = me.workspaces ?? [];
+      setWorkspaces(list);
+      const savedWorkspaceId = localStorage.getItem(WS_KEY);
+      const selected = list.find((candidate) => candidate.id === savedWorkspaceId) ?? list[0] ?? null;
+      if (selected) {
+        localStorage.setItem(WS_KEY, selected.id);
+        setWorkspace(selected);
+      } else {
+        localStorage.removeItem(WS_KEY);
+        setWorkspace(null);
+      }
+      const resolvedUser = { id: me.id, email: me.email, name: me.name, avatar_url: me.avatar_url };
+      setUser(resolvedUser);
+      localStorage.setItem(USER_KEY, JSON.stringify(resolvedUser));
+    } catch (error: unknown) {
+      console.error('[session] failed to refresh live workspace context', {
+        message: error instanceof Error ? error.message : 'unknown error',
+      });
+      throw error;
+    }
+  }, [mode]);
+
   const logout = useCallback(() => {
     [TOKEN_KEY, WS_KEY, MODE_KEY, USER_KEY].forEach((k) => localStorage.removeItem(k));
     setMode(null);
@@ -240,6 +281,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     signup,
     demo,
     selectWorkspace,
+    adoptWorkspace,
+    refreshWorkspaces,
     logout,
   };
 

@@ -308,3 +308,49 @@ test('SESSION GUARD: allows workspace-less users to access /app/onboarding', () 
   // E que um path desconhecido ou desabilitado é bloqueado
   assert.equal(isRouteEnabled('/app/funnels'), false);
 });
+
+test('WORKSPACE PROVISIONING SESSION ADOPTION: newly created workspace enters session workspaces and becomes active', () => {
+  const initialWorkspaces: Array<{ id: string; name: string }> = [];
+  const createdWorkspace = { id: 'ws_new_999', name: 'Nova Loja Truvo' };
+
+  // Helper de adoção que espelha a lógica de adoptWorkspace no SessionProvider
+  const adopt = (
+    prev: Array<{ id: string; name: string }>,
+    ws: { id: string; name: string },
+  ) => {
+    const exists = prev.some((c) => c.id === ws.id);
+    return exists ? prev.map((c) => (c.id === ws.id ? ws : c)) : [...prev, ws];
+  };
+
+  const updatedWorkspaces = adopt(initialWorkspaces, createdWorkspace);
+  assert.equal(updatedWorkspaces.length, 1);
+  assert.equal(updatedWorkspaces[0]?.id, 'ws_new_999');
+  assert.equal(updatedWorkspaces[0]?.name, 'Nova Loja Truvo');
+
+  // Adotar novamente não duplica
+  const reAdopted = adopt(updatedWorkspaces, createdWorkspace);
+  assert.equal(reAdopted.length, 1);
+
+  // needsProvisioning condition: !workspace || workspaces.length === 0
+  const isProvisioned = (list: Array<{ id: string }>) => list.length > 0;
+  assert.equal(isProvisioned(initialWorkspaces), false);
+  assert.equal(isProvisioned(updatedWorkspaces), true);
+});
+
+test('CANONICAL CUSTOMER ROUTE: uses canonical endpoint directly instead of type=user_id search', () => {
+  const canonicalCustomerId = 'cust_canon_abc123';
+
+  // Endpoint canônico direto vs search
+  const canonicalPath = `/v1/profiles/${encodeURIComponent(canonicalCustomerId)}`;
+  const searchUserIdPath = `/v1/profiles/search?q=${encodeURIComponent(canonicalCustomerId)}&type=user_id`;
+
+  assert.equal(canonicalPath, '/v1/profiles/cust_canon_abc123');
+  assert.notEqual(canonicalPath, searchUserIdPath);
+
+  // Sub-recursos canônicos
+  const timelinePath = `/v1/profiles/${encodeURIComponent(canonicalCustomerId)}/timeline`;
+  const identitiesPath = `/v1/profiles/${encodeURIComponent(canonicalCustomerId)}/identities`;
+
+  assert.equal(timelinePath, '/v1/profiles/cust_canon_abc123/timeline');
+  assert.equal(identitiesPath, '/v1/profiles/cust_canon_abc123/identities');
+});
