@@ -209,6 +209,8 @@ test('GOLDEN E2E: complete 9-step canonical journey on deterministic demo worksp
     `) as Array<{ status: string; current_model_reference: string | null }>;
     assert.equal(radarRow?.status, 'active', 'Persisted radar status in DB must remain active across replays');
     assert.equal(radarRow?.current_model_reference, seedResult.radar.modelVersionId, 'Persisted radar current_model_reference must point to active model');
+    assert.ok(secondRun.decisionBatchId, 'Replay seed result must have non-empty decisionBatchId');
+    assert.equal(secondRun.decisionBatchId, seedResult.decisionBatchId, 'Decision batch ID must remain consistent across replays');
 
     // Step 11: Monitoring snapshot cleanup proof (verifies ON DELETE RESTRICT fk is handled)
     const snapshotId = `snap_test_${Date.now()}`;

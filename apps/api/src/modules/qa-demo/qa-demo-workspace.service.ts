@@ -4,7 +4,8 @@
  * Handles safe creation, synthetic seeding, reset, and teardown.
  */
 
-import { BadRequestException, Inject, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
+import { createHash } from 'node:crypto';
+import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { sql } from 'drizzle-orm';
 import { DRIZZLE, type Database } from '../auth/database.provider';
 import { AuditService } from '../audit/audit.service';
@@ -73,15 +74,13 @@ export class QaDemoWorkspaceService {
     private readonly models: ModelRegistryService,
     private readonly opportunities: OpportunitiesService,
     private readonly decisions: DecisionsService,
-    @Optional() customRegistry?: ConnectorRegistryService,
   ) {
-    // Isolated registry dedicated exclusively to QA/Demo workspaces — keeps fake_provider out of live registry
-    this.demoRegistry = customRegistry ?? new ConnectorRegistryService();
-    if (!this.demoRegistry.getDestinationAdapter(FAKE_PROVIDER)) {
-      const state = createFakeProviderState();
-      this.demoRegistry.registerSource(createFakeSourceAdapter(state));
-      this.demoRegistry.registerDestination(createFakeDestinationAdapter(state));
-    }
+    // Isolated registry dedicated exclusively to QA/Demo workspaces — keeps fake_provider 100% out of live registry
+    this.demoRegistry = new ConnectorRegistryService();
+    const state = createFakeProviderState();
+    this.demoRegistry.registerSource(createFakeSourceAdapter(state));
+    this.demoRegistry.registerDestination(createFakeDestinationAdapter(state));
+
     const audit = new AuditService(db);
     const connections = new ConnectorConnectionService(db, audit, this.demoRegistry);
     const destination = new ConnectorDestinationService(db, connections, this.demoRegistry, audit);
@@ -546,6 +545,7 @@ export class QaDemoWorkspaceService {
     const oppList = await this.demoOpportunities.list(workspaceId, radarId, { sort: 'probability', limit: 10 });
     const selectedOppIds = oppList.items.map((item) => item.id);
 
+    const actIdempKey = `idemp_demo_act_${workspaceId.slice(-6)}`;
     let decisionBatchId = '';
     if (selectedOppIds.length > 0) {
       const actRes = await this.demoOpportunities.activate(workspaceId, operatorId, {
@@ -553,10 +553,17 @@ export class QaDemoWorkspaceService {
         selection: { mode: 'selected', batchId: oppBatch.id, ids: selectedOppIds },
         correlationId: `corr_demo_activation_${workspaceId.slice(-6)}`,
         connectionId: connectionDestId,
-        idempotencyKey: `idemp_demo_act_${workspaceId.slice(-6)}`,
+        idempotencyKey: actIdempKey,
       });
       if (actRes.decisionBatchId) {
         decisionBatchId = actRes.decisionBatchId;
+      } else {
+        const [existingDec] = await this.db.execute(sql`
+          select decision_batch_id from decision_records
+          where workspace_id = ${workspaceId} and radar_id = ${radarId}
+          order by created_at desc limit 1
+        `) as Array<{ decision_batch_id: string }>;
+        decisionBatchId = existingDec?.decision_batch_id ?? `dcb_${createHash('sha256').update([workspaceId, actIdempKey].join('\u001f')).digest('hex').slice(0, 26)}`;
       }
     }
     if (decisionBatchId) {
@@ -729,6 +736,5 @@ export function createQaDemoWorkspaceService(db: Database): QaDemoWorkspaceServi
     models,
     opportunities,
     decisions,
-    registry,
   );
 }
