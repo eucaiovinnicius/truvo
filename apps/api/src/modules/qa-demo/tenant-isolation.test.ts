@@ -44,6 +44,18 @@ test('TENANT ISOLATION: cross-tenant read denied, mutation denied, runtime scope
   const db = createDb();
   const service = createQaDemoWorkspaceService(db);
 
+  const existingUserId = '00000000-0000-4000-8000-000000000099';
+  const checkPreExistingUser = async (id: string) => {
+    const [row] = await db.execute<{ id: string; email: string }>(sql`
+      select id, email from users where id = ${id} limit 1
+    `);
+    return row ? { existed: true, email: row.email } : { existed: false, email: '' };
+  };
+
+  const preUserA = await checkPreExistingUser(USER_A);
+  const preUserB = await checkPreExistingUser(USER_B);
+  const preExistingUser = await checkPreExistingUser(existingUserId);
+
   try {
     // 0. Safety Guard Proofs:
     // Proof 1: production-like UUID + slug ausente => REJECT
@@ -63,7 +75,7 @@ test('TENANT ISOLATION: cross-tenant read denied, mutation denied, runtime scope
     await db.execute(sql`
       insert into users (id, email)
       values (${USER_A}, 'user-a@example.invalid')
-      on conflict (id) do nothing
+      on conflict (id) do update set email = 'user-a@example.invalid'
     `);
     await db.execute(sql`
       insert into workspaces (id, name, slug, created_by)
@@ -283,7 +295,6 @@ test('TENANT ISOLATION: cross-tenant read denied, mutation denied, runtime scope
       select count(*)::int as count from crm_accounts where workspace_id = ${WS_A}
     `) as Array<{ count: number }>;
     // 9. Pre-existing Operator Account Email Preservation Proof
-    const existingUserId = '00000000-0000-4000-8000-000000000099';
     const existingEmail = 'real-operator@acme-corp.com';
     await db.execute(sql`
       insert into users (id, email)
@@ -306,8 +317,22 @@ test('TENANT ISOLATION: cross-tenant read denied, mutation denied, runtime scope
     assert.equal(userRow?.email, existingEmail, 'Pre-existing operator email must NOT be overwritten by demo seeder');
     await service.cleanWorkspaceData(WS_A);
     await service.cleanWorkspaceData(WS_B);
-    await db.execute(sql`delete from users where id = ${existingUserId}`);
   } finally {
+    const restoreUser = async (id: string, state: { existed: boolean; email: string }) => {
+      try {
+        if (state.existed) {
+          await db.execute(sql`update users set email = ${state.email} where id = ${id}`);
+        } else {
+          await db.execute(sql`delete from users where id = ${id}`);
+        }
+      } catch {
+        // Best-effort cleanup
+      }
+    };
+    await restoreUser(existingUserId, preExistingUser);
+    await restoreUser(USER_A, preUserA);
+    await restoreUser(USER_B, preUserB);
+
     closeRedis();
     await closeDb(db).catch(() => undefined);
   }

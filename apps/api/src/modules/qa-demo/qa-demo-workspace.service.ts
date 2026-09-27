@@ -143,6 +143,13 @@ export class QaDemoWorkspaceService {
 
     await this.assertAffirmativeDemoWorkspace(workspaceId, options.workspaceSlug ?? existingWs?.slug);
 
+    const [slugOwner] = await this.db.execute(sql`
+      select id from workspaces where slug = ${effectiveSlug} and id != ${workspaceId} limit 1
+    `) as Array<{ id: string }>;
+    if (slugOwner) {
+      throw new BadRequestException(`Slug "${effectiveSlug}" is already in use by workspace "${slugOwner.id}".`);
+    }
+
     if (options.cleanBeforeSeed !== false) {
       await this.cleanWorkspaceData(workspaceId, effectiveSlug);
     }
@@ -555,16 +562,8 @@ export class QaDemoWorkspaceService {
         connectionId: connectionDestId,
         idempotencyKey: actIdempKey,
       });
-      if (actRes.decisionBatchId) {
-        decisionBatchId = actRes.decisionBatchId;
-      } else {
-        const [existingDec] = await this.db.execute(sql`
-          select decision_batch_id from decision_records
-          where workspace_id = ${workspaceId} and radar_id = ${radarId}
-          order by created_at desc limit 1
-        `) as Array<{ decision_batch_id: string }>;
-        decisionBatchId = existingDec?.decision_batch_id ?? `dcb_${createHash('sha256').update([workspaceId, actIdempKey].join('\u001f')).digest('hex').slice(0, 26)}`;
-      }
+      const expectedDecisionBatchId = `dcb_${createHash('sha256').update([workspaceId, actIdempKey].join('\u001f')).digest('hex').slice(0, 26)}`;
+      decisionBatchId = actRes.decisionBatchId ?? expectedDecisionBatchId;
     }
     if (decisionBatchId) {
       const likelyBuyerId = personaCustomerMap.likely_buyer.customerId;
@@ -663,47 +662,53 @@ export class QaDemoWorkspaceService {
   /**
    * Resets/cleans data for a demo workspace.
    */
-  async cleanWorkspaceData(workspaceId: string, slug?: string): Promise<void> {
+  async cleanWorkspaceData(workspaceId: string, slug?: string, tx?: Database): Promise<void> {
     await this.assertAffirmativeDemoWorkspace(workspaceId, slug);
 
     // Delete in reverse foreign-key dependency order within a transaction
-    await this.db.transaction(async (tx) => {
-      await tx.execute(sql`delete from decision_reward_reconciliation_checkpoints where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from reward_observations where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from exposure_observations where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from action_execution_attempts where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from action_executions where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from decision_eligible_actions where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from decision_records where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from decision_context_snapshots where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from opportunity_activations where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from opportunity_exports where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from opportunity_rows where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from opportunity_batches where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from radar_propensity_scores where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from radar_score_batches where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from radar_model_monitoring_snapshots where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from radar_model_versions where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from radar_training_requests where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from radar_definition_versions where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from radars where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from customer_outcomes where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from outcome_definitions where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from crm_associations where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from crm_deals where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from crm_accounts where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from engagement_events where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from billing_context_subscriptions where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from commerce_order_line_items where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from commerce_orders where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from connector_connections where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from identity_links where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from identity_merges where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from identity_merge_events where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from customer_traits where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from customer_identifiers where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from customers where workspace_id = ${workspaceId}`);
-    });
+    const runDeletes = async (runner: Database) => {
+      await runner.execute(sql`delete from decision_reward_reconciliation_checkpoints where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from reward_observations where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from exposure_observations where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from action_execution_attempts where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from action_executions where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from decision_eligible_actions where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from decision_records where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from decision_context_snapshots where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from opportunity_activations where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from opportunity_exports where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from opportunity_rows where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from opportunity_batches where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from radar_propensity_scores where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from radar_score_batches where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from radar_model_monitoring_snapshots where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from radar_model_versions where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from radar_training_requests where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from radar_definition_versions where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from radars where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from customer_outcomes where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from outcome_definitions where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from crm_associations where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from crm_deals where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from crm_accounts where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from engagement_events where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from billing_context_subscriptions where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from commerce_order_line_items where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from commerce_orders where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from connector_connections where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from identity_links where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from identity_merges where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from identity_merge_events where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from customer_traits where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from customer_identifiers where workspace_id = ${workspaceId}`);
+      await runner.execute(sql`delete from customers where workspace_id = ${workspaceId}`);
+    };
+
+    if (tx) {
+      await runDeletes(tx);
+    } else {
+      await this.db.transaction(runDeletes);
+    }
   }
 }
 
