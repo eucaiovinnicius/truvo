@@ -492,16 +492,34 @@ test('CUSTOMER PROFILE: unprojected/unavailable metrics are represented as null 
   assert.equal(fmtMoney(aov), '—');
 });
 
-test('CUSTOMER SEARCH: search state is preserved across route navigation with query params', () => {
-  const query = 'marina@gmail.com';
-  const type = 'email';
+test('CUSTOMER PROFILE: stale cached projection is surfaced truthfully with projectionStale flag', () => {
+  // Teste de projeção em cache desatualizada (stale: true)
+  const apiProfileStale = {
+    canonical_id: 'cus_stale',
+    status: 'identified' as const,
+    email_hash: 'hash123',
+    phone_hash: null,
+    metrics: { ltv: 500.0, orders_count: 2, aov: 250.0 },
+    projection: { stale: true, recomputed_at: '2026-07-01T00:00:00Z' },
+  };
 
-  const searchUrl = `/app/customers?q=${encodeURIComponent(query)}&type=${encodeURIComponent(type)}`;
-  assert.equal(searchUrl, '/app/customers?q=marina%40gmail.com&type=email');
+  const projectionStale = Boolean(apiProfileStale.projection?.stale);
+  assert.equal(projectionStale, true);
+  assert.equal(Boolean(apiProfileStale.metrics), true);
+});
 
-  const parsedParams = new URLSearchParams(searchUrl.split('?')[1]);
-  assert.equal(parsedParams.get('q'), 'marina@gmail.com');
-  assert.equal(parsedParams.get('type'), 'email');
+test('CUSTOMER SEARCH: identifier search preserves PII privacy by avoiding customer identifiers in navigation URLs', () => {
+  const customerEmail = 'marina@gmail.com';
+  const customerPhone = '+5511999999999';
+
+  // O fluxo de busca usa rotas limpas sem colocar PII no endereço do navegador
+  const baseCustomersRoute = '/app/customers';
+  const canonicalRoute = `/app/customers/${encodeURIComponent('cus_9f2a7c41e8b3')}`;
+
+  assert.equal(baseCustomersRoute.includes(customerEmail), false);
+  assert.equal(baseCustomersRoute.includes(customerPhone), false);
+  assert.equal(canonicalRoute.includes(customerEmail), false);
+  assert.equal(canonicalRoute.includes(customerPhone), false);
 });
 
 

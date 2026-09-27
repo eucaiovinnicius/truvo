@@ -732,23 +732,19 @@ function UtmChip({ prefix, value }: { prefix: string; value: string }) {
 
 export default function ProfilesView({
   initialCustomerId,
-  initialSearch,
 }: {
   initialCustomerId?: string;
-  initialSearch?: CustomerSearchState;
 } = {}) {
   const [canonicalId, setCanonicalId] = useState<string | null>(() => initialCustomerId || null);
-  const [query, setQuery] = useState<string>(() => initialSearch?.q || '');
-  const [searchType, setSearchType] = useState<SearchType>(() => initialSearch?.type || 'email');
+  const [query, setQuery] = useState<string>('');
+  const [searchType, setSearchType] = useState<SearchType>('email');
   // Estado da simulação demo (loading/resultado). Em 'live' o gating vem do fetch.
   const [demoLoading, setDemoLoading] = useState<boolean>(false);
-  const [demoHasResult, setDemoHasResult] = useState<boolean>(() => Boolean(initialCustomerId || initialSearch?.q));
+  const [demoHasResult, setDemoHasResult] = useState<boolean>(() => Boolean(initialCustomerId));
   const [order, setOrder] = useState<'recent' | 'chrono'>('recent');
   const [copied, setCopied] = useState<boolean>(false);
   // Busca submetida (dispara o useLive de busca quando não há canonicalId direto).
-  const [submittedSearch, setSubmittedSearch] = useState<CustomerSearchState | null>(() =>
-    initialSearch?.q ? { q: initialSearch.q, type: initialSearch.type || 'email' } : null,
-  );
+  const [submittedSearch, setSubmittedSearch] = useState<CustomerSearchState | null>(null);
 
   const { isLive } = useSession();
   const router = useRouter();
@@ -773,16 +769,6 @@ export default function ProfilesView({
     }
   }, [initialCustomerId]);
 
-  // Sincroniza initialSearch quando passado via rota:
-  useEffect(() => {
-    if (initialSearch?.q) {
-      setQuery(initialSearch.q);
-      setSearchType(initialSearch.type || 'email');
-      setSubmittedSearch({ q: initialSearch.q, type: initialSearch.type || 'email' });
-      setCanonicalId(null);
-    }
-  }, [initialSearch?.q, initialSearch?.type]);
-
   // Sincroniza canonicalId com o histórico do navegador (botão Voltar/Avançar):
   useEffect(() => {
     const handlePopState = () => {
@@ -794,16 +780,7 @@ export default function ProfilesView({
           setSubmittedSearch(null);
         } else if (window.location.pathname === '/app/customers') {
           setCanonicalId(null);
-          const sp = new URLSearchParams(window.location.search);
-          const q = sp.get('q');
-          const type = (sp.get('type') as SearchType) || 'email';
-          if (q) {
-            setQuery(q);
-            setSearchType(type);
-            setSubmittedSearch({ q, type });
-          } else {
-            setSubmittedSearch(null);
-          }
+          setSubmittedSearch(null);
         }
       }
     };
@@ -837,7 +814,11 @@ export default function ProfilesView({
       if (candidate?.canonical_id && candidate.canonical_id !== canonicalId) {
         setCanonicalId(candidate.canonical_id);
         if (typeof window !== 'undefined' && window.location.pathname.startsWith('/app/customers')) {
-          router.push(`/app/customers/${encodeURIComponent(candidate.canonical_id)}`);
+          try {
+            router.push(`/app/customers/${encodeURIComponent(candidate.canonical_id)}`);
+          } catch {
+            // fallback
+          }
         }
       }
     }
@@ -845,7 +826,7 @@ export default function ProfilesView({
 
   const profile: CustomerProfile = useMemo(() => {
     if (!isLive) {
-      return (demoHasResult || initialCustomerId || initialSearch?.q) ? MOCK_PROFILE : EMPTY_PROFILE;
+      return (demoHasResult || initialCustomerId) ? MOCK_PROFILE : EMPTY_PROFILE;
     }
     if (canonicalProfileLive.status === 'success' && canonicalProfileLive.data) {
       return adaptCanonicalProfile(
@@ -862,7 +843,6 @@ export default function ProfilesView({
     isLive,
     demoHasResult,
     initialCustomerId,
-    initialSearch?.q,
     canonicalProfileLive.status,
     canonicalProfileLive.data,
     canonicalTimelineLive.data,
@@ -896,11 +876,6 @@ export default function ProfilesView({
       setCanonicalId(null);
     }
     setSubmittedSearch({ q, type: searchType });
-    try {
-      router.push(`/app/customers?q=${encodeURIComponent(q)}&type=${encodeURIComponent(searchType)}`);
-    } catch {
-      // fallback
-    }
     if (!isLive) {
       setDemoLoading(true);
       setDemoHasResult(false);
@@ -925,11 +900,6 @@ export default function ProfilesView({
       setCanonicalId(null);
     }
     setSubmittedSearch({ q, type });
-    try {
-      router.push(`/app/customers?q=${encodeURIComponent(q)}&type=${encodeURIComponent(type)}`);
-    } catch {
-      // fallback
-    }
     if (!isLive) {
       setDemoLoading(true);
       setDemoHasResult(false);
@@ -1173,8 +1143,20 @@ export default function ProfilesView({
             )}
           </div>
 
+          {/* Aviso se projeção de métricas está em cache desatualizado */}
+          {profile.projectionStale && (
+            <div
+              className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2 font-mono"
+              role="region"
+              aria-label="Aviso de projeção desatualizada"
+            >
+              <Activity className="w-4 h-4 shrink-0 text-amber-600" />
+              <span>Métricas e KPIs baseados em projeção em cache desatualizada (reprocessamento de eventos pendente).</span>
+            </div>
+          )}
+
           {/* Aviso se métricas não foram projetadas */}
-          {profile.metricsAvailable === false && (
+          {profile.metricsAvailable === false && !profile.projectionStale && (
             <div
               className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2 font-mono"
               role="region"
@@ -1191,43 +1173,43 @@ export default function ProfilesView({
               label="LTV"
               value={fmtMoney(profile.ltv, profile.currency)}
               icon={DollarSign}
-              accent="text-emerald-500"
-              hint={profile.metricsAvailable === false ? 'Não projetado' : 'Receita total atribuída'}
+              accent={profile.projectionStale ? 'text-amber-500' : 'text-emerald-500'}
+              hint={profile.projectionStale ? 'Projeção desatualizada' : profile.metricsAvailable === false ? 'Não projetado' : 'Receita total atribuída'}
             />
             <KpiCard
               label="Pedidos"
               value={num(profile.orders)}
               icon={ShoppingBag}
-              accent="text-teal-500"
-              hint={profile.metricsAvailable === false ? 'Não projetado' : 'Compras concluídas'}
+              accent={profile.projectionStale ? 'text-amber-500' : 'text-teal-500'}
+              hint={profile.projectionStale ? 'Projeção desatualizada' : profile.metricsAvailable === false ? 'Não projetado' : 'Compras concluídas'}
             />
             <KpiCard
               label="Ticket Médio"
               value={fmtMoney(profile.avgTicket, profile.currency)}
               icon={Receipt}
-              accent="text-teal-500"
-              hint={profile.metricsAvailable === false ? 'Não projetado' : 'LTV / pedidos'}
+              accent={profile.projectionStale ? 'text-amber-500' : 'text-teal-500'}
+              hint={profile.projectionStale ? 'Projeção desatualizada' : profile.metricsAvailable === false ? 'Não projetado' : 'LTV / pedidos'}
             />
             <KpiCard
               label="Sessões"
               value={num(profile.sessions)}
               icon={Activity}
               accent="text-slate-400"
-              hint={profile.metricsAvailable === false ? 'Não projetado' : 'Visitas rastreadas'}
+              hint={profile.projectionStale ? 'Projeção desatualizada' : profile.metricsAvailable === false ? 'Não projetado' : 'Visitas rastreadas'}
             />
             <KpiCard
               label="Eventos"
               value={num(profile.events)}
               icon={MousePointerClick}
               accent="text-slate-400"
-              hint={profile.metricsAvailable === false ? 'Não projetado' : `${profile.timeline.length} recentes`}
+              hint={profile.projectionStale ? 'Projeção desatualizada' : profile.metricsAvailable === false ? 'Não projetado' : `${profile.timeline.length} recentes`}
             />
             <KpiCard
               label="Dias 1º Toque"
               value={num(profile.daysSinceFirstTouch)}
               icon={CalendarDays}
               accent="text-slate-400"
-              hint={profile.metricsAvailable === false ? 'Não projetado' : 'Tempo de relacionamento'}
+              hint={profile.projectionStale ? 'Projeção desatualizada' : profile.metricsAvailable === false ? 'Não projetado' : 'Tempo de relacionamento'}
             />
           </div>
 
