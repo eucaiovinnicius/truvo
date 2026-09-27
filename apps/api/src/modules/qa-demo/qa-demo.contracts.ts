@@ -105,6 +105,7 @@ export interface DemoWorkspaceSeedResult {
   personas: Record<PersonaType, { customerId: string; externalId: string }>;
   entityCounts: {
     customers: number;
+    accounts: number;
     traits: number;
     identifiers: number;
     orders: number;

@@ -39,6 +39,7 @@ test('GOLDEN E2E: complete 9-step canonical journey on deterministic demo worksp
     assert.equal(seedResult.workspaceId, GOLDEN_WS);
     assert.equal(seedResult.datasetVersion, '1.0.0');
     assert.equal(seedResult.entityCounts.customers, 6);
+    assert.equal(seedResult.entityCounts.accounts, 2);
     assert.ok(seedResult.entityCounts.traits >= 15);
     assert.ok(seedResult.entityCounts.orders >= 3);
     assert.ok(seedResult.entityCounts.subscriptions >= 2);
@@ -49,6 +50,18 @@ test('GOLDEN E2E: complete 9-step canonical journey on deterministic demo worksp
       select id, status from customers where workspace_id = ${GOLDEN_WS} and id = ${seedResult.personas.likely_buyer.customerId}
     `) as Array<{ id: string; status: string }>;
     assert.equal(likelyCustomer?.status, 'identified');
+
+    // Step 3b: Canonical B2B Accounts Verification (crm_accounts)
+    const accounts = await db.execute(sql`
+      select id, name, provider_namespace, traits
+      from crm_accounts
+      where workspace_id = ${GOLDEN_WS}
+      order by id asc
+    `) as Array<{ id: string; name: string; provider_namespace: string; traits: { domain?: string; tier?: string } }>;
+    assert.equal(accounts.length, 2, 'Declared demo accounts must be persisted in crm_accounts');
+    assert.equal(accounts[0].name, 'Acme Retail Group');
+    assert.equal(accounts[1].name, 'InovaTech Labs');
+    assert.equal(accounts[0].provider_namespace, 'hubspot');
 
     // Step 4: Anonymous -> Known Identity Merge Verification (Canonical Table: identity_merge_events)
     const [mergeEvent] = await db.execute(sql`
@@ -155,6 +168,11 @@ test('GOLDEN E2E: complete 9-step canonical journey on deterministic demo worksp
 
     // Cleanup
     await service.cleanWorkspaceData(GOLDEN_WS);
+
+    const [residualAccounts] = await db.execute(sql`
+      select count(*)::int as count from crm_accounts where workspace_id = ${GOLDEN_WS}
+    `) as Array<{ count: number }>;
+    assert.equal(residualAccounts?.count, 0, 'Residual crm_accounts must be zero after cleanWorkspaceData');
   } finally {
     closeRedis();
     await closeDb(db).catch(() => undefined);

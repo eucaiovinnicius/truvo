@@ -254,11 +254,30 @@ test('TENANT ISOLATION: cross-tenant read denied, mutation denied, runtime scope
       );
     }
 
-    // 7. Cleanup & Isolation of Cleanup
+    // 7. Accounts Tenant Isolation
+    const [accA] = await db.execute(sql`
+      select count(*)::int as count from crm_accounts where workspace_id = ${WS_A}
+    `) as Array<{ count: number }>;
+    const [accB] = await db.execute(sql`
+      select count(*)::int as count from crm_accounts where workspace_id = ${WS_B}
+    `) as Array<{ count: number }>;
+    assert.equal(accA?.count, 2, 'Workspace A must have 2 crm_accounts');
+    assert.equal(accB?.count, 2, 'Workspace B must have 2 crm_accounts');
+
+    // 8. Cleanup & Isolation of Cleanup
     await service.cleanWorkspaceData(WS_A);
     // B must still be intact
     const remainingB = await context.getContext(WS_B, custB);
     assert.ok(remainingB, 'Cleaning Workspace A must not affect Workspace B data');
+
+    const [accAResidual] = await db.execute(sql`
+      select count(*)::int as count from crm_accounts where workspace_id = ${WS_A}
+    `) as Array<{ count: number }>;
+    const [accBRemaining] = await db.execute(sql`
+      select count(*)::int as count from crm_accounts where workspace_id = ${WS_B}
+    `) as Array<{ count: number }>;
+    assert.equal(accAResidual?.count, 0, 'Cleaning Workspace A must clear its crm_accounts');
+    assert.equal(accBRemaining?.count, 2, 'Cleaning Workspace A must leave Workspace B crm_accounts intact');
 
     await service.cleanWorkspaceData(WS_B);
   } finally {

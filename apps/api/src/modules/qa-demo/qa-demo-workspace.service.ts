@@ -164,8 +164,9 @@ export class QaDemoWorkspaceService {
       `);
     }
 
-    // 3. Connectors: Source and Destination
+    // 3. Connectors: Sources and Destination
     const connectionSourceId = `conn_source_${workspaceId.slice(-6)}`;
+    const connectionCrmId = `conn_crm_${workspaceId.slice(-6)}`;
     const connectionDestId = `conn_dest_${workspaceId.slice(-6)}`;
 
     await this.db.execute(sql`
@@ -174,6 +175,7 @@ export class QaDemoWorkspaceService {
       )
       values
         (${workspaceId}, ${connectionSourceId}, 'shopify', 'source', 'Shopify Demo Store', 'healthy', 'valid', '["read","initial_backfill"]'::jsonb),
+        (${workspaceId}, ${connectionCrmId}, 'hubspot', 'source', 'HubSpot Demo CRM', 'healthy', 'valid', '["read","crm_sync"]'::jsonb),
         (${workspaceId}, ${connectionDestId}, ${FAKE_PROVIDER}, 'destination', 'Demo Destination Sync', 'healthy', 'valid', '["outbound_audience","sync"]'::jsonb)
       on conflict (workspace_id, id) do update set provider = excluded.provider, capabilities = excluded.capabilities
     `);
@@ -181,12 +183,33 @@ export class QaDemoWorkspaceService {
     // 4. Seed Personas & Entities
     const personaCustomerMap: Record<PersonaType, { customerId: string; externalId: string }> = {} as never;
     let customersCount = 0;
+    let accountsCount = 0;
     let traitsCount = 0;
     let identifiersCount = 0;
     let ordersCount = 0;
     let subscriptionsCount = 0;
     let engagementCount = 0;
     let mergesCount = 0;
+
+    // Seed B2B Accounts
+    for (const acc of dataset.accounts) {
+      await this.db.execute(sql`
+        insert into crm_accounts (
+          workspace_id, id, connection_id, provider_namespace, provider_object_id,
+          name, traits, source_namespace, observed_at
+        )
+        values (
+          ${workspaceId}, ${acc.id}, ${connectionCrmId}, 'hubspot', ${acc.id},
+          ${acc.name}, ${JSON.stringify({ domain: acc.domain, tier: acc.tier })}::jsonb,
+          'qa-demo', ${fixedClock}
+        )
+        on conflict (workspace_id, id) do update set
+          name = excluded.name,
+          traits = excluded.traits,
+          observed_at = excluded.observed_at
+      `);
+      accountsCount += 1;
+    }
 
     for (const [pKey, persona] of Object.entries(dataset.personas) as Array<[PersonaType, (typeof dataset.personas)[PersonaType]]>) {
       const cust = persona.customer;
@@ -577,6 +600,7 @@ export class QaDemoWorkspaceService {
       personas: personaCustomerMap,
       entityCounts: {
         customers: customersCount,
+        accounts: accountsCount,
         traits: traitsCount,
         identifiers: identifiersCount,
         orders: ordersCount,
@@ -624,6 +648,9 @@ export class QaDemoWorkspaceService {
     await this.db.execute(sql`delete from radars where workspace_id = ${workspaceId}`);
     await this.db.execute(sql`delete from customer_outcomes where workspace_id = ${workspaceId}`);
     await this.db.execute(sql`delete from outcome_definitions where workspace_id = ${workspaceId}`);
+    await this.db.execute(sql`delete from crm_associations where workspace_id = ${workspaceId}`);
+    await this.db.execute(sql`delete from crm_deals where workspace_id = ${workspaceId}`);
+    await this.db.execute(sql`delete from crm_accounts where workspace_id = ${workspaceId}`);
     await this.db.execute(sql`delete from connector_connections where workspace_id = ${workspaceId}`);
     await this.db.execute(sql`delete from engagement_events where workspace_id = ${workspaceId}`);
     await this.db.execute(sql`delete from billing_context_subscriptions where workspace_id = ${workspaceId}`);
