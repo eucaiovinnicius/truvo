@@ -124,6 +124,7 @@ interface CustomerProfile {
   timelineUnavailable?: boolean;
   hasMoreTimeline?: boolean;
   nextTimelineCursor?: string | null;
+  currency?: string;
 }
 
 // ----------------------------------------------------------------------------
@@ -654,6 +655,7 @@ function adaptCanonicalProfile(
     timelineUnavailable: timeline ? timeline.clickhouse_available === false : false,
     hasMoreTimeline: Boolean(timeline?.next_cursor),
     nextTimelineCursor: timeline?.next_cursor || null,
+    currency: m?.currency || undefined,
   };
 }
 
@@ -700,7 +702,7 @@ function UtmChip({ prefix, value }: { prefix: string; value: string }) {
 export default function ProfilesView({ initialCustomerId }: { initialCustomerId?: string } = {}) {
   const [canonicalId, setCanonicalId] = useState<string | null>(() => initialCustomerId || null);
   const [query, setQuery] = useState<string>(() => initialCustomerId || '');
-  const [searchType, setSearchType] = useState<SearchType>('email');
+  const [searchType, setSearchType] = useState<SearchType>(() => (initialCustomerId ? 'user_id' : 'email'));
   // Estado da simulação demo (loading/resultado). Em 'live' o gating vem do fetch.
   const [demoLoading, setDemoLoading] = useState<boolean>(false);
   const [demoHasResult, setDemoHasResult] = useState<boolean>(() => Boolean(initialCustomerId));
@@ -859,10 +861,18 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
   return (
     <LiveDataBoundary
       states={activeStates}
+      allowNotFoundAsEmpty={true}
       empty={
         canonicalId
-          ? canonicalProfileLive.status === 'success' && !canonicalProfileLive.data
+          ? (canonicalProfileLive.status === 'success' && !canonicalProfileLive.data) ||
+            canonicalProfileLive.error?.kind === 'not_found'
           : !!submittedSearch && searchLive.status === 'success' && !searchLive.data?.results?.length
+      }
+      emptyTitle={canonicalId ? 'Cliente não encontrado' : 'Nenhum cliente encontrado'}
+      emptyDescription={
+        canonicalId
+          ? 'Nenhum perfil com este ID canônico foi localizado neste workspace.'
+          : 'Nenhum resultado encontrado para o identificador informado.'
       }
       label="Busca de perfil"
     >
@@ -1062,7 +1072,7 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
             <KpiCard
               label="LTV"
-              value={brl(profile.ltv)}
+              value={fmtMoney(profile.ltv, profile.currency)}
               icon={DollarSign}
               accent="text-emerald-500"
               hint="Receita total atribuída"
@@ -1076,7 +1086,7 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
             />
             <KpiCard
               label="Ticket Médio"
-              value={brl(profile.avgTicket)}
+              value={fmtMoney(profile.avgTicket, profile.currency)}
               icon={Receipt}
               accent="text-teal-500"
               hint="LTV / pedidos"

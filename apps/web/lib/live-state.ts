@@ -91,13 +91,17 @@ export function selectLiveData<T, R>(
 
 export type LiveSurface = 'content' | 'loading' | 'empty' | 'error' | 'permission' | 'auth';
 
-export function resolveLiveSurface(states: LiveState<unknown>[], empty: boolean): LiveSurface {
+export function resolveLiveSurface(
+  states: LiveState<unknown>[],
+  empty: boolean,
+  options?: { allowNotFoundAsEmpty?: boolean },
+): LiveSurface {
   if (states.length === 0 || states.every((state) => state.status === 'demo')) return 'content';
   if (states.every((state) => state.status === 'idle')) return empty ? 'empty' : 'content';
   const failures = states.flatMap((state) => (state.status === 'error' && state.error ? [state.error] : []));
   if (failures.some((failure) => failure.kind === 'auth')) return 'auth';
   if (failures.some((failure) => failure.kind === 'permission')) return 'permission';
-  if (failures.some((failure) => failure.kind === 'not_found')) return 'empty';
+  if (options?.allowNotFoundAsEmpty && failures.some((failure) => failure.kind === 'not_found')) return 'empty';
   if (failures.length > 0) return 'error';
   if (states.some((state) => state.status === 'loading')) return 'loading';
   return empty ? 'empty' : 'content';

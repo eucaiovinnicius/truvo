@@ -380,7 +380,7 @@ test('CUSTOMER PROFILE: safely adapts free-form event names and device response 
   assert.equal(timelineUnavailable, true);
 });
 
-test('LIVE STATE: 404 response maps to not_found failure and resolves to empty surface', () => {
+test('LIVE STATE: 404 response maps to not_found failure, resolving to error by default and empty when opted in', () => {
   const notFoundFailure = classifyLiveFailure({ status: 404 }, '/v1/profiles/non-existent');
   assert.equal(notFoundFailure.kind, 'not_found');
   assert.match(notFoundFailure.message, /não foi encontrado/);
@@ -393,11 +393,16 @@ test('LIVE STATE: 404 response maps to not_found failure and resolves to empty s
     requestKey: 'live:ws-1:/v1/profiles/non-existent',
   };
 
-  const surface = resolveLiveSurface([notFoundState], false);
-  assert.equal(surface, 'empty');
+  // Por padrão em relatórios/dashboards, 404 resolve como 'error'
+  const defaultSurface = resolveLiveSurface([notFoundState], false);
+  assert.equal(defaultSurface, 'error');
+
+  // Em lookups específicos com opt-in (ex: perfil canônico), resolve como 'empty'
+  const optInSurface = resolveLiveSurface([notFoundState], false, { allowNotFoundAsEmpty: true });
+  assert.equal(optInSurface, 'empty');
 });
 
-test('CUSTOMER PROFILE: preserves timeline event currency and respects pagination cursor', () => {
+test('CUSTOMER PROFILE: preserves profile metric and timeline event currency and respects pagination cursor', () => {
   const evBrl = { value: 150.0, currency: 'BRL' };
   const evUsd = { value: 99.9, currency: 'USD' };
   const evUnknown: { value: number; currency?: string } = { value: 50.0 };
@@ -411,9 +416,15 @@ test('CUSTOMER PROFILE: preserves timeline event currency and respects paginatio
     }
   };
 
+  // Event currency
   assert.match(fmtMoney(evBrl.value, evBrl.currency), /R\$/);
   assert.match(fmtMoney(evUsd.value, evUsd.currency), /US\$|USD/);
   assert.match(fmtMoney(evUnknown.value, evUnknown.currency), /R\$/);
+
+  // Profile metric currency (LTV / AOV)
+  const profileMetrics = { ltv: 1250.5, aov: 250.1, currency: 'USD' };
+  assert.match(fmtMoney(profileMetrics.ltv, profileMetrics.currency), /US\$|USD/);
+  assert.match(fmtMoney(profileMetrics.aov, profileMetrics.currency), /US\$|USD/);
 
   // Pagination cursor detection
   const paginatedResponse = {
