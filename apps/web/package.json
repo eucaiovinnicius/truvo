@@ -8,10 +8,11 @@
     "start": "next start --port 3000",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test lib/live-truthfulness.test.tsx appui/components/radar-ui.test.ts appui/components/opportunity-ui.test.ts"
-    ,"test:radars:e2e": "playwright test e2e/radars.e2e.ts"
-    ,"test:opportunities:e2e": "playwright test e2e/opportunities.e2e.ts"
-    ,"test:onboarding:e2e": "playwright test e2e/onboarding.e2e.ts"
+    "test": "tsx --test lib/live-truthfulness.test.tsx lib/app-shell.test.tsx appui/components/radar-ui.test.ts appui/components/opportunity-ui.test.ts",
+    "test:app-shell": "tsx --test lib/app-shell.test.tsx",
+    "test:radars:e2e": "playwright test e2e/radars.e2e.ts",
+    "test:opportunities:e2e": "playwright test e2e/opportunities.e2e.ts",
+    "test:onboarding:e2e": "playwright test e2e/onboarding.e2e.ts"
   },
   "dependencies": {
     "@truvo/event-schema": "workspace:*",

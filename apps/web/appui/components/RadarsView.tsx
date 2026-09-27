@@ -56,8 +56,16 @@ function AudienceBuilder({ audience, setAudience, outcomes }: { audience: Audien
   </div>;
 }
 
-export default function RadarsView() {
-  const [screen, setScreen] = useState<Screen>('list'); const [selectedId, setSelectedId] = useState<string | null>(null); const [refresh, setRefresh] = useState(0);
+export default function RadarsView({
+  initialRadarId,
+  initialScreen = 'list',
+}: {
+  initialRadarId?: string;
+  initialScreen?: Screen;
+} = {}) {
+  const [screen, setScreen] = useState<Screen>(() => (initialRadarId ? 'detail' : initialScreen));
+  const [selectedId, setSelectedId] = useState<string | null>(() => initialRadarId ?? null);
+  const [refresh, setRefresh] = useState(0);
   const list = useLive<RadarListItem[]>('/v1/radars', [refresh]);
   const detail = useLive<RadarDetail>(selectedId ? `/v1/radars/${selectedId}` : null, [selectedId, refresh]);
   const outcomes = useLive<RadarOutcome[]>('/v1/radars/metadata/outcomes', [screen]);
