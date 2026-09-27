@@ -63,7 +63,11 @@ export default function App() {
   const handleLoginSuccess = (newProfile: ProfileConfig, mode: 'live' | 'demo') => {
     setProfile(newProfile);
     localStorage.setItem('truvo_profile', JSON.stringify(newProfile));
-    setView('dashboard');
+    if (typeof window !== 'undefined') {
+      window.location.href = '/app';
+    } else {
+      setView('dashboard');
+    }
   };
 
   const handleLogout = () => {

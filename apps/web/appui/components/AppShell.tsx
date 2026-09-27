@@ -40,15 +40,19 @@ export default function AppShell({ children }: AppShellProps) {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  const [demoWorkspaceId, setDemoWorkspaceId] = useState<string>('truvo-global');
+
   const visibleWorkspace = session.isLive
     ? { id: session.workspace?.id ?? '', name: session.workspace?.name || 'Workspace' }
-    : { id: 'truvo-global', name: 'Truvo Global Store' };
+    : (DEMO_WORKSPACES.find((w) => w.id === demoWorkspaceId) || DEMO_WORKSPACES[0]);
 
   const visibleWorkspaces = session.isLive ? session.workspaces : DEMO_WORKSPACES;
 
   const handleSelectWorkspace = (id: string) => {
     if (session.isLive) {
       session.selectWorkspace(id);
+    } else {
+      setDemoWorkspaceId(id);
     }
   };
 

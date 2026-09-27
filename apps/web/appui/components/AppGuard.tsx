@@ -47,8 +47,8 @@ export default function AppGuard({ children }: AppGuardProps) {
     );
   }
 
-  // 4. Authenticated Live with no workspace access
-  if (session.isLive && !session.workspace && session.workspaces.length === 0) {
+  // 4. Authenticated Live with no workspace access (exempt onboarding so user can provision workspace)
+  if (session.isLive && !session.workspace && session.workspaces.length === 0 && pathname !== '/app/onboarding') {
     return (
       <AppShell>
         <NoWorkspaceState />

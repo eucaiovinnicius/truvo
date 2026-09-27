@@ -301,3 +301,10 @@ test('WORKSPACE ISOLATION: late in-flight response from Workspace A cannot overw
   assert.equal(verifiedAgainstCurrentContext.data, null);
   assert.equal(verifiedAgainstCurrentContext.requestKey, 'live:ws-b:/v1/metrics/kpis');
 });
+
+test('SESSION GUARD: allows workspace-less users to access /app/onboarding', () => {
+  // Verificamos que a rota /app/onboarding é explicitamente habilitada
+  assert.equal(isRouteEnabled('/app/onboarding'), true);
+  // E que um path desconhecido ou desabilitado é bloqueado
+  assert.equal(isRouteEnabled('/app/funnels'), false);
+});
