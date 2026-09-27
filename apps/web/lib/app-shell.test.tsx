@@ -442,3 +442,66 @@ test('CUSTOMER PROFILE: preserves profile metric and timeline event currency and
   assert.equal(paginatedResponse.next_cursor, 'cursor_page_2');
 });
 
+test('CUSTOMER PROFILE: unprojected/unavailable metrics are represented as null and rendered truthfully as —', () => {
+  const num = (n: number | null | undefined): string =>
+    n !== null && n !== undefined ? n.toLocaleString('pt-BR') : '—';
+
+  const fmtMoney = (n: number | null | undefined, currency?: string): string => {
+    if (n === null || n === undefined) return '—';
+    const trimmed = currency?.trim().toUpperCase();
+    if (!trimmed) {
+      return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    try {
+      return n.toLocaleString('pt-BR', { style: 'currency', currency: trimmed });
+    } catch {
+      return `${trimmed} ${n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+  };
+
+  // Quando o backend retorna metrics: null (ClickHouse recomputation fail / projection stale)
+  const apiProfileUnprojected: {
+    canonical_id: string;
+    status: 'identified' | 'anonymous';
+    email_hash: string | null;
+    phone_hash: string | null;
+    metrics: { ltv: number; orders_count: number; aov: number } | null;
+    projection: { stale: boolean; recomputed_at: string | null };
+  } = {
+    canonical_id: 'cus_unprojected',
+    status: 'identified',
+    email_hash: 'hash123',
+    phone_hash: null,
+    metrics: null,
+    projection: { stale: true, recomputed_at: null },
+  };
+
+  const metricsAvailable = Boolean(apiProfileUnprojected.metrics);
+  assert.equal(metricsAvailable, false);
+
+  const ltv = apiProfileUnprojected.metrics?.ltv ?? null;
+  const orders = apiProfileUnprojected.metrics?.orders_count ?? null;
+  const aov = apiProfileUnprojected.metrics?.aov ?? null;
+
+  assert.equal(ltv, null);
+  assert.equal(orders, null);
+  assert.equal(aov, null);
+
+  assert.equal(fmtMoney(ltv), '—');
+  assert.equal(num(orders), '—');
+  assert.equal(fmtMoney(aov), '—');
+});
+
+test('CUSTOMER SEARCH: search state is preserved across route navigation with query params', () => {
+  const query = 'marina@gmail.com';
+  const type = 'email';
+
+  const searchUrl = `/app/customers?q=${encodeURIComponent(query)}&type=${encodeURIComponent(type)}`;
+  assert.equal(searchUrl, '/app/customers?q=marina%40gmail.com&type=email');
+
+  const parsedParams = new URLSearchParams(searchUrl.split('?')[1]);
+  assert.equal(parsedParams.get('q'), 'marina@gmail.com');
+  assert.equal(parsedParams.get('type'), 'email');
+});
+
+

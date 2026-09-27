@@ -50,7 +50,12 @@ import { useRouter } from 'next/navigation';
 
 type IconType = React.ComponentType<{ className?: string }>;
 
-type SearchType = 'email' | 'telefone' | 'user_id' | 'order_id';
+export type SearchType = 'email' | 'telefone' | 'user_id' | 'order_id' | 'device_id' | 'account_id';
+
+export interface CustomerSearchState {
+  q: string;
+  type: SearchType;
+}
 
 type EventKind =
   | 'session_start'
@@ -112,12 +117,14 @@ interface CustomerProfile {
   firstTouch: string;
   lastTouch: string;
   status: CustomerStatus;
-  ltv: number;
-  orders: number;
-  avgTicket: number;
-  sessions: number;
-  events: number;
-  daysSinceFirstTouch: number;
+  metricsAvailable?: boolean;
+  projectionStale?: boolean;
+  ltv: number | null;
+  orders: number | null;
+  avgTicket: number | null;
+  sessions: number | null;
+  events: number | null;
+  daysSinceFirstTouch: number | null;
   tags: string[];
   channels: AcquisitionChannel[];
   deviceList: CustomerDevice[];
@@ -136,7 +143,8 @@ interface CustomerProfile {
 const brl = (n: number): string =>
   n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-const fmtMoney = (n: number, currency?: string): string => {
+const fmtMoney = (n: number | null | undefined, currency?: string): string => {
+  if (n === null || n === undefined) return '—';
   const trimmed = currency?.trim().toUpperCase();
   if (!trimmed) {
     return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -148,7 +156,8 @@ const fmtMoney = (n: number, currency?: string): string => {
   }
 };
 
-const num = (n: number): string => n.toLocaleString('pt-BR');
+const num = (n: number | null | undefined): string =>
+  n !== null && n !== undefined ? n.toLocaleString('pt-BR') : '—';
 
 const fmtDateTime = (iso: string): string => {
   if (!iso || Number.isNaN(new Date(iso).getTime())) return '—';
@@ -288,12 +297,14 @@ const MOCK_PROFILE: CustomerProfile = {
   firstTouch: '2026-06-18T09:12:00',
   lastTouch: '2026-07-18T21:47:00',
   status: 'vip',
+  metricsAvailable: true,
   ltv: 1179.6,
   orders: 3,
   avgTicket: 393.2,
   sessions: 14,
   events: 127,
   daysSinceFirstTouch: 31,
+  currency: 'BRL',
   tags: ['Recompra', 'Alto Ticket', 'Inverno 2026', 'Pix'],
   channels: [
     { label: 'instagram / social', share: 42 },
@@ -419,12 +430,13 @@ const EMPTY_PROFILE: CustomerProfile = {
   firstTouch: '',
   lastTouch: '',
   status: 'novo',
-  ltv: 0,
-  orders: 0,
-  avgTicket: 0,
-  sessions: 0,
-  events: 0,
-  daysSinceFirstTouch: 0,
+  metricsAvailable: false,
+  ltv: null,
+  orders: null,
+  avgTicket: null,
+  sessions: null,
+  events: null,
+  daysSinceFirstTouch: null,
   tags: [],
   channels: [],
   deviceList: [],
@@ -456,6 +468,8 @@ const API_SEARCH_TYPE: Record<SearchType, string> = {
   telefone: 'phone_hash',
   user_id: 'user_id',
   order_id: 'order_id',
+  device_id: 'anonymous_id',
+  account_id: 'user_id',
 };
 
 interface ApiProfileMetrics {
@@ -512,6 +526,10 @@ interface ApiProfileView {
   last_seen_at?: string | null;
   metrics?: ApiProfileMetrics | null;
   confidence?: unknown;
+  projection?: {
+    recomputed_at?: string | null;
+    stale?: boolean;
+  };
 }
 
 interface ApiTimelineItem {
@@ -566,6 +584,7 @@ const shortHash = (h: string | null | undefined): string =>
 function adaptCandidate(c: ApiProfileCandidate): CustomerProfile {
   const m = c.metrics;
   const identified = c.status === 'identified';
+  const metricsAvailable = Boolean(m);
 
   const tags: string[] = [];
   if (identified) tags.push('Identificado');
@@ -582,17 +601,19 @@ function adaptCandidate(c: ApiProfileCandidate): CustomerProfile {
     firstTouch: c.first_seen_at ?? '',
     lastTouch: c.last_seen_at ?? '',
     status: identified ? 'ativo' : 'novo',
-    ltv: m?.ltv ?? 0,
-    orders: m?.orders_count ?? 0,
-    avgTicket: m?.aov ?? 0,
-    sessions: m?.sessions_count ?? 0,
-    events: m?.events_count ?? 0,
-    daysSinceFirstTouch: m?.days_since_first_touch ?? 0,
+    metricsAvailable,
+    ltv: m?.ltv ?? null,
+    orders: m?.orders_count ?? null,
+    avgTicket: m?.aov ?? null,
+    sessions: m?.sessions_count ?? null,
+    events: m?.events_count ?? null,
+    daysSinceFirstTouch: m?.days_since_first_touch ?? null,
     tags,
     channels: [],
     deviceList: [],
     weekly: [],
     timeline: [],
+    currency: m?.currency || undefined,
   };
 }
 
@@ -603,6 +624,7 @@ function adaptCanonicalProfile(
 ): CustomerProfile {
   const m = p.metrics;
   const identified = p.status === 'identified';
+  const metricsAvailable = Boolean(m);
   const tags: string[] = [];
   if (identified) tags.push('Identificado');
   else tags.push('Anônimo');
@@ -648,12 +670,14 @@ function adaptCanonicalProfile(
     firstTouch: p.created_at ?? '',
     lastTouch: p.last_seen_at ?? '',
     status: identified ? 'ativo' : 'novo',
-    ltv: m?.ltv ?? 0,
-    orders: m?.orders_count ?? 0,
-    avgTicket: m?.aov ?? 0,
-    sessions: m?.sessions_count ?? 0,
-    events: m?.events_count ?? 0,
-    daysSinceFirstTouch: m?.days_since_first_touch ?? 0,
+    metricsAvailable,
+    projectionStale: p.projection?.stale ?? false,
+    ltv: m?.ltv ?? null,
+    orders: m?.orders_count ?? null,
+    avgTicket: m?.aov ?? null,
+    sessions: m?.sessions_count ?? null,
+    events: m?.events_count ?? null,
+    daysSinceFirstTouch: m?.days_since_first_touch ?? null,
     tags,
     channels: [],
     deviceList: mappedDevices,
@@ -706,17 +730,25 @@ function UtmChip({ prefix, value }: { prefix: string; value: string }) {
 // Componente principal
 // ----------------------------------------------------------------------------
 
-export default function ProfilesView({ initialCustomerId }: { initialCustomerId?: string } = {}) {
+export default function ProfilesView({
+  initialCustomerId,
+  initialSearch,
+}: {
+  initialCustomerId?: string;
+  initialSearch?: CustomerSearchState;
+} = {}) {
   const [canonicalId, setCanonicalId] = useState<string | null>(() => initialCustomerId || null);
-  const [query, setQuery] = useState<string>('');
-  const [searchType, setSearchType] = useState<SearchType>('email');
+  const [query, setQuery] = useState<string>(() => initialSearch?.q || '');
+  const [searchType, setSearchType] = useState<SearchType>(() => initialSearch?.type || 'email');
   // Estado da simulação demo (loading/resultado). Em 'live' o gating vem do fetch.
   const [demoLoading, setDemoLoading] = useState<boolean>(false);
-  const [demoHasResult, setDemoHasResult] = useState<boolean>(() => Boolean(initialCustomerId));
+  const [demoHasResult, setDemoHasResult] = useState<boolean>(() => Boolean(initialCustomerId || initialSearch?.q));
   const [order, setOrder] = useState<'recent' | 'chrono'>('recent');
   const [copied, setCopied] = useState<boolean>(false);
   // Busca submetida (dispara o useLive de busca quando não há canonicalId direto).
-  const [submittedSearch, setSubmittedSearch] = useState<{ q: string; type: SearchType } | null>(null);
+  const [submittedSearch, setSubmittedSearch] = useState<CustomerSearchState | null>(() =>
+    initialSearch?.q ? { q: initialSearch.q, type: initialSearch.type || 'email' } : null,
+  );
 
   const { isLive } = useSession();
   const router = useRouter();
@@ -735,20 +767,44 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
   useEffect(() => {
     if (initialCustomerId) {
       setCanonicalId(initialCustomerId);
+      setSubmittedSearch(null);
     } else {
       setCanonicalId(null);
     }
   }, [initialCustomerId]);
 
+  // Sincroniza initialSearch quando passado via rota:
+  useEffect(() => {
+    if (initialSearch?.q) {
+      setQuery(initialSearch.q);
+      setSearchType(initialSearch.type || 'email');
+      setSubmittedSearch({ q: initialSearch.q, type: initialSearch.type || 'email' });
+      setCanonicalId(null);
+    }
+  }, [initialSearch?.q, initialSearch?.type]);
+
   // Sincroniza canonicalId com o histórico do navegador (botão Voltar/Avançar):
   useEffect(() => {
     const handlePopState = () => {
-      if (typeof window !== 'undefined' && window.location.pathname.startsWith('/app/customers/')) {
-        const parts = window.location.pathname.split('/app/customers/');
-        const id = parts[1] ? decodeURIComponent(parts[1]) : null;
-        setCanonicalId(id || null);
-      } else if (typeof window !== 'undefined' && window.location.pathname === '/app/customers') {
-        setCanonicalId(null);
+      if (typeof window !== 'undefined') {
+        if (window.location.pathname.startsWith('/app/customers/')) {
+          const parts = window.location.pathname.split('/app/customers/');
+          const id = parts[1] ? decodeURIComponent(parts[1]) : null;
+          setCanonicalId(id || null);
+          setSubmittedSearch(null);
+        } else if (window.location.pathname === '/app/customers') {
+          setCanonicalId(null);
+          const sp = new URLSearchParams(window.location.search);
+          const q = sp.get('q');
+          const type = (sp.get('type') as SearchType) || 'email';
+          if (q) {
+            setQuery(q);
+            setSearchType(type);
+            setSubmittedSearch({ q, type });
+          } else {
+            setSubmittedSearch(null);
+          }
+        }
       }
     };
     window.addEventListener('popstate', handlePopState);
@@ -789,7 +845,7 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
 
   const profile: CustomerProfile = useMemo(() => {
     if (!isLive) {
-      return (demoHasResult || initialCustomerId) ? MOCK_PROFILE : EMPTY_PROFILE;
+      return (demoHasResult || initialCustomerId || initialSearch?.q) ? MOCK_PROFILE : EMPTY_PROFILE;
     }
     if (canonicalProfileLive.status === 'success' && canonicalProfileLive.data) {
       return adaptCanonicalProfile(
@@ -806,6 +862,7 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
     isLive,
     demoHasResult,
     initialCustomerId,
+    initialSearch?.q,
     canonicalProfileLive.status,
     canonicalProfileLive.data,
     canonicalTimelineLive.data,
@@ -837,13 +894,13 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
     if (timerRef.current) clearTimeout(timerRef.current);
     if (canonicalId) {
       setCanonicalId(null);
-      try {
-        router.push('/app/customers');
-      } catch {
-        // fallback
-      }
     }
     setSubmittedSearch({ q, type: searchType });
+    try {
+      router.push(`/app/customers?q=${encodeURIComponent(q)}&type=${encodeURIComponent(searchType)}`);
+    } catch {
+      // fallback
+    }
     if (!isLive) {
       setDemoLoading(true);
       setDemoHasResult(false);
@@ -860,18 +917,19 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
   };
 
   const handleExample = (type: SearchType, value: string): void => {
+    const q = value.trim();
     setSearchType(type);
     setQuery(value);
     if (timerRef.current) clearTimeout(timerRef.current);
     if (canonicalId) {
       setCanonicalId(null);
-      try {
-        router.push('/app/customers');
-      } catch {
-        // fallback
-      }
     }
-    setSubmittedSearch({ q: value.trim(), type });
+    setSubmittedSearch({ q, type });
+    try {
+      router.push(`/app/customers?q=${encodeURIComponent(q)}&type=${encodeURIComponent(type)}`);
+    } catch {
+      // fallback
+    }
     if (!isLive) {
       setDemoLoading(true);
       setDemoHasResult(false);
@@ -1115,6 +1173,18 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
             )}
           </div>
 
+          {/* Aviso se métricas não foram projetadas */}
+          {profile.metricsAvailable === false && (
+            <div
+              className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2 font-mono"
+              role="region"
+              aria-label="Aviso de disponibilidade de métricas"
+            >
+              <Activity className="w-4 h-4 shrink-0 text-amber-600" />
+              <span>Métricas e KPIs de receita temporariamente indisponíveis (projeção em processamento ou não recalculada).</span>
+            </div>
+          )}
+
           {/* KPI row */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
             <KpiCard
@@ -1122,42 +1192,42 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
               value={fmtMoney(profile.ltv, profile.currency)}
               icon={DollarSign}
               accent="text-emerald-500"
-              hint="Receita total atribuída"
+              hint={profile.metricsAvailable === false ? 'Não projetado' : 'Receita total atribuída'}
             />
             <KpiCard
               label="Pedidos"
               value={num(profile.orders)}
               icon={ShoppingBag}
               accent="text-teal-500"
-              hint="Compras concluídas"
+              hint={profile.metricsAvailable === false ? 'Não projetado' : 'Compras concluídas'}
             />
             <KpiCard
               label="Ticket Médio"
               value={fmtMoney(profile.avgTicket, profile.currency)}
               icon={Receipt}
               accent="text-teal-500"
-              hint="LTV / pedidos"
+              hint={profile.metricsAvailable === false ? 'Não projetado' : 'LTV / pedidos'}
             />
             <KpiCard
               label="Sessões"
               value={num(profile.sessions)}
               icon={Activity}
               accent="text-slate-400"
-              hint="Visitas rastreadas"
+              hint={profile.metricsAvailable === false ? 'Não projetado' : 'Visitas rastreadas'}
             />
             <KpiCard
               label="Eventos"
               value={num(profile.events)}
               icon={MousePointerClick}
               accent="text-slate-400"
-              hint={`${profile.timeline.length} recentes`}
+              hint={profile.metricsAvailable === false ? 'Não projetado' : `${profile.timeline.length} recentes`}
             />
             <KpiCard
               label="Dias 1º Toque"
               value={num(profile.daysSinceFirstTouch)}
               icon={CalendarDays}
               accent="text-slate-400"
-              hint="Tempo de relacionamento"
+              hint={profile.metricsAvailable === false ? 'Não projetado' : 'Tempo de relacionamento'}
             />
           </div>
 
