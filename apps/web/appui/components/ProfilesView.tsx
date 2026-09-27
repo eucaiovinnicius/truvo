@@ -632,17 +632,21 @@ function adaptCanonicalProfile(
   if (p.cross_device_stitched) tags.push('Cross-device');
 
   const rawEvents: ApiTimelineItem[] = timeline?.events ?? (timeline?.groups ? timeline.groups.flatMap((g) => g.events) : []);
-  const mappedTimeline: TimelineEvent[] = rawEvents.map((ev) => ({
-    id: ev.event_id,
-    kind: (ev.event_name as EventKind) || 'page_view',
-    timestamp: ev.timestamp || '',
-    device: ev.context?.device_type ? `${ev.context.device_type} · ${ev.context.os || ''}` : 'Dispositivo desconhecido',
-    detail: `Evento: ${ev.event_name}${ev.source ? ` (${ev.source})` : ''}`,
-    order: ev.order_id || undefined,
-    value: typeof ev.value === 'number' ? ev.value : (ev.value ?? undefined),
-    currency: ev.currency || undefined,
-    utm: ev.context ? { source: ev.context.utm_source, medium: ev.context.utm_medium, campaign: ev.context.utm_campaign } : undefined,
-  }));
+  const mappedTimeline: TimelineEvent[] = rawEvents.map((ev) => {
+    const hasCurrency = Boolean(ev.currency && ev.currency.trim().length > 0);
+    const hasMonetaryValue = typeof ev.value === 'number' && (hasCurrency || ev.value > 0);
+    return {
+      id: ev.event_id,
+      kind: (ev.event_name as EventKind) || 'page_view',
+      timestamp: ev.timestamp || '',
+      device: ev.context?.device_type ? `${ev.context.device_type} · ${ev.context.os || ''}` : 'Dispositivo desconhecido',
+      detail: `Evento: ${ev.event_name}${ev.source ? ` (${ev.source})` : ''}`,
+      order: ev.order_id || undefined,
+      value: hasMonetaryValue ? (ev.value as number) : undefined,
+      currency: hasCurrency ? (ev.currency as string) : undefined,
+      utm: ev.context ? { source: ev.context.utm_source, medium: ev.context.utm_medium, campaign: ev.context.utm_campaign } : undefined,
+    };
+  });
 
   const rawDevices = identities?.identity?.devices || p.identity?.devices || [];
   const mappedDevices = rawDevices.map((d, i) => {
@@ -1143,20 +1147,8 @@ export default function ProfilesView({
             )}
           </div>
 
-          {/* Aviso se projeção de métricas está em cache desatualizado */}
-          {profile.projectionStale && (
-            <div
-              className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2 font-mono"
-              role="region"
-              aria-label="Aviso de projeção desatualizada"
-            >
-              <Activity className="w-4 h-4 shrink-0 text-amber-600" />
-              <span>Métricas e KPIs baseados em projeção em cache desatualizada (reprocessamento de eventos pendente).</span>
-            </div>
-          )}
-
-          {/* Aviso se métricas não foram projetadas */}
-          {profile.metricsAvailable === false && !profile.projectionStale && (
+          {/* Aviso se métricas não foram projetadas ou se projeção está desatualizada */}
+          {profile.metricsAvailable === false ? (
             <div
               className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2 font-mono"
               role="region"
@@ -1165,7 +1157,16 @@ export default function ProfilesView({
               <Activity className="w-4 h-4 shrink-0 text-amber-600" />
               <span>Métricas e KPIs de receita temporariamente indisponíveis (projeção em processamento ou não recalculada).</span>
             </div>
-          )}
+          ) : profile.projectionStale ? (
+            <div
+              className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2 font-mono"
+              role="region"
+              aria-label="Aviso de projeção desatualizada"
+            >
+              <Activity className="w-4 h-4 shrink-0 text-amber-600" />
+              <span>Métricas e KPIs baseados em projeção em cache desatualizada (reprocessamento de eventos pendente).</span>
+            </div>
+          ) : null}
 
           {/* KPI row */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
@@ -1173,43 +1174,43 @@ export default function ProfilesView({
               label="LTV"
               value={fmtMoney(profile.ltv, profile.currency)}
               icon={DollarSign}
-              accent={profile.projectionStale ? 'text-amber-500' : 'text-emerald-500'}
-              hint={profile.projectionStale ? 'Projeção desatualizada' : profile.metricsAvailable === false ? 'Não projetado' : 'Receita total atribuída'}
+              accent={profile.metricsAvailable === false ? 'text-slate-400' : profile.projectionStale ? 'text-amber-500' : 'text-emerald-500'}
+              hint={profile.metricsAvailable === false ? 'Não projetado' : profile.projectionStale ? 'Projeção desatualizada' : 'Receita total atribuída'}
             />
             <KpiCard
               label="Pedidos"
               value={num(profile.orders)}
               icon={ShoppingBag}
-              accent={profile.projectionStale ? 'text-amber-500' : 'text-teal-500'}
-              hint={profile.projectionStale ? 'Projeção desatualizada' : profile.metricsAvailable === false ? 'Não projetado' : 'Compras concluídas'}
+              accent={profile.metricsAvailable === false ? 'text-slate-400' : profile.projectionStale ? 'text-amber-500' : 'text-teal-500'}
+              hint={profile.metricsAvailable === false ? 'Não projetado' : profile.projectionStale ? 'Projeção desatualizada' : 'Compras concluídas'}
             />
             <KpiCard
               label="Ticket Médio"
               value={fmtMoney(profile.avgTicket, profile.currency)}
               icon={Receipt}
-              accent={profile.projectionStale ? 'text-amber-500' : 'text-teal-500'}
-              hint={profile.projectionStale ? 'Projeção desatualizada' : profile.metricsAvailable === false ? 'Não projetado' : 'LTV / pedidos'}
+              accent={profile.metricsAvailable === false ? 'text-slate-400' : profile.projectionStale ? 'text-amber-500' : 'text-teal-500'}
+              hint={profile.metricsAvailable === false ? 'Não projetado' : profile.projectionStale ? 'Projeção desatualizada' : 'LTV / pedidos'}
             />
             <KpiCard
               label="Sessões"
               value={num(profile.sessions)}
               icon={Activity}
               accent="text-slate-400"
-              hint={profile.projectionStale ? 'Projeção desatualizada' : profile.metricsAvailable === false ? 'Não projetado' : 'Visitas rastreadas'}
+              hint={profile.metricsAvailable === false ? 'Não projetado' : profile.projectionStale ? 'Projeção desatualizada' : 'Visitas rastreadas'}
             />
             <KpiCard
               label="Eventos"
               value={num(profile.events)}
               icon={MousePointerClick}
               accent="text-slate-400"
-              hint={profile.projectionStale ? 'Projeção desatualizada' : profile.metricsAvailable === false ? 'Não projetado' : `${profile.timeline.length} recentes`}
+              hint={profile.metricsAvailable === false ? 'Não projetado' : profile.projectionStale ? 'Projeção desatualizada' : `${profile.timeline.length} recentes`}
             />
             <KpiCard
               label="Dias 1º Toque"
               value={num(profile.daysSinceFirstTouch)}
               icon={CalendarDays}
               accent="text-slate-400"
-              hint={profile.projectionStale ? 'Projeção desatualizada' : profile.metricsAvailable === false ? 'Não projetado' : 'Tempo de relacionamento'}
+              hint={profile.metricsAvailable === false ? 'Não projetado' : profile.projectionStale ? 'Projeção desatualizada' : 'Tempo de relacionamento'}
             />
           </div>
 

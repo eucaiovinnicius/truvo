@@ -508,6 +508,65 @@ test('CUSTOMER PROFILE: stale cached projection is surfaced truthfully with proj
   assert.equal(Boolean(apiProfileStale.metrics), true);
 });
 
+test('CUSTOMER PROFILE: non-monetary timeline events with default value 0 and empty currency do not display monetary value, while legitimate zero transactions with currency are preserved', () => {
+  const pageViewEvent = {
+    event_id: 'ev_page',
+    event_name: 'page_view',
+    value: 0,
+    currency: '',
+  };
+  const purchaseZeroEvent = {
+    event_id: 'ev_purchase_zero',
+    event_name: 'purchase',
+    value: 0,
+    currency: 'BRL',
+  };
+  const purchaseRealEvent = {
+    event_id: 'ev_purchase_100',
+    event_name: 'purchase',
+    value: 100,
+    currency: 'USD',
+  };
+
+  function mapTimelineEvent(ev: { event_id: string; event_name: string; value: number; currency: string }) {
+    const hasCurrency = Boolean(ev.currency && ev.currency.trim().length > 0);
+    const hasMonetaryValue = typeof ev.value === 'number' && (hasCurrency || ev.value > 0);
+    return {
+      id: ev.event_id,
+      kind: ev.event_name,
+      value: hasMonetaryValue ? ev.value : undefined,
+      currency: hasCurrency ? ev.currency : undefined,
+    };
+  }
+
+  const mappedPageView = mapTimelineEvent(pageViewEvent);
+  const mappedPurchaseZero = mapTimelineEvent(purchaseZeroEvent);
+  const mappedPurchaseReal = mapTimelineEvent(purchaseRealEvent);
+
+  assert.equal(mappedPageView.value, undefined);
+  assert.equal(mappedPageView.currency, undefined);
+
+  assert.equal(mappedPurchaseZero.value, 0);
+  assert.equal(mappedPurchaseZero.currency, 'BRL');
+
+  assert.equal(mappedPurchaseReal.value, 100);
+  assert.equal(mappedPurchaseReal.currency, 'USD');
+});
+
+test('CUSTOMER PROFILE: missing metrics projection takes priority over stale flag when reporting availability', () => {
+  const profileNoMetrics = {
+    metrics: null,
+    projection: { stale: true },
+  };
+
+  const metricsAvailable = Boolean(profileNoMetrics.metrics);
+  const projectionStale = Boolean(profileNoMetrics.projection?.stale);
+
+  // Quando não há métricas, o estado prioritário é métricas indisponíveis/não projetadas
+  const warningType = metricsAvailable === false ? 'unavailable' : projectionStale ? 'stale' : 'none';
+  assert.equal(warningType, 'unavailable');
+});
+
 test('CUSTOMER SEARCH: identifier search preserves PII privacy by avoiding customer identifiers in navigation URLs', () => {
   const customerEmail = 'marina@gmail.com';
   const customerPhone = '+5511999999999';
@@ -521,5 +580,6 @@ test('CUSTOMER SEARCH: identifier search preserves PII privacy by avoiding custo
   assert.equal(canonicalRoute.includes(customerEmail), false);
   assert.equal(canonicalRoute.includes(customerPhone), false);
 });
+
 
 
