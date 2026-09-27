@@ -27,7 +27,8 @@ export default function OnboardingPage() {
         body: JSON.stringify({ name: name.trim() }),
       });
       if (created?.id) {
-        session.selectWorkspace(created.id);
+        session.adoptWorkspace(created);
+        await session.refreshWorkspaces().catch(() => {});
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Falha ao criar workspace');

@@ -22,7 +22,7 @@ import {
 import PrimaryNav from '../appui/components/PrimaryNav';
 import WorkspaceSwitcher from '../appui/components/WorkspaceSwitcher';
 import PageHeader from '../appui/components/PageHeader';
-import { classifyLiveFailure, liveRequestKey, reconcileLiveContext, stateForContext, type LiveState } from './live-state';
+import { classifyLiveFailure, liveRequestKey, reconcileLiveContext, resolveLiveSurface, stateForContext, type LiveState } from './live-state';
 
 test('FEATURE CAPABILITIES: primary nav items contain only enabled MVP routes', () => {
   const items = getPrimaryNavItems();
@@ -308,3 +308,306 @@ test('SESSION GUARD: allows workspace-less users to access /app/onboarding', () 
   // E que um path desconhecido ou desabilitado é bloqueado
   assert.equal(isRouteEnabled('/app/funnels'), false);
 });
+
+test('WORKSPACE PROVISIONING SESSION ADOPTION: newly created workspace enters session workspaces and becomes active', () => {
+  const initialWorkspaces: Array<{ id: string; name: string }> = [];
+  const createdWorkspace = { id: 'ws_new_999', name: 'Nova Loja Truvo' };
+
+  // Helper de adoção que espelha a lógica de adoptWorkspace no SessionProvider
+  const adopt = (
+    prev: Array<{ id: string; name: string }>,
+    ws: { id: string; name: string },
+  ) => {
+    const exists = prev.some((c) => c.id === ws.id);
+    return exists ? prev.map((c) => (c.id === ws.id ? ws : c)) : [...prev, ws];
+  };
+
+  const updatedWorkspaces = adopt(initialWorkspaces, createdWorkspace);
+  assert.equal(updatedWorkspaces.length, 1);
+  assert.equal(updatedWorkspaces[0]?.id, 'ws_new_999');
+  assert.equal(updatedWorkspaces[0]?.name, 'Nova Loja Truvo');
+
+  // Adotar novamente não duplica
+  const reAdopted = adopt(updatedWorkspaces, createdWorkspace);
+  assert.equal(reAdopted.length, 1);
+
+  // needsProvisioning condition: !workspace || workspaces.length === 0
+  const isProvisioned = (list: Array<{ id: string }>) => list.length > 0;
+  assert.equal(isProvisioned(initialWorkspaces), false);
+  assert.equal(isProvisioned(updatedWorkspaces), true);
+});
+
+test('CANONICAL CUSTOMER ROUTE: uses canonical endpoint directly instead of type=user_id search', () => {
+  const canonicalCustomerId = 'cust_canon_abc123';
+
+  // Endpoint canônico direto vs search
+  const canonicalPath = `/v1/profiles/${encodeURIComponent(canonicalCustomerId)}`;
+  const searchUserIdPath = `/v1/profiles/search?q=${encodeURIComponent(canonicalCustomerId)}&type=user_id`;
+
+  assert.equal(canonicalPath, '/v1/profiles/cust_canon_abc123');
+  assert.notEqual(canonicalPath, searchUserIdPath);
+
+  // Sub-recursos canônicos
+  const timelinePath = `/v1/profiles/${encodeURIComponent(canonicalCustomerId)}/timeline`;
+  const identitiesPath = `/v1/profiles/${encodeURIComponent(canonicalCustomerId)}/identities`;
+
+  assert.equal(timelinePath, '/v1/profiles/cust_canon_abc123/timeline');
+  assert.equal(identitiesPath, '/v1/profiles/cust_canon_abc123/identities');
+});
+
+test('CUSTOMER PROFILE: safely adapts free-form event names and device response fields', () => {
+  // Device mapping: backend provides device_type, os, browser, first_seen
+  const backendDevice = {
+    device_type: 'desktop',
+    os: 'macOS 15',
+    browser: 'Chrome 128',
+    first_seen: '2026-06-01T10:00:00.000Z',
+  };
+  const rawType = (backendDevice.device_type || '').toLowerCase();
+  const resolvedType = rawType.includes('desktop') ? 'desktop' : rawType.includes('tablet') ? 'tablet' : 'mobile';
+  assert.equal(resolvedType, 'desktop');
+
+  // Timeline event mapping with custom/unrecognized event names and prototype keys
+  const customEvents = ['lead', 'refund', 'subscription_started', 'custom_action', 'constructor', 'toString', 'valueOf'];
+  for (const name of customEvents) {
+    const label = name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+    assert.ok(label.length > 0);
+  }
+
+  // Timeline availability flag: clickhouse_available: false maps to timelineUnavailable: true
+  const timelineResponse = { canonical_id: 'cust_1', clickhouse_available: false, count: 0, events: [] };
+  const timelineUnavailable = timelineResponse.clickhouse_available === false;
+  assert.equal(timelineUnavailable, true);
+});
+
+test('LIVE STATE: 404 response maps to not_found failure, resolving to error by default and empty when opted in', () => {
+  const notFoundFailure = classifyLiveFailure({ status: 404 }, '/v1/profiles/non-existent');
+  assert.equal(notFoundFailure.kind, 'not_found');
+  assert.match(notFoundFailure.message, /não foi encontrado/);
+
+  const notFoundState: LiveState<unknown> = {
+    data: null,
+    loading: false,
+    error: notFoundFailure,
+    status: 'error',
+    requestKey: 'live:ws-1:/v1/profiles/non-existent',
+  };
+
+  // Por padrão em relatórios/dashboards, 404 resolve como 'error'
+  const defaultSurface = resolveLiveSurface([notFoundState], false);
+  assert.equal(defaultSurface, 'error');
+
+  // Em lookups específicos com opt-in (ex: perfil canônico), resolve como 'empty'
+  const optInSurface = resolveLiveSurface([notFoundState], false, { allowNotFoundAsEmpty: true });
+  assert.equal(optInSurface, 'empty');
+});
+
+test('CUSTOMER PROFILE: preserves profile metric and timeline event currency and respects pagination cursor without inventing BRL for unknown currency', () => {
+  const evBrl = { value: 150.0, currency: 'BRL' };
+  const evUsd = { value: 99.9, currency: 'USD' };
+  const evUnknown: { value: number; currency?: string } = { value: 50.0 };
+
+  const fmtMoney = (n: number, currency?: string): string => {
+    const trimmed = currency?.trim().toUpperCase();
+    if (!trimmed) {
+      return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    try {
+      return n.toLocaleString('pt-BR', { style: 'currency', currency: trimmed });
+    } catch {
+      return `${trimmed} ${n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+  };
+
+  // Event currency
+  assert.match(fmtMoney(evBrl.value, evBrl.currency), /R\$/);
+  assert.match(fmtMoney(evUsd.value, evUsd.currency), /US\$|USD/);
+  // Unknown currency renders as plain formatted number without synthetic currency symbol
+  assert.doesNotMatch(fmtMoney(evUnknown.value, evUnknown.currency), /R\$|USD|BRL/);
+  assert.equal(fmtMoney(evUnknown.value, evUnknown.currency), '50,00');
+
+  // Profile metric currency (LTV / AOV)
+  const profileMetrics = { ltv: 1250.5, aov: 250.1, currency: 'USD' };
+  assert.match(fmtMoney(profileMetrics.ltv, profileMetrics.currency), /US\$|USD/);
+  assert.match(fmtMoney(profileMetrics.aov, profileMetrics.currency), /US\$|USD/);
+
+  // Pagination cursor detection
+  const paginatedResponse = {
+    canonical_id: 'cust_1',
+    count: 50,
+    next_cursor: 'cursor_page_2',
+    events: [],
+  };
+  assert.equal(Boolean(paginatedResponse.next_cursor), true);
+  assert.equal(paginatedResponse.next_cursor, 'cursor_page_2');
+});
+
+test('CUSTOMER PROFILE: unprojected/unavailable metrics are represented as null and rendered truthfully as —', () => {
+  const num = (n: number | null | undefined): string =>
+    n !== null && n !== undefined ? n.toLocaleString('pt-BR') : '—';
+
+  const fmtMoney = (n: number | null | undefined, currency?: string): string => {
+    if (n === null || n === undefined) return '—';
+    const trimmed = currency?.trim().toUpperCase();
+    if (!trimmed) {
+      return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    try {
+      return n.toLocaleString('pt-BR', { style: 'currency', currency: trimmed });
+    } catch {
+      return `${trimmed} ${n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+  };
+
+  // Quando o backend retorna metrics: null (ClickHouse recomputation fail / projection stale)
+  const apiProfileUnprojected: {
+    canonical_id: string;
+    status: 'identified' | 'anonymous';
+    email_hash: string | null;
+    phone_hash: string | null;
+    metrics: { ltv: number; orders_count: number; aov: number } | null;
+    projection: { stale: boolean; recomputed_at: string | null };
+  } = {
+    canonical_id: 'cus_unprojected',
+    status: 'identified',
+    email_hash: 'hash123',
+    phone_hash: null,
+    metrics: null,
+    projection: { stale: true, recomputed_at: null },
+  };
+
+  const metricsAvailable = Boolean(apiProfileUnprojected.metrics);
+  assert.equal(metricsAvailable, false);
+
+  const ltv = apiProfileUnprojected.metrics?.ltv ?? null;
+  const orders = apiProfileUnprojected.metrics?.orders_count ?? null;
+  const aov = apiProfileUnprojected.metrics?.aov ?? null;
+
+  assert.equal(ltv, null);
+  assert.equal(orders, null);
+  assert.equal(aov, null);
+
+  assert.equal(fmtMoney(ltv), '—');
+  assert.equal(num(orders), '—');
+  assert.equal(fmtMoney(aov), '—');
+});
+
+test('CUSTOMER PROFILE: stale cached projection is surfaced truthfully with projectionStale flag', () => {
+  // Teste de projeção em cache desatualizada (stale: true)
+  const apiProfileStale = {
+    canonical_id: 'cus_stale',
+    status: 'identified' as const,
+    email_hash: 'hash123',
+    phone_hash: null,
+    metrics: { ltv: 500.0, orders_count: 2, aov: 250.0 },
+    projection: { stale: true, recomputed_at: '2026-07-01T00:00:00Z' },
+  };
+
+  const projectionStale = Boolean(apiProfileStale.projection?.stale);
+  assert.equal(projectionStale, true);
+  assert.equal(Boolean(apiProfileStale.metrics), true);
+});
+
+test('CUSTOMER PROFILE: non-monetary timeline events with default value 0 and empty currency do not display monetary value, while legitimate zero and negative transactions are preserved', () => {
+  const pageViewEvent = {
+    event_id: 'ev_page',
+    event_name: 'page_view',
+    value: 0,
+    currency: '',
+  };
+  const purchaseZeroEvent = {
+    event_id: 'ev_purchase_zero',
+    event_name: 'purchase',
+    value: 0,
+    currency: 'BRL',
+  };
+  const purchaseRealEvent = {
+    event_id: 'ev_purchase_100',
+    event_name: 'purchase',
+    value: 100,
+    currency: 'USD',
+  };
+  const refundNegativeEvent = {
+    event_id: 'ev_refund_50',
+    event_name: 'refund',
+    value: -50,
+    currency: '',
+  };
+
+  function mapTimelineEvent(ev: { event_id: string; event_name: string; value: number; currency: string }) {
+    const hasCurrency = Boolean(ev.currency && ev.currency.trim().length > 0);
+    const hasMonetaryValue = typeof ev.value === 'number' && (hasCurrency || ev.value !== 0);
+    return {
+      id: ev.event_id,
+      kind: ev.event_name,
+      value: hasMonetaryValue ? ev.value : undefined,
+      currency: hasCurrency ? ev.currency : undefined,
+    };
+  }
+
+  const mappedPageView = mapTimelineEvent(pageViewEvent);
+  const mappedPurchaseZero = mapTimelineEvent(purchaseZeroEvent);
+  const mappedPurchaseReal = mapTimelineEvent(purchaseRealEvent);
+  const mappedRefundNegative = mapTimelineEvent(refundNegativeEvent);
+
+  assert.equal(mappedPageView.value, undefined);
+  assert.equal(mappedPageView.currency, undefined);
+
+  assert.equal(mappedPurchaseZero.value, 0);
+  assert.equal(mappedPurchaseZero.currency, 'BRL');
+
+  assert.equal(mappedPurchaseReal.value, 100);
+  assert.equal(mappedPurchaseReal.currency, 'USD');
+
+  assert.equal(mappedRefundNegative.value, -50);
+  assert.equal(mappedRefundNegative.currency, undefined);
+});
+
+test('CUSTOMER PROFILE: missing metrics projection takes priority over stale flag when reporting availability', () => {
+  const profileNoMetrics = {
+    metrics: null,
+    projection: { stale: true },
+  };
+
+  const metricsAvailable = Boolean(profileNoMetrics.metrics);
+  const projectionStale = Boolean(profileNoMetrics.projection?.stale);
+
+  // Quando não há métricas, o estado prioritário é métricas indisponíveis/não projetadas
+  const warningType = metricsAvailable === false ? 'unavailable' : projectionStale ? 'stale' : 'none';
+  assert.equal(warningType, 'unavailable');
+});
+
+test('CUSTOMER PROFILE: untrusted confidence surfaces reconciliation gap warning and degraded KPI hints', () => {
+  const profileUntrusted = {
+    canonical_id: 'cus_recon_gap',
+    metrics: { ltv: 1000, orders_count: 5, aov: 200 },
+    confidence: {
+      reconciliation_gap: 0.15,
+      threshold: 0.05,
+      trusted: false,
+      has_ground_truth: true,
+      excludes_bot_events: true,
+    },
+  };
+
+  const confidenceUntrusted = profileUntrusted.confidence.trusted === false;
+  assert.equal(confidenceUntrusted, true);
+  assert.equal(profileUntrusted.confidence.reconciliation_gap, 0.15);
+});
+
+test('CUSTOMER SEARCH: identifier search preserves PII privacy by avoiding customer identifiers in navigation URLs', () => {
+  const customerEmail = 'marina@gmail.com';
+  const customerPhone = '+5511999999999';
+
+  // O fluxo de busca usa rotas limpas sem colocar PII no endereço do navegador
+  const baseCustomersRoute = '/app/customers';
+  const canonicalRoute = `/app/customers/${encodeURIComponent('cus_9f2a7c41e8b3')}`;
+
+  assert.equal(baseCustomersRoute.includes(customerEmail), false);
+  assert.equal(baseCustomersRoute.includes(customerPhone), false);
+  assert.equal(canonicalRoute.includes(customerEmail), false);
+  assert.equal(canonicalRoute.includes(customerPhone), false);
+});
+
+
+

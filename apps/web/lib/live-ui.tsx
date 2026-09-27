@@ -8,6 +8,9 @@ interface LiveDataBoundaryProps {
   states: LiveState<unknown>[];
   empty: boolean;
   label: string;
+  allowNotFoundAsEmpty?: boolean;
+  emptyTitle?: string;
+  emptyDescription?: string;
   children: ReactNode;
 }
 
@@ -19,8 +22,16 @@ const COPY = {
   auth: ['Sessão expirada', 'Entre novamente para continuar.'],
 } as const;
 
-export function LiveDataBoundary({ states, empty, label, children }: LiveDataBoundaryProps) {
-  const surface = resolveLiveSurface(states, empty);
+export function LiveDataBoundary({
+  states,
+  empty,
+  label,
+  allowNotFoundAsEmpty,
+  emptyTitle,
+  emptyDescription,
+  children,
+}: LiveDataBoundaryProps) {
+  const surface = resolveLiveSurface(states, empty, { allowNotFoundAsEmpty });
   if (surface === 'content') return <>{children}</>;
 
   const Icon =
@@ -33,7 +44,9 @@ export function LiveDataBoundary({ states, empty, label, children }: LiveDataBou
           : surface === 'auth'
             ? LogIn
             : AlertTriangle;
-  const [title, description] = COPY[surface];
+  const defaultCopy = COPY[surface];
+  const title = surface === 'empty' && emptyTitle ? emptyTitle : defaultCopy[0];
+  const description = surface === 'empty' && emptyDescription ? emptyDescription : defaultCopy[1];
 
   return (
     <section

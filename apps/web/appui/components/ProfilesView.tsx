@@ -42,6 +42,7 @@ import {
 import { useLive } from '@/lib/live';
 import { LiveDataBoundary } from '@/lib/live-ui';
 import { useSession } from '@/lib/session';
+import { useRouter } from 'next/navigation';
 
 // ----------------------------------------------------------------------------
 // Tipos
@@ -49,7 +50,12 @@ import { useSession } from '@/lib/session';
 
 type IconType = React.ComponentType<{ className?: string }>;
 
-type SearchType = 'email' | 'telefone' | 'user_id' | 'order_id';
+export type SearchType = 'email' | 'telefone' | 'user_id' | 'order_id' | 'device_id' | 'account_id';
+
+export interface CustomerSearchState {
+  q: string;
+  type: SearchType;
+}
 
 type EventKind =
   | 'session_start'
@@ -78,7 +84,8 @@ interface TimelineEvent {
   device: string;
   detail?: string;
   order?: string;
-  value?: number; // BRL
+  value?: number;
+  currency?: string;
   utm?: UtmData;
 }
 
@@ -90,7 +97,8 @@ interface AcquisitionChannel {
 interface CustomerDevice {
   name: string;
   os: string;
-  lastSeen: string; // ISO
+  firstSeen?: string; // ISO
+  lastSeen?: string; // ISO
   type: 'mobile' | 'desktop' | 'tablet';
 }
 
@@ -109,17 +117,25 @@ interface CustomerProfile {
   firstTouch: string;
   lastTouch: string;
   status: CustomerStatus;
-  ltv: number;
-  orders: number;
-  avgTicket: number;
-  sessions: number;
-  events: number;
-  daysSinceFirstTouch: number;
+  metricsAvailable?: boolean;
+  projectionStale?: boolean;
+  confidence?: ApiProfileConfidence | null;
+  confidenceUntrusted?: boolean;
+  ltv: number | null;
+  orders: number | null;
+  avgTicket: number | null;
+  sessions: number | null;
+  events: number | null;
+  daysSinceFirstTouch: number | null;
   tags: string[];
   channels: AcquisitionChannel[];
   deviceList: CustomerDevice[];
   weekly: WeeklyActivity[];
   timeline: TimelineEvent[];
+  timelineUnavailable?: boolean;
+  hasMoreTimeline?: boolean;
+  nextTimelineCursor?: string | null;
+  currency?: string;
 }
 
 // ----------------------------------------------------------------------------
@@ -129,7 +145,21 @@ interface CustomerProfile {
 const brl = (n: number): string =>
   n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-const num = (n: number): string => n.toLocaleString('pt-BR');
+const fmtMoney = (n: number | null | undefined, currency?: string): string => {
+  if (n === null || n === undefined) return '—';
+  const trimmed = currency?.trim().toUpperCase();
+  if (!trimmed) {
+    return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  try {
+    return n.toLocaleString('pt-BR', { style: 'currency', currency: trimmed });
+  } catch {
+    return `${trimmed} ${n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+};
+
+const num = (n: number | null | undefined): string =>
+  n !== null && n !== undefined ? n.toLocaleString('pt-BR') : '—';
 
 const fmtDateTime = (iso: string): string => {
   if (!iso || Number.isNaN(new Date(iso).getTime())) return '—';
@@ -225,6 +255,23 @@ const EVENT_META: Record<EventKind, EventMeta> = {
   },
 };
 
+const DEFAULT_EVENT_META: EventMeta = {
+  label: 'Evento',
+  icon: Activity,
+  ring: 'bg-slate-50 text-slate-600 border-slate-150',
+  dot: 'bg-slate-300',
+};
+
+function getEventMeta(kind: string): EventMeta {
+  if (kind && Object.prototype.hasOwnProperty.call(EVENT_META, kind)) {
+    return EVENT_META[kind as EventKind];
+  }
+  return {
+    ...DEFAULT_EVENT_META,
+    label: kind ? kind.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) : 'Evento',
+  };
+}
+
 const STATUS_META: Record<CustomerStatus, { label: string; cls: string }> = {
   vip: { label: 'VIP', cls: 'bg-teal-100 text-teal-800' },
   ativo: { label: 'Ativo', cls: 'bg-emerald-100 text-emerald-800' },
@@ -252,12 +299,14 @@ const MOCK_PROFILE: CustomerProfile = {
   firstTouch: '2026-06-18T09:12:00',
   lastTouch: '2026-07-18T21:47:00',
   status: 'vip',
+  metricsAvailable: true,
   ltv: 1179.6,
   orders: 3,
   avgTicket: 393.2,
   sessions: 14,
   events: 127,
   daysSinceFirstTouch: 31,
+  currency: 'BRL',
   tags: ['Recompra', 'Alto Ticket', 'Inverno 2026', 'Pix'],
   channels: [
     { label: 'instagram / social', share: 42 },
@@ -383,12 +432,13 @@ const EMPTY_PROFILE: CustomerProfile = {
   firstTouch: '',
   lastTouch: '',
   status: 'novo',
-  ltv: 0,
-  orders: 0,
-  avgTicket: 0,
-  sessions: 0,
-  events: 0,
-  daysSinceFirstTouch: 0,
+  metricsAvailable: false,
+  ltv: null,
+  orders: null,
+  avgTicket: null,
+  sessions: null,
+  events: null,
+  daysSinceFirstTouch: null,
   tags: [],
   channels: [],
   deviceList: [],
@@ -420,6 +470,8 @@ const API_SEARCH_TYPE: Record<SearchType, string> = {
   telefone: 'phone_hash',
   user_id: 'user_id',
   order_id: 'order_id',
+  device_id: 'anonymous_id',
+  account_id: 'user_id',
 };
 
 interface ApiProfileMetrics {
@@ -448,6 +500,89 @@ interface ApiProfileSearchResponse {
   results: ApiProfileCandidate[];
 }
 
+interface ApiProfileDevice {
+  device_id?: string;
+  device_type?: string;
+  os?: string;
+  browser?: string;
+  first_seen?: string;
+  first_seen_at?: string;
+  last_seen_at?: string;
+}
+
+interface ApiProfileView {
+  canonical_id: string;
+  status: 'identified' | 'anonymous';
+  email_hash: string | null;
+  phone_hash: string | null;
+  identity?: {
+    anonymous_ids?: string[];
+    devices?: ApiProfileDevice[];
+    order_ids?: string[];
+    click_ids?: string[];
+  };
+  cross_device_stitched?: boolean;
+  first_touch?: unknown;
+  last_touch?: unknown;
+  created_at?: string | null;
+  last_seen_at?: string | null;
+  metrics?: ApiProfileMetrics | null;
+  confidence?: ApiProfileConfidence | null;
+  projection?: {
+    recomputed_at?: string | null;
+    stale?: boolean;
+  };
+}
+
+interface ApiProfileConfidence {
+  reconciliation_gap?: number | null;
+  threshold?: number;
+  trusted?: boolean;
+  has_ground_truth?: boolean;
+  excludes_bot_events?: boolean;
+}
+
+interface ApiTimelineItem {
+  event_id: string;
+  event_name: string;
+  source: string;
+  timestamp: string | null;
+  day: string | null;
+  order_id: string | null;
+  value: number;
+  currency: string;
+  context?: {
+    utm_source?: string;
+    utm_medium?: string;
+    utm_campaign?: string;
+    device_type?: string;
+    os?: string;
+  };
+}
+
+interface ApiTimelineResponse {
+  canonical_id: string;
+  clickhouse_available?: boolean;
+  count?: number;
+  next_cursor?: string | null;
+  events?: ApiTimelineItem[];
+  groups?: Array<{ day: string; count: number; events: ApiTimelineItem[] }>;
+}
+
+interface ApiIdentitiesResponse {
+  canonical_id: string;
+  status: 'identified' | 'anonymous';
+  email_hashes?: string[];
+  phone_hashes?: string[];
+  identity?: {
+    anonymous_ids?: string[];
+    user_ids?: string[];
+    order_ids?: string[];
+    click_ids?: string[];
+    devices?: ApiProfileDevice[];
+  };
+}
+
 /** Encurta um hash para exibição (font-mono) sem quebrar em null. */
 const shortHash = (h: string | null | undefined): string =>
   h ? `${h.slice(0, 12)}…` : '—';
@@ -459,6 +594,7 @@ const shortHash = (h: string | null | undefined): string =>
 function adaptCandidate(c: ApiProfileCandidate): CustomerProfile {
   const m = c.metrics;
   const identified = c.status === 'identified';
+  const metricsAvailable = Boolean(m);
 
   const tags: string[] = [];
   if (identified) tags.push('Identificado');
@@ -475,17 +611,101 @@ function adaptCandidate(c: ApiProfileCandidate): CustomerProfile {
     firstTouch: c.first_seen_at ?? '',
     lastTouch: c.last_seen_at ?? '',
     status: identified ? 'ativo' : 'novo',
-    ltv: m?.ltv ?? 0,
-    orders: m?.orders_count ?? 0,
-    avgTicket: m?.aov ?? 0,
-    sessions: m?.sessions_count ?? 0,
-    events: m?.events_count ?? 0,
-    daysSinceFirstTouch: m?.days_since_first_touch ?? 0,
+    metricsAvailable,
+    ltv: m?.ltv ?? null,
+    orders: m?.orders_count ?? null,
+    avgTicket: m?.aov ?? null,
+    sessions: m?.sessions_count ?? null,
+    events: m?.events_count ?? null,
+    daysSinceFirstTouch: m?.days_since_first_touch ?? null,
     tags,
     channels: [],
     deviceList: [],
     weekly: [],
     timeline: [],
+    currency: m?.currency || undefined,
+  };
+}
+
+function adaptCanonicalProfile(
+  p: ApiProfileView,
+  timeline?: ApiTimelineResponse | null,
+  identities?: ApiIdentitiesResponse | null,
+): CustomerProfile {
+  const m = p.metrics;
+  const identified = p.status === 'identified';
+  const metricsAvailable = Boolean(m);
+  const tags: string[] = [];
+  if (identified) tags.push('Identificado');
+  else tags.push('Anônimo');
+  if ((m?.orders_count ?? 0) > 0) tags.push('Comprador');
+  if (p.cross_device_stitched) tags.push('Cross-device');
+
+  const rawEvents: ApiTimelineItem[] = timeline?.events ?? (timeline?.groups ? timeline.groups.flatMap((g) => g.events) : []);
+  const mappedTimeline: TimelineEvent[] = rawEvents.map((ev) => {
+    const hasCurrency = Boolean(ev.currency && ev.currency.trim().length > 0);
+    const hasMonetaryValue = typeof ev.value === 'number' && (hasCurrency || ev.value !== 0);
+    return {
+      id: ev.event_id,
+      kind: (ev.event_name as EventKind) || 'page_view',
+      timestamp: ev.timestamp || '',
+      device: ev.context?.device_type ? `${ev.context.device_type} · ${ev.context.os || ''}` : 'Dispositivo desconhecido',
+      detail: `Evento: ${ev.event_name}${ev.source ? ` (${ev.source})` : ''}`,
+      order: ev.order_id || undefined,
+      value: hasMonetaryValue ? (ev.value as number) : undefined,
+      currency: hasCurrency ? (ev.currency as string) : undefined,
+      utm: ev.context ? { source: ev.context.utm_source, medium: ev.context.utm_medium, campaign: ev.context.utm_campaign } : undefined,
+    };
+  });
+
+  const rawDevices = identities?.identity?.devices || p.identity?.devices || [];
+  const mappedDevices = rawDevices.map((d, i) => {
+    const rawType = (d.device_type || '').toLowerCase();
+    const type: 'mobile' | 'desktop' | 'tablet' =
+      rawType.includes('desktop') ? 'desktop' : rawType.includes('tablet') ? 'tablet' : 'mobile';
+    const firstSeen = d.first_seen || d.first_seen_at || undefined;
+    const lastSeen = d.last_seen_at || undefined;
+    return {
+      name: `Dispositivo ${i + 1}`,
+      os: `${d.os || 'OS'} · ${d.browser || 'Browser'}`,
+      firstSeen,
+      lastSeen,
+      type,
+    };
+  });
+
+  const confidence = p.confidence;
+  const confidenceUntrusted = confidence ? confidence.trusted === false : false;
+
+  return {
+    name: identified ? 'Perfil Identificado' : 'Visitante Anônimo',
+    initials: identified ? 'ID' : 'AN',
+    canonicalId: p.canonical_id ?? '—',
+    emailMasked: shortHash(p.email_hash || identities?.email_hashes?.[0]),
+    phoneMasked: shortHash(p.phone_hash || identities?.phone_hashes?.[0]),
+    devices: mappedDevices.length || identities?.identity?.anonymous_ids?.length || p.identity?.anonymous_ids?.length || 0,
+    firstTouch: p.created_at ?? '',
+    lastTouch: p.last_seen_at ?? '',
+    status: identified ? 'ativo' : 'novo',
+    metricsAvailable,
+    projectionStale: p.projection?.stale ?? false,
+    confidence,
+    confidenceUntrusted,
+    ltv: m?.ltv ?? null,
+    orders: m?.orders_count ?? null,
+    avgTicket: m?.aov ?? null,
+    sessions: m?.sessions_count ?? null,
+    events: m?.events_count ?? null,
+    daysSinceFirstTouch: m?.days_since_first_touch ?? null,
+    tags,
+    channels: [],
+    deviceList: mappedDevices,
+    weekly: [],
+    timeline: mappedTimeline,
+    timelineUnavailable: timeline ? timeline.clickhouse_available === false : false,
+    hasMoreTimeline: Boolean(timeline?.next_cursor),
+    nextTimelineCursor: timeline?.next_cursor || null,
+    currency: m?.currency || undefined,
   };
 }
 
@@ -529,20 +749,24 @@ function UtmChip({ prefix, value }: { prefix: string; value: string }) {
 // Componente principal
 // ----------------------------------------------------------------------------
 
-export default function ProfilesView({ initialCustomerId }: { initialCustomerId?: string } = {}) {
-  const [query, setQuery] = useState<string>(() => initialCustomerId || '');
-  const [searchType, setSearchType] = useState<SearchType>(() => (initialCustomerId ? 'user_id' : 'email'));
+export default function ProfilesView({
+  initialCustomerId,
+}: {
+  initialCustomerId?: string;
+} = {}) {
+  const [canonicalId, setCanonicalId] = useState<string | null>(() => initialCustomerId || null);
+  const [query, setQuery] = useState<string>('');
+  const [searchType, setSearchType] = useState<SearchType>('email');
   // Estado da simulação demo (loading/resultado). Em 'live' o gating vem do fetch.
   const [demoLoading, setDemoLoading] = useState<boolean>(false);
   const [demoHasResult, setDemoHasResult] = useState<boolean>(() => Boolean(initialCustomerId));
   const [order, setOrder] = useState<'recent' | 'chrono'>('recent');
   const [copied, setCopied] = useState<boolean>(false);
-  // Busca submetida (dispara o useLive). null até o primeiro "Buscar".
-  const [submitted, setSubmitted] = useState<{ q: string; type: SearchType } | null>(() =>
-    initialCustomerId ? { q: initialCustomerId, type: 'user_id' } : null,
-  );
+  // Busca submetida (dispara o useLive de busca quando não há canonicalId direto).
+  const [submittedSearch, setSubmittedSearch] = useState<CustomerSearchState | null>(null);
 
   const { isLive } = useSession();
+  const router = useRouter();
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -554,22 +778,112 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
     };
   }, []);
 
-  // Live usa apenas o resultado submetido; demo seleciona o perfil sintético explicitamente.
-  const livePath = submitted
-    ? `/v1/profiles/search?q=${encodeURIComponent(submitted.q)}&type=${API_SEARCH_TYPE[submitted.type]}`
+  // Sincroniza canonicalId quando a rota/parâmetro initialCustomerId muda:
+  useEffect(() => {
+    if (initialCustomerId) {
+      setCanonicalId(initialCustomerId);
+      setSubmittedSearch(null);
+    } else {
+      setCanonicalId(null);
+    }
+  }, [initialCustomerId]);
+
+  // Sincroniza canonicalId com o histórico do navegador (botão Voltar/Avançar):
+  useEffect(() => {
+    const handlePopState = () => {
+      if (typeof window !== 'undefined') {
+        if (window.location.pathname.startsWith('/app/customers/')) {
+          const parts = window.location.pathname.split('/app/customers/');
+          const id = parts[1] ? decodeURIComponent(parts[1]) : null;
+          setCanonicalId(id || null);
+          setSubmittedSearch(null);
+        } else if (window.location.pathname === '/app/customers') {
+          setCanonicalId(null);
+          setSubmittedSearch(null);
+        }
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // 1. Resolução canônica direta (/app/customers/:canonicalId):
+  const canonicalPath = canonicalId ? `/v1/profiles/${encodeURIComponent(canonicalId)}` : null;
+  const canonicalProfileLive = useLive<ApiProfileView>(canonicalPath, [canonicalId]);
+  const canonicalTimelineLive = useLive<ApiTimelineResponse>(
+    canonicalId ? `/v1/profiles/${encodeURIComponent(canonicalId)}/timeline` : null,
+    [canonicalId],
+  );
+  const canonicalIdentitiesLive = useLive<ApiIdentitiesResponse>(
+    canonicalId ? `/v1/profiles/${encodeURIComponent(canonicalId)}/identities` : null,
+    [canonicalId],
+  );
+
+  // 2. Busca por identificador (/v1/profiles/search?q=&type=):
+  const searchPath = submittedSearch
+    ? `/v1/profiles/search?q=${encodeURIComponent(submittedSearch.q)}&type=${API_SEARCH_TYPE[submittedSearch.type]}`
     : null;
-  const search = useLive<ApiProfileSearchResponse>(livePath, [submitted?.q, submitted?.type]);
+  const searchLive = useLive<ApiProfileSearchResponse>(searchPath, [submittedSearch?.q, submittedSearch?.type]);
 
-  const candidate = isLive && search.status === 'success' ? (search.data?.results?.[0] ?? null) : null;
-  const profile = search.status === 'demo'
-    ? MOCK_PROFILE
-    : candidate
-      ? adaptCandidate(candidate)
-      : EMPTY_PROFILE;
+  // Quando a busca encontra um candidato, adota o canonical_id, limpa a busca pendente e navega via router:
+  useEffect(() => {
+    if (isLive && submittedSearch && searchLive.status === 'success' && searchLive.data?.results?.length) {
+      const candidate = searchLive.data.results[0];
+      setSubmittedSearch(null);
+      if (candidate?.canonical_id && candidate.canonical_id !== canonicalId) {
+        setCanonicalId(candidate.canonical_id);
+        if (typeof window !== 'undefined' && window.location.pathname.startsWith('/app/customers')) {
+          try {
+            router.push(`/app/customers/${encodeURIComponent(candidate.canonical_id)}`);
+          } catch {
+            // fallback
+          }
+        }
+      }
+    }
+  }, [isLive, submittedSearch, searchLive.status, searchLive.data, canonicalId, router]);
 
-  // Gating do render: em 'live' derivado do fetch; em demo, da simulação.
-  const liveLoading = !!submitted && search.status === 'loading';
-  const liveHasResult = search.status === 'success' && !!search.data?.results?.length;
+  const profile: CustomerProfile = useMemo(() => {
+    if (!isLive) {
+      return (demoHasResult || initialCustomerId) ? MOCK_PROFILE : EMPTY_PROFILE;
+    }
+    if (canonicalProfileLive.status === 'success' && canonicalProfileLive.data) {
+      return adaptCanonicalProfile(
+        canonicalProfileLive.data,
+        canonicalTimelineLive.data,
+        canonicalIdentitiesLive.data,
+      );
+    }
+    if (searchLive.status === 'success' && searchLive.data?.results?.[0]) {
+      return adaptCandidate(searchLive.data.results[0]);
+    }
+    return EMPTY_PROFILE;
+  }, [
+    isLive,
+    demoHasResult,
+    initialCustomerId,
+    canonicalProfileLive.status,
+    canonicalProfileLive.data,
+    canonicalTimelineLive.data,
+    canonicalIdentitiesLive.data,
+    searchLive.status,
+    searchLive.data,
+  ]);
+
+  const activeStates = canonicalId
+    ? [canonicalProfileLive, canonicalTimelineLive, canonicalIdentitiesLive]
+    : submittedSearch
+      ? [searchLive]
+      : [];
+
+  const liveLoading = canonicalId
+    ? canonicalProfileLive.status === 'loading' || canonicalTimelineLive.status === 'loading' || canonicalIdentitiesLive.status === 'loading'
+    : !!submittedSearch && searchLive.status === 'loading';
+
+  const liveHasResult = canonicalId
+    ? canonicalProfileLive.status === 'success' && !!canonicalProfileLive.data
+    : searchLive.status === 'success' && !!searchLive.data?.results?.length;
+
   const loading = isLive ? liveLoading : demoLoading;
   const hasResult = isLive ? liveHasResult && !liveLoading : demoHasResult;
 
@@ -577,7 +891,10 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
     const q = query.trim();
     if (!q) return;
     if (timerRef.current) clearTimeout(timerRef.current);
-    setSubmitted({ q, type: searchType });
+    if (canonicalId) {
+      setCanonicalId(null);
+    }
+    setSubmittedSearch({ q, type: searchType });
     if (!isLive) {
       setDemoLoading(true);
       setDemoHasResult(false);
@@ -594,10 +911,14 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
   };
 
   const handleExample = (type: SearchType, value: string): void => {
+    const q = value.trim();
     setSearchType(type);
     setQuery(value);
     if (timerRef.current) clearTimeout(timerRef.current);
-    setSubmitted({ q: value.trim(), type });
+    if (canonicalId) {
+      setCanonicalId(null);
+    }
+    setSubmittedSearch({ q, type });
     if (!isLive) {
       setDemoLoading(true);
       setDemoHasResult(false);
@@ -633,8 +954,20 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
 
   return (
     <LiveDataBoundary
-      states={submitted ? [search] : []}
-      empty={!!submitted && search.status === 'success' && !candidate}
+      states={activeStates}
+      allowNotFoundAsEmpty={Boolean(canonicalId && canonicalProfileLive.error?.kind === 'not_found')}
+      empty={
+        canonicalId
+          ? (canonicalProfileLive.status === 'success' && !canonicalProfileLive.data) ||
+            canonicalProfileLive.error?.kind === 'not_found'
+          : !!submittedSearch && searchLive.status === 'success' && !searchLive.data?.results?.length
+      }
+      emptyTitle={canonicalId ? 'Cliente não encontrado' : 'Nenhum cliente encontrado'}
+      emptyDescription={
+        canonicalId
+          ? 'Nenhum perfil com este ID canônico foi localizado neste workspace.'
+          : 'Nenhum resultado encontrado para o identificador informado.'
+      }
       label="Busca de perfil"
     >
     <div className="space-y-6">
@@ -829,49 +1162,79 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
             )}
           </div>
 
+          {/* Aviso se métricas não foram projetadas, projeção desatualizada ou gap de reconciliação */}
+          {profile.metricsAvailable === false ? (
+            <div
+              className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2 font-mono"
+              role="region"
+              aria-label="Aviso de disponibilidade de métricas"
+            >
+              <Activity className="w-4 h-4 shrink-0 text-amber-600" />
+              <span>Métricas e KPIs de receita temporariamente indisponíveis (projeção em processamento ou não recalculada).</span>
+            </div>
+          ) : profile.projectionStale ? (
+            <div
+              className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2 font-mono"
+              role="region"
+              aria-label="Aviso de projeção desatualizada"
+            >
+              <Activity className="w-4 h-4 shrink-0 text-amber-600" />
+              <span>Métricas e KPIs baseados em projeção em cache desatualizada (reprocessamento de eventos pendente).</span>
+            </div>
+          ) : profile.confidenceUntrusted ? (
+            <div
+              className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2 font-mono"
+              role="region"
+              aria-label="Aviso de gap de reconciliação"
+            >
+              <Activity className="w-4 h-4 shrink-0 text-amber-600" />
+              <span>Métricas sob incerteza: gap de reconciliação com o gateway acima do limiar ({typeof profile.confidence?.reconciliation_gap === 'number' ? `${(profile.confidence.reconciliation_gap * 100).toFixed(1)}%` : 'inconsistente'}).</span>
+            </div>
+          ) : null}
+
           {/* KPI row */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
             <KpiCard
               label="LTV"
-              value={brl(profile.ltv)}
+              value={fmtMoney(profile.ltv, profile.currency)}
               icon={DollarSign}
-              accent="text-emerald-500"
-              hint="Receita total atribuída"
+              accent={profile.metricsAvailable === false ? 'text-slate-400' : profile.projectionStale || profile.confidenceUntrusted ? 'text-amber-500' : 'text-emerald-500'}
+              hint={profile.metricsAvailable === false ? 'Não projetado' : profile.projectionStale ? 'Projeção desatualizada' : profile.confidenceUntrusted ? 'Incerteza na reconciliação' : 'Receita total atribuída'}
             />
             <KpiCard
               label="Pedidos"
               value={num(profile.orders)}
               icon={ShoppingBag}
-              accent="text-teal-500"
-              hint="Compras concluídas"
+              accent={profile.metricsAvailable === false ? 'text-slate-400' : profile.projectionStale || profile.confidenceUntrusted ? 'text-amber-500' : 'text-teal-500'}
+              hint={profile.metricsAvailable === false ? 'Não projetado' : profile.projectionStale ? 'Projeção desatualizada' : profile.confidenceUntrusted ? 'Incerteza na reconciliação' : 'Compras concluídas'}
             />
             <KpiCard
               label="Ticket Médio"
-              value={brl(profile.avgTicket)}
+              value={fmtMoney(profile.avgTicket, profile.currency)}
               icon={Receipt}
-              accent="text-teal-500"
-              hint="LTV / pedidos"
+              accent={profile.metricsAvailable === false ? 'text-slate-400' : profile.projectionStale || profile.confidenceUntrusted ? 'text-amber-500' : 'text-teal-500'}
+              hint={profile.metricsAvailable === false ? 'Não projetado' : profile.projectionStale ? 'Projeção desatualizada' : profile.confidenceUntrusted ? 'Incerteza na reconciliação' : 'LTV / pedidos'}
             />
             <KpiCard
               label="Sessões"
               value={num(profile.sessions)}
               icon={Activity}
               accent="text-slate-400"
-              hint="Visitas rastreadas"
+              hint={profile.metricsAvailable === false ? 'Não projetado' : profile.projectionStale ? 'Projeção desatualizada' : 'Visitas rastreadas'}
             />
             <KpiCard
               label="Eventos"
               value={num(profile.events)}
               icon={MousePointerClick}
               accent="text-slate-400"
-              hint={`${profile.timeline.length} recentes`}
+              hint={profile.metricsAvailable === false ? 'Não projetado' : profile.projectionStale ? 'Projeção desatualizada' : `${profile.timeline.length} recentes`}
             />
             <KpiCard
               label="Dias 1º Toque"
               value={num(profile.daysSinceFirstTouch)}
               icon={CalendarDays}
               accent="text-slate-400"
-              hint="Tempo de relacionamento"
+              hint={profile.metricsAvailable === false ? 'Não projetado' : profile.projectionStale ? 'Projeção desatualizada' : 'Tempo de relacionamento'}
             />
           </div>
 
@@ -898,9 +1261,20 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
                 </button>
               </div>
 
+              {profile.timelineUnavailable && (
+                <div
+                  className="mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2 font-mono"
+                  role="region"
+                  aria-label="Aviso de disponibilidade de eventos"
+                >
+                  <Activity className="w-4 h-4 shrink-0 text-amber-600" />
+                  <span>Armazenamento de eventos (ClickHouse) temporariamente indisponível. A linha do tempo pode estar incompleta.</span>
+                </div>
+              )}
+
               <ol className="relative">
                 {orderedTimeline.map((ev, idx) => {
-                  const meta = EVENT_META[ev.kind];
+                  const meta = getEventMeta(ev.kind);
                   const Icon = meta.icon;
                   const isLast = idx === orderedTimeline.length - 1;
                   return (
@@ -945,7 +1319,7 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
                               }`}
                             >
                               {ev.kind === 'purchase' ? '+' : ''}
-                              {brl(ev.value)}
+                              {fmtMoney(ev.value, ev.currency)}
                             </span>
                           )}
                         </div>
@@ -969,6 +1343,13 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
                   );
                 })}
               </ol>
+
+              {profile.hasMoreTimeline && (
+                <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 font-mono">
+                  <span>Mostrando os 50 eventos mais recentes deste cliente.</span>
+                  <span className="text-[11px] bg-slate-100 text-slate-600 px-2 py-1 rounded-md">Mais histórico disponível</span>
+                </div>
+              )}
             </div>
 
             {/* Rail lateral */}
@@ -1061,7 +1442,7 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
                           </span>
                         </div>
                         <span className="text-[9px] font-mono text-slate-400 shrink-0 text-right">
-                          {fmtDate(d.lastSeen)}
+                          {d.lastSeen ? fmtDate(d.lastSeen) : d.firstSeen ? `1º toque ${fmtDate(d.firstSeen)}` : ''}
                         </span>
                       </div>
                     );

@@ -452,6 +452,7 @@ export interface DataStateProps {
   label: string;
   emptyTitle?: string;
   emptyDescription?: string;
+  allowNotFoundAsEmpty?: boolean;
   onRetry?: () => void;
   children: ReactNode;
 }
@@ -462,6 +463,7 @@ export function DataState({
   label,
   emptyTitle,
   emptyDescription,
+  allowNotFoundAsEmpty = false,
   onRetry,
   children,
 }: DataStateProps) {
@@ -469,12 +471,16 @@ export function DataState({
   const isLoading = states.some((s) => s.status === 'loading');
   const isAuth = firstError?.kind === 'auth';
   const isPermission = firstError?.kind === 'permission';
+  const isNotFound = firstError?.kind === 'not_found';
 
   if (isAuth) {
     return <PermissionState kind="auth" title={firstError?.message} />;
   }
   if (isPermission) {
     return <PermissionState kind="permission" title={firstError?.message} />;
+  }
+  if (isNotFound && allowNotFoundAsEmpty) {
+    return <EmptyState title={emptyTitle ?? 'Registro não encontrado'} description={emptyDescription ?? firstError?.message} label={label} />;
   }
   if (firstError) {
     return <ErrorState error={firstError} onRetry={onRetry} label={label} />;
