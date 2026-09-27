@@ -63,6 +63,37 @@ test('GOLDEN E2E: complete 9-step canonical journey on deterministic demo worksp
     assert.equal(accounts[1].name, 'InovaTech Labs');
     assert.equal(accounts[0].provider_namespace, 'hubspot');
 
+    // Step 3c: Connector Provenance Verification (matching provider connections)
+    const connections = await db.execute(sql`
+      select id, provider, role, display_name
+      from connector_connections
+      where workspace_id = ${GOLDEN_WS}
+      order by provider asc
+    `) as Array<{ id: string; provider: string; role: string; display_name: string }>;
+    assert.equal(connections.length, 5, 'Must seed dedicated source and destination connections');
+    assert.ok(connections.some((c) => c.provider === 'shopify' && c.role === 'source'));
+    assert.ok(connections.some((c) => c.provider === 'stripe' && c.role === 'source'));
+    assert.ok(connections.some((c) => c.provider === 'klaviyo' && c.role === 'source'));
+    assert.ok(connections.some((c) => c.provider === 'hubspot' && c.role === 'source'));
+
+    // Check subscriptions reference Stripe connection
+    const [subConn] = await db.execute(sql`
+      select distinct c.provider
+      from billing_context_subscriptions s
+      join connector_connections c on c.workspace_id = s.workspace_id and c.id = s.connection_id
+      where s.workspace_id = ${GOLDEN_WS}
+    `) as Array<{ provider: string }>;
+    assert.equal(subConn?.provider, 'stripe', 'Subscriptions must reference Stripe source connection');
+
+    // Check engagement events reference Klaviyo connection
+    const [engConn] = await db.execute(sql`
+      select distinct c.provider
+      from engagement_events e
+      join connector_connections c on c.workspace_id = e.workspace_id and c.id = e.connection_id
+      where e.workspace_id = ${GOLDEN_WS}
+    `) as Array<{ provider: string }>;
+    assert.equal(engConn?.provider, 'klaviyo', 'Engagement events must reference Klaviyo source connection');
+
     // Step 4: Anonymous -> Known Identity Merge Verification (Canonical Table: identity_merge_events)
     const [mergeEvent] = await db.execute(sql`
       select id, source_customer_id, target_customer_id, operation

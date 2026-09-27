@@ -168,6 +168,8 @@ export class QaDemoWorkspaceService {
 
     // 3. Connectors: Sources and Destination
     const connectionSourceId = `conn_source_${workspaceId.slice(-6)}`;
+    const connectionBillingId = `conn_billing_${workspaceId.slice(-6)}`;
+    const connectionMarketingId = `conn_marketing_${workspaceId.slice(-6)}`;
     const connectionCrmId = `conn_crm_${workspaceId.slice(-6)}`;
     const connectionDestId = `conn_dest_${workspaceId.slice(-6)}`;
 
@@ -177,6 +179,8 @@ export class QaDemoWorkspaceService {
       )
       values
         (${workspaceId}, ${connectionSourceId}, 'shopify', 'source', 'Shopify Demo Store', 'healthy', 'valid', '["read","initial_backfill"]'::jsonb),
+        (${workspaceId}, ${connectionBillingId}, 'stripe', 'source', 'Stripe Demo Billing', 'healthy', 'valid', '["read","billing_sync"]'::jsonb),
+        (${workspaceId}, ${connectionMarketingId}, 'klaviyo', 'source', 'Klaviyo Demo Marketing', 'healthy', 'valid', '["read","events_sync"]'::jsonb),
         (${workspaceId}, ${connectionCrmId}, 'hubspot', 'source', 'HubSpot Demo CRM', 'healthy', 'valid', '["read","crm_sync"]'::jsonb),
         (${workspaceId}, ${connectionDestId}, ${FAKE_PROVIDER}, 'destination', 'Demo Destination Sync', 'healthy', 'valid', '["outbound_audience","sync"]'::jsonb)
       on conflict (workspace_id, id) do update set provider = excluded.provider, capabilities = excluded.capabilities
@@ -330,7 +334,7 @@ export class QaDemoWorkspaceService {
               provider_subscription_id, status, current_period_end, source_updated_at
             )
             values (
-              ${workspaceId}, ${sub.id}, ${connectionSourceId}, ${cust.id}, 'stripe',
+              ${workspaceId}, ${sub.id}, ${connectionBillingId}, ${cust.id}, 'stripe',
               ${sub.providerSubscriptionId}, ${sub.status}, ${sub.currentPeriodEnd}, ${fixedClock}
             )
             on conflict (workspace_id, id) do nothing
@@ -348,7 +352,7 @@ export class QaDemoWorkspaceService {
               provider_event_id, metric_name, engagement_kind, occurred_at
             )
             values (
-              ${workspaceId}, ${`evt_${workspaceId.slice(-6)}_${evt.providerEventId}`}, ${connectionDestId}, ${cust.id}, 'klaviyo',
+              ${workspaceId}, ${`evt_${workspaceId.slice(-6)}_${evt.providerEventId}`}, ${connectionMarketingId}, ${cust.id}, 'klaviyo',
               ${evt.providerEventId}, ${evt.metricName}, ${evt.engagementKind},
               ${evt.occurredAt}
             )
@@ -662,11 +666,11 @@ export class QaDemoWorkspaceService {
       await tx.execute(sql`delete from crm_associations where workspace_id = ${workspaceId}`);
       await tx.execute(sql`delete from crm_deals where workspace_id = ${workspaceId}`);
       await tx.execute(sql`delete from crm_accounts where workspace_id = ${workspaceId}`);
-      await tx.execute(sql`delete from connector_connections where workspace_id = ${workspaceId}`);
       await tx.execute(sql`delete from engagement_events where workspace_id = ${workspaceId}`);
       await tx.execute(sql`delete from billing_context_subscriptions where workspace_id = ${workspaceId}`);
       await tx.execute(sql`delete from commerce_order_line_items where workspace_id = ${workspaceId}`);
       await tx.execute(sql`delete from commerce_orders where workspace_id = ${workspaceId}`);
+      await tx.execute(sql`delete from connector_connections where workspace_id = ${workspaceId}`);
       await tx.execute(sql`delete from identity_links where workspace_id = ${workspaceId}`);
       await tx.execute(sql`delete from identity_merges where workspace_id = ${workspaceId}`);
       await tx.execute(sql`delete from identity_merge_events where workspace_id = ${workspaceId}`);
