@@ -508,7 +508,7 @@ test('CUSTOMER PROFILE: stale cached projection is surfaced truthfully with proj
   assert.equal(Boolean(apiProfileStale.metrics), true);
 });
 
-test('CUSTOMER PROFILE: non-monetary timeline events with default value 0 and empty currency do not display monetary value, while legitimate zero transactions with currency are preserved', () => {
+test('CUSTOMER PROFILE: non-monetary timeline events with default value 0 and empty currency do not display monetary value, while legitimate zero and negative transactions are preserved', () => {
   const pageViewEvent = {
     event_id: 'ev_page',
     event_name: 'page_view',
@@ -527,10 +527,16 @@ test('CUSTOMER PROFILE: non-monetary timeline events with default value 0 and em
     value: 100,
     currency: 'USD',
   };
+  const refundNegativeEvent = {
+    event_id: 'ev_refund_50',
+    event_name: 'refund',
+    value: -50,
+    currency: '',
+  };
 
   function mapTimelineEvent(ev: { event_id: string; event_name: string; value: number; currency: string }) {
     const hasCurrency = Boolean(ev.currency && ev.currency.trim().length > 0);
-    const hasMonetaryValue = typeof ev.value === 'number' && (hasCurrency || ev.value > 0);
+    const hasMonetaryValue = typeof ev.value === 'number' && (hasCurrency || ev.value !== 0);
     return {
       id: ev.event_id,
       kind: ev.event_name,
@@ -542,6 +548,7 @@ test('CUSTOMER PROFILE: non-monetary timeline events with default value 0 and em
   const mappedPageView = mapTimelineEvent(pageViewEvent);
   const mappedPurchaseZero = mapTimelineEvent(purchaseZeroEvent);
   const mappedPurchaseReal = mapTimelineEvent(purchaseRealEvent);
+  const mappedRefundNegative = mapTimelineEvent(refundNegativeEvent);
 
   assert.equal(mappedPageView.value, undefined);
   assert.equal(mappedPageView.currency, undefined);
@@ -551,6 +558,9 @@ test('CUSTOMER PROFILE: non-monetary timeline events with default value 0 and em
 
   assert.equal(mappedPurchaseReal.value, 100);
   assert.equal(mappedPurchaseReal.currency, 'USD');
+
+  assert.equal(mappedRefundNegative.value, -50);
+  assert.equal(mappedRefundNegative.currency, undefined);
 });
 
 test('CUSTOMER PROFILE: missing metrics projection takes priority over stale flag when reporting availability', () => {
@@ -565,6 +575,24 @@ test('CUSTOMER PROFILE: missing metrics projection takes priority over stale fla
   // Quando não há métricas, o estado prioritário é métricas indisponíveis/não projetadas
   const warningType = metricsAvailable === false ? 'unavailable' : projectionStale ? 'stale' : 'none';
   assert.equal(warningType, 'unavailable');
+});
+
+test('CUSTOMER PROFILE: untrusted confidence surfaces reconciliation gap warning and degraded KPI hints', () => {
+  const profileUntrusted = {
+    canonical_id: 'cus_recon_gap',
+    metrics: { ltv: 1000, orders_count: 5, aov: 200 },
+    confidence: {
+      reconciliation_gap: 0.15,
+      threshold: 0.05,
+      trusted: false,
+      has_ground_truth: true,
+      excludes_bot_events: true,
+    },
+  };
+
+  const confidenceUntrusted = profileUntrusted.confidence.trusted === false;
+  assert.equal(confidenceUntrusted, true);
+  assert.equal(profileUntrusted.confidence.reconciliation_gap, 0.15);
 });
 
 test('CUSTOMER SEARCH: identifier search preserves PII privacy by avoiding customer identifiers in navigation URLs', () => {

@@ -119,6 +119,8 @@ interface CustomerProfile {
   status: CustomerStatus;
   metricsAvailable?: boolean;
   projectionStale?: boolean;
+  confidence?: ApiProfileConfidence | null;
+  confidenceUntrusted?: boolean;
   ltv: number | null;
   orders: number | null;
   avgTicket: number | null;
@@ -525,11 +527,19 @@ interface ApiProfileView {
   created_at?: string | null;
   last_seen_at?: string | null;
   metrics?: ApiProfileMetrics | null;
-  confidence?: unknown;
+  confidence?: ApiProfileConfidence | null;
   projection?: {
     recomputed_at?: string | null;
     stale?: boolean;
   };
+}
+
+interface ApiProfileConfidence {
+  reconciliation_gap?: number | null;
+  threshold?: number;
+  trusted?: boolean;
+  has_ground_truth?: boolean;
+  excludes_bot_events?: boolean;
 }
 
 interface ApiTimelineItem {
@@ -634,7 +644,7 @@ function adaptCanonicalProfile(
   const rawEvents: ApiTimelineItem[] = timeline?.events ?? (timeline?.groups ? timeline.groups.flatMap((g) => g.events) : []);
   const mappedTimeline: TimelineEvent[] = rawEvents.map((ev) => {
     const hasCurrency = Boolean(ev.currency && ev.currency.trim().length > 0);
-    const hasMonetaryValue = typeof ev.value === 'number' && (hasCurrency || ev.value > 0);
+    const hasMonetaryValue = typeof ev.value === 'number' && (hasCurrency || ev.value !== 0);
     return {
       id: ev.event_id,
       kind: (ev.event_name as EventKind) || 'page_view',
@@ -664,6 +674,9 @@ function adaptCanonicalProfile(
     };
   });
 
+  const confidence = p.confidence;
+  const confidenceUntrusted = confidence ? confidence.trusted === false : false;
+
   return {
     name: identified ? 'Perfil Identificado' : 'Visitante Anônimo',
     initials: identified ? 'ID' : 'AN',
@@ -676,6 +689,8 @@ function adaptCanonicalProfile(
     status: identified ? 'ativo' : 'novo',
     metricsAvailable,
     projectionStale: p.projection?.stale ?? false,
+    confidence,
+    confidenceUntrusted,
     ltv: m?.ltv ?? null,
     orders: m?.orders_count ?? null,
     avgTicket: m?.aov ?? null,
@@ -1147,7 +1162,7 @@ export default function ProfilesView({
             )}
           </div>
 
-          {/* Aviso se métricas não foram projetadas ou se projeção está desatualizada */}
+          {/* Aviso se métricas não foram projetadas, projeção desatualizada ou gap de reconciliação */}
           {profile.metricsAvailable === false ? (
             <div
               className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2 font-mono"
@@ -1166,6 +1181,15 @@ export default function ProfilesView({
               <Activity className="w-4 h-4 shrink-0 text-amber-600" />
               <span>Métricas e KPIs baseados em projeção em cache desatualizada (reprocessamento de eventos pendente).</span>
             </div>
+          ) : profile.confidenceUntrusted ? (
+            <div
+              className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs flex items-center gap-2 font-mono"
+              role="region"
+              aria-label="Aviso de gap de reconciliação"
+            >
+              <Activity className="w-4 h-4 shrink-0 text-amber-600" />
+              <span>Métricas sob incerteza: gap de reconciliação com o gateway acima do limiar ({typeof profile.confidence?.reconciliation_gap === 'number' ? `${(profile.confidence.reconciliation_gap * 100).toFixed(1)}%` : 'inconsistente'}).</span>
+            </div>
           ) : null}
 
           {/* KPI row */}
@@ -1174,22 +1198,22 @@ export default function ProfilesView({
               label="LTV"
               value={fmtMoney(profile.ltv, profile.currency)}
               icon={DollarSign}
-              accent={profile.metricsAvailable === false ? 'text-slate-400' : profile.projectionStale ? 'text-amber-500' : 'text-emerald-500'}
-              hint={profile.metricsAvailable === false ? 'Não projetado' : profile.projectionStale ? 'Projeção desatualizada' : 'Receita total atribuída'}
+              accent={profile.metricsAvailable === false ? 'text-slate-400' : profile.projectionStale || profile.confidenceUntrusted ? 'text-amber-500' : 'text-emerald-500'}
+              hint={profile.metricsAvailable === false ? 'Não projetado' : profile.projectionStale ? 'Projeção desatualizada' : profile.confidenceUntrusted ? 'Incerteza na reconciliação' : 'Receita total atribuída'}
             />
             <KpiCard
               label="Pedidos"
               value={num(profile.orders)}
               icon={ShoppingBag}
-              accent={profile.metricsAvailable === false ? 'text-slate-400' : profile.projectionStale ? 'text-amber-500' : 'text-teal-500'}
-              hint={profile.metricsAvailable === false ? 'Não projetado' : profile.projectionStale ? 'Projeção desatualizada' : 'Compras concluídas'}
+              accent={profile.metricsAvailable === false ? 'text-slate-400' : profile.projectionStale || profile.confidenceUntrusted ? 'text-amber-500' : 'text-teal-500'}
+              hint={profile.metricsAvailable === false ? 'Não projetado' : profile.projectionStale ? 'Projeção desatualizada' : profile.confidenceUntrusted ? 'Incerteza na reconciliação' : 'Compras concluídas'}
             />
             <KpiCard
               label="Ticket Médio"
               value={fmtMoney(profile.avgTicket, profile.currency)}
               icon={Receipt}
-              accent={profile.metricsAvailable === false ? 'text-slate-400' : profile.projectionStale ? 'text-amber-500' : 'text-teal-500'}
-              hint={profile.metricsAvailable === false ? 'Não projetado' : profile.projectionStale ? 'Projeção desatualizada' : 'LTV / pedidos'}
+              accent={profile.metricsAvailable === false ? 'text-slate-400' : profile.projectionStale || profile.confidenceUntrusted ? 'text-amber-500' : 'text-teal-500'}
+              hint={profile.metricsAvailable === false ? 'Não projetado' : profile.projectionStale ? 'Projeção desatualizada' : profile.confidenceUntrusted ? 'Incerteza na reconciliação' : 'LTV / pedidos'}
             />
             <KpiCard
               label="Sessões"
