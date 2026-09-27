@@ -26,6 +26,7 @@ import { RadarsModule } from './modules/radars/radars.module';
 import { OpportunitiesModule } from './modules/opportunities/opportunities.module';
 import { DecisionsModule } from './modules/decisions/decisions.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
+import { QaDemoModule } from './modules/qa-demo/qa-demo.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { OnboardingModule } from './modules/onboarding/onboarding.module';
     OpportunitiesModule,
     DecisionsModule,
     OnboardingModule, // Order 120 — durable guided setup over canonical domains
+    QaDemoModule, // Order 130 — reproducible QA & demo workspace infrastructure
     DataQualityModule,
     FunnelsModule,
     MetricsModule,
