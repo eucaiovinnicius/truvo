@@ -166,6 +166,17 @@ test('GOLDEN E2E: complete 9-step canonical journey on deterministic demo worksp
     assert.equal(radarRow?.status, 'active', 'Persisted radar status in DB must remain active across replays');
     assert.equal(radarRow?.current_model_reference, seedResult.radar.modelVersionId, 'Persisted radar current_model_reference must point to active model');
 
+    // Step 11: Monitoring snapshot cleanup proof (verifies ON DELETE RESTRICT fk is handled)
+    const snapshotId = `snap_test_${Date.now()}`;
+    await db.execute(sql`
+      insert into radar_model_monitoring_snapshots (
+        workspace_id, id, radar_id, model_version_id, snapshot_type, health_status, metrics, anomalies
+      ) values (
+        ${GOLDEN_WS}, ${snapshotId}, ${seedResult.radar.id}, ${seedResult.radar.modelVersionId},
+        'drift_check', 'healthy', '{}'::jsonb, '[]'::jsonb
+      )
+    `);
+
     // Cleanup
     await service.cleanWorkspaceData(GOLDEN_WS);
 
@@ -173,6 +184,11 @@ test('GOLDEN E2E: complete 9-step canonical journey on deterministic demo worksp
       select count(*)::int as count from crm_accounts where workspace_id = ${GOLDEN_WS}
     `) as Array<{ count: number }>;
     assert.equal(residualAccounts?.count, 0, 'Residual crm_accounts must be zero after cleanWorkspaceData');
+
+    const [residualSnapshots] = await db.execute(sql`
+      select count(*)::int as count from radar_model_monitoring_snapshots where workspace_id = ${GOLDEN_WS}
+    `) as Array<{ count: number }>;
+    assert.equal(residualSnapshots?.count, 0, 'Residual radar_model_monitoring_snapshots must be zero after cleanWorkspaceData');
   } finally {
     closeRedis();
     await closeDb(db).catch(() => undefined);

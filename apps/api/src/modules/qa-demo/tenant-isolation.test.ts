@@ -112,6 +112,15 @@ test('TENANT ISOLATION: cross-tenant read denied, mutation denied, runtime scope
       await db.execute(sql`delete from workspaces where id = ${falseDemoWsId}`);
     }
 
+    // Proof 2c: non-allowlisted UUID with prefix like 11111111-xxxx => REJECT
+    const nonAllowlistedPrefixId = '11111111-9999-4999-8999-999999999999';
+    assert.equal(isReservedDemoWorkspaceId(nonAllowlistedPrefixId), false);
+    await assert.rejects(
+      () => service.assertAffirmativeDemoWorkspace(nonAllowlistedPrefixId, 'acme-production-store'),
+      /Safety violation/i,
+      'Non-allowlisted UUID starting with 11111111- must be rejected when not in exact reserved allowlist',
+    );
+
     // Proof 3: reserved demo workspace => ACCEPT
     assert.equal(isReservedDemoWorkspaceId(DEMO_WORKSPACE_DEFAULT_ID), true);
     assert.equal(isExplicitDemoSlug('demo-workspace-0130'), true);
