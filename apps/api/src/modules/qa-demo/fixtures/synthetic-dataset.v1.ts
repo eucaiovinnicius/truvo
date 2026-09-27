@@ -109,14 +109,14 @@ export const SYNTHETIC_DATASET_V1: SyntheticDatasetV1 = {
         {
           providerEventId: 'evt_view_sneaker_001',
           metricName: 'Product Viewed',
-          engagementKind: 'page_view',
+          engagementKind: 'other',
           occurredAt: '2026-08-01T10:00:00.000Z',
           properties: { productId: 'prod_sneaker_pro', durationSeconds: 120 },
         },
         {
           providerEventId: 'evt_cart_add_001',
           metricName: 'Added to Cart',
-          engagementKind: 'cart_add',
+          engagementKind: 'clicked',
           occurredAt: '2026-08-01T10:15:00.000Z',
           properties: { productId: 'prod_sneaker_pro', value: 599.90 },
         },
@@ -151,7 +151,7 @@ export const SYNTHETIC_DATASET_V1: SyntheticDatasetV1 = {
         {
           providerEventId: 'evt_blog_visit_002',
           metricName: 'Blog Article Viewed',
-          engagementKind: 'page_view',
+          engagementKind: 'other',
           occurredAt: '2026-07-28T14:30:00.000Z',
           properties: { path: '/blog/corrida-de-rua-dicas', durationSeconds: 8 },
         },
@@ -217,7 +217,7 @@ export const SYNTHETIC_DATASET_V1: SyntheticDatasetV1 = {
         {
           providerEventId: 'evt_email_click_003',
           metricName: 'Email Clicked',
-          engagementKind: 'click',
+          engagementKind: 'clicked',
           occurredAt: '2026-08-01T09:00:00.000Z',
           properties: { campaign: 'vip_exclusive_preview' },
         },
@@ -258,7 +258,7 @@ export const SYNTHETIC_DATASET_V1: SyntheticDatasetV1 = {
         {
           providerEventId: 'evt_pricing_view_004',
           metricName: 'Upgrade Page Visited',
-          engagementKind: 'page_view',
+          engagementKind: 'clicked',
           occurredAt: '2026-08-01T11:45:00.000Z',
           properties: { targetPlan: 'enterprise' },
         },
@@ -327,7 +327,7 @@ export const SYNTHETIC_DATASET_V1: SyntheticDatasetV1 = {
         {
           providerEventId: 'evt_first_touch_006',
           metricName: 'Page Landed',
-          engagementKind: 'page_view',
+          engagementKind: 'received',
           occurredAt: '2026-08-01T11:59:00.000Z',
           properties: { path: '/' },
         },

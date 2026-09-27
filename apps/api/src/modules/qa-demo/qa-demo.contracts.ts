@@ -59,7 +59,7 @@ export interface PersonaDefinition {
   engagementEvents?: Array<{
     providerEventId: string;
     metricName: string;
-    engagementKind: 'delivery' | 'open' | 'click' | 'bounce' | 'page_view' | 'cart_add';
+    engagementKind: 'received' | 'delivery' | 'opened' | 'clicked' | 'bounced' | 'unsubscribed' | 'marked_spam' | 'other';
     occurredAt: string;
     properties?: Record<string, unknown>;
   }>;

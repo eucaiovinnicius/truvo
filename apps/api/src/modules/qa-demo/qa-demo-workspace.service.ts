@@ -35,6 +35,34 @@ import { getSyntheticDatasetV1, hashContact } from './fixtures/synthetic-dataset
 export const DEMO_WORKSPACE_DEFAULT_ID = '00000000-0000-4000-8000-000000000130';
 export const DEMO_OPERATOR_USER_ID = '00000000-0000-4000-8000-000000000999';
 
+export function isReservedDemoWorkspaceId(workspaceId?: string): boolean {
+  if (!workspaceId) return false;
+  const id = workspaceId.toLowerCase();
+  return (
+    id.startsWith('00000000-0000-4000-8000-') ||
+    id.startsWith('11111111-') ||
+    id.startsWith('22222222-') ||
+    id.startsWith('33333333-') ||
+    id.startsWith('44444444-') ||
+    id.includes('demo') ||
+    id.includes('qa') ||
+    id.includes('test') ||
+    id.includes('golden')
+  );
+}
+
+export function isExplicitDemoSlug(slug?: string): boolean {
+  if (!slug) return false;
+  const s = slug.toLowerCase();
+  return (
+    s.startsWith('demo-') ||
+    s.startsWith('qa-') ||
+    s.startsWith('test-') ||
+    s.includes('demo') ||
+    s.includes('golden')
+  );
+}
+
 @Injectable()
 export class QaDemoWorkspaceService {
   private readonly logger = new Logger(QaDemoWorkspaceService.name);
@@ -50,31 +78,39 @@ export class QaDemoWorkspaceService {
   ) {}
 
   /**
-   * Safety guard: verifies that a workspace is an authorized demo/qa workspace
-   * before performing destructive reset or demo mutations.
+   * Safety guard: verifies affirmative demo/QA identification before any destructive reset
+   * or creation. Never accepts absent slug or generated slug on an arbitrary/production workspace.
    */
-  private assertDemoWorkspaceSafety(workspaceId: string, slug?: string): void {
-    const isSafeId =
-      workspaceId.startsWith('00000000-0000-4000-8000-') ||
-      workspaceId.startsWith('11111111-') ||
-      workspaceId.startsWith('22222222-') ||
-      workspaceId.startsWith('33333333-') ||
-      workspaceId.startsWith('44444444-') ||
-      workspaceId.includes('demo') ||
-      workspaceId.includes('qa') ||
-      workspaceId.includes('test');
+  async assertAffirmativeDemoWorkspace(workspaceId: string, callerSlug?: string): Promise<void> {
+    if (!workspaceId) {
+      throw new BadRequestException('Safety violation: workspaceId is required.');
+    }
 
-    const isSafeSlug =
-      !slug ||
-      slug.startsWith('demo-') ||
-      slug.startsWith('qa-') ||
-      slug.startsWith('test-') ||
-      slug.includes('demo') ||
-      slug.includes('golden');
+    // 1. If workspace already exists in DB, the persisted DB record itself MUST be demo/qa.
+    const existingRows = await this.db.execute<{ id: string; slug: string; name: string }>(sql`
+      select id, slug, name from workspaces where id = ${workspaceId} limit 1
+    `);
+    const existing = existingRows[0];
 
-    if (!isSafeId && !isSafeSlug) {
+    if (existing) {
+      const dbHasDemoId = isReservedDemoWorkspaceId(existing.id);
+      const dbHasDemoSlug = isExplicitDemoSlug(existing.slug);
+      if (!dbHasDemoId && !dbHasDemoSlug) {
+        throw new BadRequestException(
+          `Safety violation: existing workspace "${workspaceId}" (slug: "${existing.slug}") is not an affirmative demo/qa workspace in database. Refusing destructive operations.`,
+        );
+      }
+      return;
+    }
+
+    // 2. If workspace does not exist yet:
+    // It must be a reserved demo ID AND (callerSlug is demo slug OR callerSlug is absent for reserved demo ID)
+    const hasReservedId = isReservedDemoWorkspaceId(workspaceId);
+    const hasExplicitSlug = isExplicitDemoSlug(callerSlug);
+
+    if (!hasReservedId || (callerSlug !== undefined && !hasExplicitSlug)) {
       throw new BadRequestException(
-        `Safety violation: workspace "${workspaceId}" is not identified as a demo/qa workspace. Refusing to operate.`,
+        `Safety violation: workspace "${workspaceId}" (slug: "${callerSlug ?? 'none'}") is not an authorized new demo workspace. Both ID and slug must affirmatively match demo/qa conventions.`,
       );
     }
   }
@@ -84,29 +120,33 @@ export class QaDemoWorkspaceService {
    */
   async createOrResetDemoWorkspace(options: DemoWorkspaceOptions = {}): Promise<DemoWorkspaceSeedResult> {
     const workspaceId = options.workspaceId ?? DEMO_WORKSPACE_DEFAULT_ID;
-    const slug = options.workspaceSlug ?? `demo-workspace-${workspaceId.slice(-4)}`;
+    const [existingWs] = await this.db.execute(sql`
+      select id, slug from workspaces where id = ${workspaceId}
+    `) as Array<{ id: string; slug: string }>;
+    const effectiveSlug = options.workspaceSlug ?? existingWs?.slug ?? `demo-workspace-${workspaceId.slice(-4)}`;
     const name = options.workspaceName ?? 'Truvo Demo Workspace';
     const operatorId = options.operatorUserId ?? DEMO_OPERATOR_USER_ID;
 
-    this.assertDemoWorkspaceSafety(workspaceId, slug);
+    await this.assertAffirmativeDemoWorkspace(workspaceId, options.workspaceSlug ?? existingWs?.slug);
 
     if (options.cleanBeforeSeed !== false) {
-      await this.cleanWorkspaceData(workspaceId);
+      await this.cleanWorkspaceData(workspaceId, effectiveSlug);
     }
 
     const dataset = getSyntheticDatasetV1();
-    const fixedClock = new Date(dataset.fixedClock);
+    const fixedClock = dataset.fixedClock;
 
     // 1. Workspace & Operator User
+    const operatorEmail = `demo-operator-${operatorId}@example.invalid`;
     await this.db.execute(sql`
       insert into users (id, email)
-      values (${operatorId}, 'demo-operator@example.invalid')
+      values (${operatorId}, ${operatorEmail})
       on conflict (id) do update set email = excluded.email
     `);
 
     await this.db.execute(sql`
       insert into workspaces (id, name, slug, created_by)
-      values (${workspaceId}, ${name}, ${slug}, ${operatorId})
+      values (${workspaceId}, ${name}, ${effectiveSlug}, ${operatorId})
       on conflict (id) do update set name = excluded.name, slug = excluded.slug
     `);
 
@@ -140,8 +180,8 @@ export class QaDemoWorkspaceService {
       )
       values
         (${workspaceId}, ${connectionSourceId}, 'shopify', 'source', 'Shopify Demo Store', 'healthy', 'valid', '["read","initial_backfill"]'::jsonb),
-        (${workspaceId}, ${connectionDestId}, 'klaviyo', 'destination', 'Klaviyo Demo Sync', 'healthy', 'valid', '["outbound_audience","sync"]'::jsonb)
-      on conflict (workspace_id, id) do nothing
+        (${workspaceId}, ${connectionDestId}, ${FAKE_PROVIDER}, 'destination', 'Demo Destination Sync', 'healthy', 'valid', '["outbound_audience","sync"]'::jsonb)
+      on conflict (workspace_id, id) do update set provider = excluded.provider, capabilities = excluded.capabilities
     `);
 
     // 4. Seed Personas & Entities
@@ -173,10 +213,10 @@ export class QaDemoWorkspaceService {
       // Customer Identifiers: External ID
       await this.db.execute(sql`
         insert into customer_identifiers (
-          workspace_id, id, customer_id, provider_namespace, identifier_type, identifier_value, source_namespace, observed_at
+          workspace_id, id, customer_id, provider_namespace, identifier_type, identifier_value, source_namespace, first_seen_at, last_seen_at
         )
         values (
-          ${workspaceId}, ${`id_ext_${cust.id}`}, ${cust.id}, 'qa_demo', 'external_id', ${cust.externalId}, 'qa-demo', ${fixedClock}
+          ${workspaceId}, ${`id_ext_${cust.id}`}, ${cust.id}, 'qa_demo', 'external_id', ${cust.externalId}, 'qa-demo', ${fixedClock}, ${fixedClock}
         )
         on conflict (workspace_id, id) do nothing
       `);
@@ -186,10 +226,10 @@ export class QaDemoWorkspaceService {
       const emailHash = hashContact(cust.email);
       await this.db.execute(sql`
         insert into customer_identifiers (
-          workspace_id, id, customer_id, provider_namespace, identifier_type, identifier_value, source_namespace, observed_at
+          workspace_id, id, customer_id, provider_namespace, identifier_type, identifier_value, source_namespace, first_seen_at, last_seen_at
         )
         values (
-          ${workspaceId}, ${`id_email_${cust.id}`}, ${cust.id}, ${LEGACY_IDENTITY_NAMESPACE}, 'email_hash', ${emailHash}, 'qa-demo', ${fixedClock}
+          ${workspaceId}, ${`id_email_${cust.id}`}, ${cust.id}, ${LEGACY_IDENTITY_NAMESPACE}, 'email_hash', ${emailHash}, 'qa-demo', ${fixedClock}, ${fixedClock}
         )
         on conflict (workspace_id, id) do nothing
       `);
@@ -200,10 +240,10 @@ export class QaDemoWorkspaceService {
         const phoneHash = hashContact(cust.phone);
         await this.db.execute(sql`
           insert into customer_identifiers (
-            workspace_id, id, customer_id, provider_namespace, identifier_type, identifier_value, source_namespace, observed_at
+            workspace_id, id, customer_id, provider_namespace, identifier_type, identifier_value, source_namespace, first_seen_at, last_seen_at
           )
           values (
-            ${workspaceId}, ${`id_phone_${cust.id}`}, ${cust.id}, ${LEGACY_IDENTITY_NAMESPACE}, 'phone_hash', ${phoneHash}, 'qa-demo', ${fixedClock}
+            ${workspaceId}, ${`id_phone_${cust.id}`}, ${cust.id}, ${LEGACY_IDENTITY_NAMESPACE}, 'phone_hash', ${phoneHash}, 'qa-demo', ${fixedClock}, ${fixedClock}
           )
           on conflict (workspace_id, id) do nothing
         `);
@@ -212,26 +252,18 @@ export class QaDemoWorkspaceService {
 
       // Customer Traits
       for (const trait of persona.traits) {
-        const traitValue = typeof trait.value === 'object' ? JSON.stringify(trait.value) : String(trait.value);
         await this.db.execute(sql`
           insert into customer_traits (
-            workspace_id, customer_id, trait_namespace, trait_key, value_type,
-            string_value, number_value, boolean_value, json_value, source_namespace, observed_at
+            workspace_id, id, customer_id, trait_namespace, trait_key, value_type,
+            value, source_namespace, observed_at
           )
           values (
-            ${workspaceId}, ${cust.id}, ${trait.namespace}, ${trait.key}, ${trait.valueType},
-            ${trait.valueType === 'string' ? traitValue : null},
-            ${trait.valueType === 'number' ? Number(trait.value) : null},
-            ${trait.valueType === 'boolean' ? Boolean(trait.value) : null},
-            ${trait.valueType === 'json' ? traitValue : null}::jsonb,
-            'qa-demo', ${fixedClock}
+            ${workspaceId}, ${`tr_${cust.id}_${trait.key}`}, ${cust.id}, ${trait.namespace}, ${trait.key}, ${trait.valueType},
+            ${JSON.stringify(trait.value)}::jsonb, 'qa-demo', ${fixedClock}
           )
           on conflict (workspace_id, customer_id, trait_namespace, trait_key)
           do update set
-            string_value = excluded.string_value,
-            number_value = excluded.number_value,
-            boolean_value = excluded.boolean_value,
-            json_value = excluded.json_value,
+            value = excluded.value,
             observed_at = excluded.observed_at
         `);
         traitsCount += 1;
@@ -248,7 +280,7 @@ export class QaDemoWorkspaceService {
             values (
               ${workspaceId}, ${order.id}, ${connectionSourceId}, ${cust.id}, 'shopify',
               ${order.providerOrderId}, ${order.financialStatus}, ${order.currency},
-              ${order.totalAmount}, ${new Date(order.processedAt)}, 'qa-demo'
+              ${order.totalAmount}, ${order.processedAt}, 'qa-demo'
             )
             on conflict (workspace_id, id) do nothing
           `);
@@ -280,7 +312,7 @@ export class QaDemoWorkspaceService {
             )
             values (
               ${workspaceId}, ${sub.id}, ${connectionSourceId}, ${cust.id}, 'stripe',
-              ${sub.providerSubscriptionId}, ${sub.status}, ${new Date(sub.currentPeriodEnd)}, ${fixedClock}
+              ${sub.providerSubscriptionId}, ${sub.status}, ${sub.currentPeriodEnd}, ${fixedClock}
             )
             on conflict (workspace_id, id) do nothing
           `);
@@ -293,13 +325,13 @@ export class QaDemoWorkspaceService {
         for (const evt of persona.engagementEvents) {
           await this.db.execute(sql`
             insert into engagement_events (
-              workspace_id, connection_id, customer_id, provider_namespace,
-              provider_event_id, metric_name, engagement_kind, properties, occurred_at
+              workspace_id, id, connection_id, customer_id, provider_namespace,
+              provider_event_id, metric_name, engagement_kind, occurred_at
             )
             values (
-              ${workspaceId}, ${connectionDestId}, ${cust.id}, 'klaviyo',
+              ${workspaceId}, ${`evt_${workspaceId.slice(-6)}_${evt.providerEventId}`}, ${connectionDestId}, ${cust.id}, 'klaviyo',
               ${evt.providerEventId}, ${evt.metricName}, ${evt.engagementKind},
-              ${JSON.stringify(evt.properties ?? {})}::jsonb, ${new Date(evt.occurredAt)}
+              ${evt.occurredAt}
             )
             on conflict (workspace_id, provider_namespace, provider_event_id) do nothing
           `);
@@ -317,7 +349,7 @@ export class QaDemoWorkspaceService {
           )
           values (
             ${workspaceId}, ${trans.anonymousCustomerId}, 'anonymous', 'qa-demo',
-            ${new Date(trans.transitionedAt)}, ${new Date(trans.transitionedAt)}
+            ${trans.transitionedAt}, ${trans.transitionedAt}
           )
           on conflict (workspace_id, id) do nothing
         `);
@@ -326,12 +358,12 @@ export class QaDemoWorkspaceService {
         await this.db.execute(sql`
           insert into customer_identifiers (
             workspace_id, id, customer_id, provider_namespace, identifier_type,
-            identifier_value, source_namespace, observed_at
+            identifier_value, source_namespace, first_seen_at, last_seen_at
           )
           values (
             ${workspaceId}, ${`id_anon_${trans.anonymousCustomerId}`}, ${trans.anonymousCustomerId},
-            'truvo_pixel', 'cookie_id', ${trans.anonymousIdentifierValue}, 'qa-demo',
-            ${new Date(trans.transitionedAt)}
+            'truvo_pixel', 'anonymous_id', ${trans.anonymousIdentifierValue}, 'qa-demo',
+            ${trans.transitionedAt}, ${trans.transitionedAt}
           )
           on conflict (workspace_id, id) do nothing
         `);
@@ -408,8 +440,15 @@ export class QaDemoWorkspaceService {
       on conflict (workspace_id, id) do nothing
     `);
 
-    // Promote model to active
-    await this.models.promote(workspaceId, radarId, modelId, operatorId, 'demo-workspace-activation');
+    // Promote model to active only if not already active (idempotent for replay)
+    const [existingModel] = await this.db.execute<{ status: string }>(sql`
+      select status from radar_model_versions
+      where workspace_id = ${workspaceId} and id = ${modelId}
+      limit 1
+    `);
+    if (existingModel?.status !== 'active') {
+      await this.models.promote(workspaceId, radarId, modelId, operatorId, 'demo-workspace-activation');
+    }
 
     // 7. Score Batch & Persona Propensities
     const scoreBatchId = `batch_score_${workspaceId.slice(-6)}`;
@@ -417,14 +456,14 @@ export class QaDemoWorkspaceService {
 
     await this.db.execute(sql`
       insert into radar_score_batches (
-        workspace_id, id, radar_id, definition_version, model_version_id,
+        workspace_id, radar_id, definition_version, model_version_id,
         scoring_cutoff, status, scored_customer_count, completed_at
       )
       values (
-        ${workspaceId}, ${scoreBatchId}, ${radarId}, 1, ${modelId},
+        ${workspaceId}, ${radarId}, 1, ${modelId},
         ${scoreCutoff}, 'completed', 5, ${fixedClock}
       )
-      on conflict (workspace_id, id) do nothing
+      on conflict (workspace_id, radar_id, model_version_id, scoring_cutoff) do nothing
     `);
 
     for (const persona of Object.values(dataset.personas)) {
@@ -439,7 +478,7 @@ export class QaDemoWorkspaceService {
             ${scoreCutoff}, ${persona.expectedPropensityScore}, 'propensity-v1',
             ${JSON.stringify([`${persona.type}_signal`])}::jsonb, ${fixedClock}
           )
-          on conflict (workspace_id, radar_id, definition_version, model_version_id, customer_id, scoring_cutoff)
+          on conflict (workspace_id, radar_id, model_version_id, customer_id, scoring_cutoff)
           do update set probability = excluded.probability
         `);
       }
@@ -466,29 +505,39 @@ export class QaDemoWorkspaceService {
       }
     }
     if (decisionBatchId) {
+      const likelyBuyerId = personaCustomerMap.likely_buyer.customerId;
       const [decisionRow] = await this.db.execute(sql`
-        select d.id as decision_id, e.id as execution_id, e.remote_id
+        select d.id as decision_id, d.customer_id, e.id as execution_id, e.remote_id
         from decision_records d
         join action_executions e on e.workspace_id = d.workspace_id and e.decision_id = d.id
-        where d.workspace_id = ${workspaceId} and d.decision_batch_id = ${decisionBatchId}
+        where d.workspace_id = ${workspaceId}
+          and d.decision_batch_id = ${decisionBatchId}
+          and d.customer_id = ${likelyBuyerId}
         limit 1
-      `) as Array<{ decision_id: string; execution_id: string; remote_id: string }>;
+      `) as Array<{ decision_id: string; customer_id: string; execution_id: string; remote_id: string }>;
 
       if (decisionRow) {
-        const likelyBuyerId = personaCustomerMap.likely_buyer.customerId;
+        // Set decision created_at and reward_window_end so outcome fits cleanly inside the closed window
+        await this.db.execute(sql`
+          update decision_records
+          set created_at = now() - interval '10 seconds',
+              reward_window_end = now() - interval '1 millisecond'
+          where workspace_id = ${workspaceId} and id = ${decisionRow.decision_id}
+        `);
+
         // Record exposure
         await this.db.execute(sql`
           insert into exposure_observations (
-            workspace_id, id, decision_id, customer_id, provider_event_id, occurred_at
+            workspace_id, id, decision_id, execution_id, kind, source_confidence, provider_event_id, occurred_at
           )
           values (
             ${workspaceId}, ${`exp_${decisionRow.decision_id}`}, ${decisionRow.decision_id},
-            ${likelyBuyerId}, ${`delivery_evt_${decisionRow.decision_id}`}, ${fixedClock}
+            ${decisionRow.execution_id}, 'delivered', 'high', ${`delivery_evt_${decisionRow.decision_id}`}, now() - interval '8 seconds'
           )
           on conflict do nothing
         `);
 
-        // Record customer outcome (purchase confirmed)
+        // Record customer outcome (purchase confirmed) inside the decision's reward window
         const outcomeEventId = `evt_purchase_${workspaceId.slice(-6)}`;
         await this.db.execute(sql`
           insert into customer_outcomes (
@@ -499,25 +548,20 @@ export class QaDemoWorkspaceService {
             ${workspaceId}, ${`out_${decisionRow.decision_id}`}, ${likelyBuyerId},
             'outcome_purchase', 'canonical', 'purchase',
             ${`order_demo_${workspaceId.slice(-6)}`}, ${outcomeEventId}, 599.90, 'BRL',
-            'qa-demo', '{"provenance":"qa_demo_conversion"}'::jsonb, ${fixedClock}
+            'qa-demo', '{"provenance":"qa_demo_conversion"}'::jsonb, now() - interval '5 seconds'
           )
           on conflict (workspace_id, outcome_namespace, outcome_key, dedupe_key) do nothing
         `);
 
         // Reconcile decision reward
-        await this.db.execute(sql`
-          update decision_records
-          set reward_window_end = greatest(created_at + interval '1 microsecond', now() - interval '1 millisecond')
-          where workspace_id = ${workspaceId} and id = ${decisionRow.decision_id}
-        `);
         await this.decisions.reconcileDecision(workspaceId, decisionRow.decision_id);
       }
     }
 
     return {
       workspaceId,
-      workspaceSlug: slug,
-      seededAt: fixedClock.toISOString(),
+      workspaceSlug: effectiveSlug,
+      seededAt: fixedClock,
       datasetVersion: dataset.version,
       personas: personaCustomerMap,
       entityCounts: {
@@ -545,15 +589,21 @@ export class QaDemoWorkspaceService {
   /**
    * Resets/cleans data for a demo workspace.
    */
-  async cleanWorkspaceData(workspaceId: string): Promise<void> {
-    this.assertDemoWorkspaceSafety(workspaceId);
+  async cleanWorkspaceData(workspaceId: string, slug?: string): Promise<void> {
+    await this.assertAffirmativeDemoWorkspace(workspaceId, slug);
 
-    // Delete in reverse dependency order
+    // Delete in reverse foreign-key dependency order
+    await this.db.execute(sql`delete from decision_reward_reconciliation_checkpoints where workspace_id = ${workspaceId}`);
     await this.db.execute(sql`delete from reward_observations where workspace_id = ${workspaceId}`);
     await this.db.execute(sql`delete from exposure_observations where workspace_id = ${workspaceId}`);
+    await this.db.execute(sql`delete from action_execution_attempts where workspace_id = ${workspaceId}`);
     await this.db.execute(sql`delete from action_executions where workspace_id = ${workspaceId}`);
+    await this.db.execute(sql`delete from decision_eligible_actions where workspace_id = ${workspaceId}`);
     await this.db.execute(sql`delete from decision_records where workspace_id = ${workspaceId}`);
-    await this.db.execute(sql`delete from revenue_opportunities where workspace_id = ${workspaceId}`);
+    await this.db.execute(sql`delete from decision_context_snapshots where workspace_id = ${workspaceId}`);
+    await this.db.execute(sql`delete from opportunity_activations where workspace_id = ${workspaceId}`);
+    await this.db.execute(sql`delete from opportunity_exports where workspace_id = ${workspaceId}`);
+    await this.db.execute(sql`delete from opportunity_rows where workspace_id = ${workspaceId}`);
     await this.db.execute(sql`delete from opportunity_batches where workspace_id = ${workspaceId}`);
     await this.db.execute(sql`delete from radar_propensity_scores where workspace_id = ${workspaceId}`);
     await this.db.execute(sql`delete from radar_score_batches where workspace_id = ${workspaceId}`);
@@ -563,6 +613,7 @@ export class QaDemoWorkspaceService {
     await this.db.execute(sql`delete from radars where workspace_id = ${workspaceId}`);
     await this.db.execute(sql`delete from customer_outcomes where workspace_id = ${workspaceId}`);
     await this.db.execute(sql`delete from outcome_definitions where workspace_id = ${workspaceId}`);
+    await this.db.execute(sql`delete from connector_connections where workspace_id = ${workspaceId}`);
     await this.db.execute(sql`delete from engagement_events where workspace_id = ${workspaceId}`);
     await this.db.execute(sql`delete from billing_context_subscriptions where workspace_id = ${workspaceId}`);
     await this.db.execute(sql`delete from commerce_order_line_items where workspace_id = ${workspaceId}`);
