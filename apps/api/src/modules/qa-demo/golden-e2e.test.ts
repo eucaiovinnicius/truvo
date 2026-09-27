@@ -145,6 +145,13 @@ test('GOLDEN E2E: complete 9-step canonical journey on deterministic demo worksp
     `) as Array<{ count: number }>;
     assert.equal(Number(radarsCount?.count), 1, 'Replay must not duplicate radars (count must remain 1)');
     assert.equal(secondRun.radar.id, seedResult.radar.id, 'Radar ID must be deterministic across replays');
+    assert.equal(secondRun.radar.status, 'active', 'Returned radar status must remain active across replays');
+
+    const [radarRow] = await db.execute(sql`
+      select status, current_model_reference from radars where workspace_id = ${GOLDEN_WS} and id = ${secondRun.radar.id}
+    `) as Array<{ status: string; current_model_reference: string | null }>;
+    assert.equal(radarRow?.status, 'active', 'Persisted radar status in DB must remain active across replays');
+    assert.equal(radarRow?.current_model_reference, seedResult.radar.modelVersionId, 'Persisted radar current_model_reference must point to active model');
 
     // Cleanup
     await service.cleanWorkspaceData(GOLDEN_WS);

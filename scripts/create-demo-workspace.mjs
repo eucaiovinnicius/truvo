@@ -3,12 +3,53 @@
  * ORDER 130 — SPEC-21: Demo Workspace CLI Command
  * Creates or resets a deterministic demo workspace.
  * Usage:
- *   node scripts/create-demo-workspace.mjs [--workspace-id <id>] [--reset]
+ *   node scripts/create-demo-workspace.mjs [--workspace-id <id>] [--no-reset]
  */
 
-import { closeDb, createDb } from '@truvo/db';
-import { createQaDemoWorkspaceService } from '../apps/api/src/modules/qa-demo/qa-demo-workspace.service.ts';
-import { DEMO_WORKSPACE_DEFAULT_ID } from '../apps/api/src/modules/qa-demo/qa-demo-workspace.service.ts';
+import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+// Run through tsx loader if plain node was invoked without loader
+const hasTsLoader =
+  process.execArgv.some((a) => a.includes('tsx') || a.includes('loader.mjs')) ||
+  process.env.__TSX_LOADER_ACTIVE === 'true';
+
+if (!hasTsLoader) {
+  const require = createRequire(import.meta.url);
+  let loaderPath;
+  try {
+    loaderPath = require.resolve('tsx', {
+      paths: [fileURLToPath(new URL('../apps/api', import.meta.url))],
+    });
+  } catch {
+    try {
+      loaderPath = require.resolve('tsx');
+    } catch {
+      loaderPath = null;
+    }
+  }
+
+  if (loaderPath) {
+    const loaderUrl = pathToFileURL(loaderPath).href;
+    const res = spawnSync(
+      process.execPath,
+      ['--import', loaderUrl, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+      {
+        stdio: 'inherit',
+        env: { ...process.env, __TSX_LOADER_ACTIVE: 'true' },
+      },
+    );
+    process.exit(res.status ?? 0);
+  }
+}
+
+const { closeDb, createDb } = await import('../packages/db/src/index.ts');
+const {
+  createQaDemoWorkspaceService,
+  DEMO_WORKSPACE_DEFAULT_ID,
+  isReservedDemoWorkspaceId,
+} = await import('../apps/api/src/modules/qa-demo/qa-demo-workspace.service.ts');
 
 async function main() {
   const args = process.argv.slice(2);
@@ -25,10 +66,12 @@ async function main() {
   }
 
   // Safety guard
-  if (!workspaceId.includes('demo') && !workspaceId.includes('qa') && !workspaceId.startsWith('00000000-0000-4000-8000-')) {
-    console.error(JSON.stringify({
-      error: 'Safety violation: Target workspace must be explicitly identified as demo/qa.',
-    }));
+  if (!isReservedDemoWorkspaceId(workspaceId)) {
+    console.error(
+      JSON.stringify({
+        error: 'Safety violation: Target workspace must be explicitly identified as demo/qa.',
+      }),
+    );
     process.exit(1);
   }
 
@@ -42,12 +85,15 @@ async function main() {
 
     console.log(JSON.stringify(result, null, 2));
   } catch (error) {
-    console.error(JSON.stringify({
-      error: error instanceof Error ? error.message : String(error),
-    }));
+    console.error(
+      JSON.stringify({
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
     process.exit(1);
   } finally {
     await closeDb(db).catch(() => undefined);
+    process.exit(0);
   }
 }
 

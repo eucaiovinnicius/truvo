@@ -85,6 +85,33 @@ test('TENANT ISOLATION: cross-tenant read denied, mutation denied, runtime scope
       await db.execute(sql`delete from workspaces where id = ${prodWsId}`);
     }
 
+    // Proof 2b: non-token substring matching => REJECT (e.g. demographics-store, democracy-shop)
+    assert.equal(isExplicitDemoSlug('demographics-store'), false);
+    assert.equal(isExplicitDemoSlug('democracy-shop'), false);
+    assert.equal(isExplicitDemoSlug('qatar-airways'), false);
+    assert.equal(isExplicitDemoSlug('testimony-law'), false);
+
+    const falseDemoWsId = '87654321-4321-4321-abcd-0123456789ac';
+    await db.execute(sql`
+      insert into workspaces (id, name, slug, created_by)
+      values (${falseDemoWsId}, 'Demographics Store', 'demographics-store', ${USER_A})
+      on conflict (id) do update set slug = 'demographics-store'
+    `);
+    try {
+      await assert.rejects(
+        () => service.assertAffirmativeDemoWorkspace(falseDemoWsId, 'demographics-store'),
+        /Safety violation: existing workspace.*is not an affirmative demo\/qa workspace/i,
+        'Existing workspace with slug "demographics-store" must be rejected despite containing "demo" substring',
+      );
+      await assert.rejects(
+        () => service.cleanWorkspaceData(falseDemoWsId),
+        /Safety violation: existing workspace.*is not an affirmative demo\/qa workspace/i,
+        'cleanWorkspaceData must refuse to delete workspace with non-token substring slug',
+      );
+    } finally {
+      await db.execute(sql`delete from workspaces where id = ${falseDemoWsId}`);
+    }
+
     // Proof 3: reserved demo workspace => ACCEPT
     assert.equal(isReservedDemoWorkspaceId(DEMO_WORKSPACE_DEFAULT_ID), true);
     assert.equal(isExplicitDemoSlug('demo-workspace-0130'), true);

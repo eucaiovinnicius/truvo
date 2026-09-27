@@ -92,6 +92,19 @@ async function isPortReachable(host, targetPort) {
   });
 }
 
+function redactDatabaseUrl(raw) {
+  if (!raw) return '<empty>';
+  try {
+    const parsed = new URL(raw);
+    if (parsed.password) {
+      parsed.password = '***';
+    }
+    return parsed.toString();
+  } catch {
+    return raw.replace(/(:\/\/)([^:@\s]+):([^@\s]+)@/g, '$1$2:***@');
+  }
+}
+
 async function isDatabaseUrlReachable(urlStr) {
   try {
     const parsed = new URL(urlStr);
@@ -123,7 +136,7 @@ async function main() {
       const reachable = await isDatabaseUrlReachable(process.env.DATABASE_URL);
       if (!reachable) {
         throw new Error(
-          `Configured DATABASE_URL is not reachable: ${process.env.DATABASE_URL}. A real reachable PostgreSQL is required.`,
+          `Configured DATABASE_URL is not reachable: ${redactDatabaseUrl(process.env.DATABASE_URL)}. A real reachable PostgreSQL is required.`,
         );
       }
       console.log('[ORDER 130] Using provided DATABASE_URL.');

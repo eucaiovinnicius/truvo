@@ -38,29 +38,23 @@ export const DEMO_OPERATOR_USER_ID = '00000000-0000-4000-8000-000000000999';
 export function isReservedDemoWorkspaceId(workspaceId?: string): boolean {
   if (!workspaceId) return false;
   const id = workspaceId.toLowerCase();
-  return (
+  if (
     id.startsWith('00000000-0000-4000-8000-') ||
     id.startsWith('11111111-') ||
     id.startsWith('22222222-') ||
     id.startsWith('33333333-') ||
-    id.startsWith('44444444-') ||
-    id.includes('demo') ||
-    id.includes('qa') ||
-    id.includes('test') ||
-    id.includes('golden')
-  );
+    id.startsWith('44444444-')
+  ) {
+    return true;
+  }
+  const tokens = id.split(/[^a-z0-9]+/).filter(Boolean);
+  return tokens.some((token) => ['demo', 'qa', 'test', 'golden'].includes(token));
 }
 
 export function isExplicitDemoSlug(slug?: string): boolean {
   if (!slug) return false;
-  const s = slug.toLowerCase();
-  return (
-    s.startsWith('demo-') ||
-    s.startsWith('qa-') ||
-    s.startsWith('test-') ||
-    s.includes('demo') ||
-    s.includes('golden')
-  );
+  const tokens = slug.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  return tokens.some((token) => ['demo', 'qa', 'test', 'golden'].includes(token));
 }
 
 @Injectable()
@@ -388,7 +382,8 @@ export class QaDemoWorkspaceService {
     await this.db.execute(sql`
       insert into radars (workspace_id, id, name, status, current_definition_version)
       values (${workspaceId}, ${radarId}, 'Purchase Propensity Radar (30d)', 'ready_to_train', 1)
-      on conflict (workspace_id, id) do update set status = 'ready_to_train'
+      on conflict (workspace_id, id) do update set
+        status = case when radars.status = 'active' then 'active' else excluded.status end
     `);
 
     await this.db.execute(sql`
@@ -446,8 +441,20 @@ export class QaDemoWorkspaceService {
       where workspace_id = ${workspaceId} and id = ${modelId}
       limit 1
     `);
+    const [currentRadar] = await this.db.execute<{ status: string; current_model_reference: string | null }>(sql`
+      select status, current_model_reference from radars
+      where workspace_id = ${workspaceId} and id = ${radarId}
+      limit 1
+    `);
+
     if (existingModel?.status !== 'active') {
       await this.models.promote(workspaceId, radarId, modelId, operatorId, 'demo-workspace-activation');
+    } else if (currentRadar?.status !== 'active' || currentRadar?.current_model_reference !== modelId) {
+      await this.db.execute(sql`
+        update radars
+        set status = 'active', current_model_reference = ${modelId}, updated_at = now()
+        where workspace_id = ${workspaceId} and id = ${radarId}
+      `);
     }
 
     // 7. Score Batch & Persona Propensities
@@ -558,6 +565,10 @@ export class QaDemoWorkspaceService {
       }
     }
 
+    const [finalRadar] = await this.db.execute<{ status: string; current_model_reference: string | null }>(sql`
+      select status, current_model_reference from radars where workspace_id = ${workspaceId} and id = ${radarId} limit 1
+    `);
+
     return {
       workspaceId,
       workspaceSlug: effectiveSlug,
@@ -576,7 +587,7 @@ export class QaDemoWorkspaceService {
       radar: {
         id: radarId,
         name: 'Purchase Propensity Radar (30d)',
-        status: 'ready_to_train',
+        status: finalRadar?.status ?? 'active',
         definitionVersion: 1,
         modelVersionId: modelId,
         scoreBatchId,
