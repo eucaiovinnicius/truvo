@@ -529,16 +529,18 @@ function UtmChip({ prefix, value }: { prefix: string; value: string }) {
 // Componente principal
 // ----------------------------------------------------------------------------
 
-export default function ProfilesView() {
-  const [query, setQuery] = useState<string>('');
-  const [searchType, setSearchType] = useState<SearchType>('email');
+export default function ProfilesView({ initialCustomerId }: { initialCustomerId?: string } = {}) {
+  const [query, setQuery] = useState<string>(() => initialCustomerId || '');
+  const [searchType, setSearchType] = useState<SearchType>(() => (initialCustomerId ? 'user_id' : 'email'));
   // Estado da simulação demo (loading/resultado). Em 'live' o gating vem do fetch.
   const [demoLoading, setDemoLoading] = useState<boolean>(false);
-  const [demoHasResult, setDemoHasResult] = useState<boolean>(false);
+  const [demoHasResult, setDemoHasResult] = useState<boolean>(() => Boolean(initialCustomerId));
   const [order, setOrder] = useState<'recent' | 'chrono'>('recent');
   const [copied, setCopied] = useState<boolean>(false);
   // Busca submetida (dispara o useLive). null até o primeiro "Buscar".
-  const [submitted, setSubmitted] = useState<{ q: string; type: SearchType } | null>(null);
+  const [submitted, setSubmitted] = useState<{ q: string; type: SearchType } | null>(() =>
+    initialCustomerId ? { q: initialCustomerId, type: 'user_id' } : null,
+  );
 
   const { isLive } = useSession();
 

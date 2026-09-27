@@ -56,16 +56,38 @@ function AudienceBuilder({ audience, setAudience, outcomes }: { audience: Audien
   </div>;
 }
 
-export default function RadarsView() {
-  const [screen, setScreen] = useState<Screen>('list'); const [selectedId, setSelectedId] = useState<string | null>(null); const [refresh, setRefresh] = useState(0);
+export default function RadarsView({
+  initialRadarId,
+  initialScreen = 'list',
+}: {
+  initialRadarId?: string;
+  initialScreen?: Screen;
+} = {}) {
+  const [screen, setScreen] = useState<Screen>(() => (initialRadarId ? 'detail' : initialScreen));
+  const [selectedId, setSelectedId] = useState<string | null>(() => initialRadarId ?? null);
+  const [refresh, setRefresh] = useState(0);
   const list = useLive<RadarListItem[]>('/v1/radars', [refresh]);
   const detail = useLive<RadarDetail>(selectedId ? `/v1/radars/${selectedId}` : null, [selectedId, refresh]);
   const outcomes = useLive<RadarOutcome[]>('/v1/radars/metadata/outcomes', [screen]);
   const destinations = useLive<ActivationDestination[]>('/v1/radars/metadata/destinations', [screen]);
-  const openDetail = (id: string) => { setSelectedId(id); setScreen('detail'); };
+  const openDetail = (id: string) => {
+    setSelectedId(id);
+    setScreen('detail');
+    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/app/radars')) {
+      window.history.pushState(null, '', `/app/radars/${id}`);
+    }
+  };
+  const handleBack = () => {
+    reload();
+    setSelectedId(null);
+    setScreen('list');
+    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/app/radars')) {
+      window.history.pushState(null, '', '/app/radars');
+    }
+  };
   const reload = () => setRefresh((value) => value + 1);
   if (screen === 'create') return <RadarWizard outcomes={outcomes.data ?? []} destinations={destinations.data ?? []} outcomesState={outcomes} onDone={(id) => { reload(); openDetail(id); }} onCancel={() => setScreen('list')} />;
-  if (screen === 'detail' && selectedId) return <RadarDetailView detail={detail} outcomes={outcomes.data ?? []} onBack={() => { reload(); setScreen('list'); }} onRefresh={reload} />;
+  if (screen === 'detail' && selectedId) return <RadarDetailView detail={detail} outcomes={outcomes.data ?? []} onBack={handleBack} onRefresh={reload} />;
   const rows = list.data ?? [];
   return <div className="space-y-6" data-testid="radar-list"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-mono font-bold uppercase tracking-wider text-teal-700">Radars</p><h1 className="mt-1 text-2xl font-bold text-slate-900">Quem vai comprar a seguir?</h1><p className="mt-1 text-sm text-slate-500">Defina perguntas de previsão para o contexto real do seu workspace.</p></div><button onClick={() => setScreen('create')} className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-bold text-white"><Plus className="h-4 w-4" /> Criar Radar</button></div>
     <LiveDataBoundary states={[list]} empty={rows.length === 0} label="Lista de Radars">{rows.length === 0 ? <section className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center"><h2 className="text-base font-bold">Nenhum Radar criado</h2><p className="mt-1 text-sm text-slate-500">Comece pela pergunta de negócio que você quer prever.</p><button onClick={() => setScreen('create')} className="mt-4 rounded-lg bg-slate-900 px-3 py-2 text-sm font-bold text-white">Criar Radar</button></section> : <div className="overflow-hidden rounded-xl border border-slate-200 bg-white"><table className="w-full text-left text-sm"><thead className="bg-slate-50 text-xs text-slate-500"><tr><th className="p-4">Radar</th><th className="p-4">Resultado</th><th className="p-4">Janela</th><th className="p-4">Status</th><th className="p-4">Prontidão / modelo</th><th className="p-4">Atualizado</th></tr></thead><tbody>{rows.map((radar) => <tr key={radar.id} onClick={() => openDetail(radar.id)} className="cursor-pointer border-t border-slate-100 hover:bg-slate-50"><td className="p-4 font-semibold text-slate-900">{radar.name}</td><td className="p-4">{radar.outcome_definition_id}</td><td className="p-4">{radar.prediction_window_days} dias</td><td className="p-4"><span className={`rounded-full px-2 py-1 text-xs font-bold ${badge(radar.status)}`}>{statusLabel(radar.status)}</span></td><td className="p-4 text-xs text-slate-600">{modelState(radar)}</td><td className="p-4 text-xs text-slate-500">{new Date(radar.updated_at).toLocaleDateString('pt-BR')}</td></tr>)}</tbody></table></div>}</LiveDataBoundary>

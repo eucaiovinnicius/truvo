@@ -25,6 +25,7 @@ import { ViewState, Funnel, CampaignRow, Integration, ApiKey, WorkspaceConfig, P
 import { initialFunnels, initialCampaigns, initialIntegrations, initialApiKeys } from './data';
 import { useSession } from '@/lib/session';
 import { HelpCircle, RefreshCw, Sparkles, Check } from 'lucide-react';
+import { AppShellSkeleton, NoWorkspaceState } from './components/ScreenStates';
 
 export default function App() {
   const session = useSession();
@@ -62,7 +63,11 @@ export default function App() {
   const handleLoginSuccess = (newProfile: ProfileConfig, mode: 'live' | 'demo') => {
     setProfile(newProfile);
     localStorage.setItem('truvo_profile', JSON.stringify(newProfile));
-    setView('dashboard');
+    if (typeof window !== 'undefined') {
+      window.location.href = '/app';
+    } else {
+      setView('dashboard');
+    }
   };
 
   const handleLogout = () => {
@@ -156,10 +161,13 @@ export default function App() {
   };
 
   if (!session.ready) {
-    return null;
+    return <AppShellSkeleton />;
   }
   if (!session.mode) {
     return <LoginView onLoginSuccess={handleLoginSuccess} />;
+  }
+  if (session.isLive && !session.workspace && session.workspaces.length === 0) {
+    return <NoWorkspaceState />;
   }
 
   const demoWorkspaces = [
