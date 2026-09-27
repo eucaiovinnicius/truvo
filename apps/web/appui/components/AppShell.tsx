@@ -130,28 +130,30 @@ export default function AppShell({ children }: AppShellProps) {
         {/* Primary MVP Navigation */}
         <PrimaryNav className="flex-1 px-3 py-4" />
 
-        {/* Setup Wizard Quick Action */}
-        <div className="p-4 mx-3 mb-3 bg-slate-50/80 rounded-xl border border-slate-100">
-          <div className="flex gap-2 items-start mb-2">
-            <Sparkles className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-            <div>
-              <h4 className="text-[11px] font-semibold text-slate-800 leading-none mb-1">
-                Onboarding Wizard
-              </h4>
-              <p className="text-[10px] text-slate-500 leading-normal">
-                Configure pixels ou vincule fontes de dados.
-              </p>
+        {/* Setup Wizard Quick Action (Live Only) */}
+        {session.isLive && (
+          <div className="p-4 mx-3 mb-3 bg-slate-50/80 rounded-xl border border-slate-100">
+            <div className="flex gap-2 items-start mb-2">
+              <Sparkles className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <div>
+                <h4 className="text-[11px] font-semibold text-slate-800 leading-none mb-1">
+                  Onboarding Wizard
+                </h4>
+                <p className="text-[10px] text-slate-500 leading-normal">
+                  Configure pixels ou vincule fontes de dados.
+                </p>
+              </div>
             </div>
+            <Link
+              id="launch-setup-wizard-btn"
+              href="/app/onboarding"
+              className="w-full py-1.5 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-[10px] font-medium text-slate-700 hover:text-slate-800 transition-colors shadow-2xs flex items-center justify-center gap-1.5"
+            >
+              <GraduationCap className="w-3.5 h-3.5 text-teal-600" />
+              <span>Launch Setup Wizard</span>
+            </Link>
           </div>
-          <Link
-            id="launch-setup-wizard-btn"
-            href="/app/onboarding"
-            className="w-full py-1.5 bg-white border border-slate-200 hover:border-slate-300 rounded-lg text-[10px] font-medium text-slate-700 hover:text-slate-800 transition-colors shadow-2xs flex items-center justify-center gap-1.5"
-          >
-            <GraduationCap className="w-3.5 h-3.5 text-teal-600" />
-            <span>Launch Setup Wizard</span>
-          </Link>
-        </div>
+        )}
 
         {/* User Profile Footer */}
         <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex flex-col gap-3">
