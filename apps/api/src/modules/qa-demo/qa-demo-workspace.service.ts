@@ -4,7 +4,7 @@
  * Handles safe creation, synthetic seeding, reset, and teardown.
  */
 
-import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { sql } from 'drizzle-orm';
 import { DRIZZLE, type Database } from '../auth/database.provider';
 import { AuditService } from '../audit/audit.service';
@@ -60,7 +60,7 @@ export function isExplicitDemoSlug(slug?: string): boolean {
 }
 
 @Injectable()
-export class QaDemoWorkspaceService {
+export class QaDemoWorkspaceService implements OnModuleInit {
   private readonly logger = new Logger(QaDemoWorkspaceService.name);
 
   constructor(
@@ -71,7 +71,20 @@ export class QaDemoWorkspaceService {
     private readonly models: ModelRegistryService,
     private readonly opportunities: OpportunitiesService,
     private readonly decisions: DecisionsService,
+    @Optional() private readonly connectorRegistry?: ConnectorRegistryService,
   ) {}
+
+  onModuleInit(): void {
+    this.ensureFakeAdapterRegistered();
+  }
+
+  private ensureFakeAdapterRegistered(): void {
+    if (this.connectorRegistry && !this.connectorRegistry.getDestinationAdapter(FAKE_PROVIDER)) {
+      const state = createFakeProviderState();
+      this.connectorRegistry.registerSource(createFakeSourceAdapter(state));
+      this.connectorRegistry.registerDestination(createFakeDestinationAdapter(state));
+    }
+  }
 
   /**
    * Safety guard: verifies affirmative demo/QA identification before any destructive reset
@@ -115,6 +128,7 @@ export class QaDemoWorkspaceService {
    * Creates or resets the deterministic demo workspace.
    */
   async createOrResetDemoWorkspace(options: DemoWorkspaceOptions = {}): Promise<DemoWorkspaceSeedResult> {
+    this.ensureFakeAdapterRegistered();
     const workspaceId = options.workspaceId ?? DEMO_WORKSPACE_DEFAULT_ID;
     const [existingWs] = await this.db.execute(sql`
       select id, slug from workspaces where id = ${workspaceId}
@@ -710,5 +724,6 @@ export function createQaDemoWorkspaceService(db: Database): QaDemoWorkspaceServi
     models,
     opportunities,
     decisions,
+    registry,
   );
 }

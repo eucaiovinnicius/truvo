@@ -12,6 +12,9 @@ import {
   validateSyntheticDataset,
 } from './fixtures/synthetic-dataset.v1';
 import { assertNoSecrets } from './fixtures/connector-fixtures';
+import { QaDemoWorkspaceService } from './qa-demo-workspace.service';
+import { ConnectorRegistryService } from '../connectors/connector-registry.service';
+import { FAKE_PROVIDER } from '../connectors/testing/fake-provider.adapter';
 
 function checksum(data: unknown): string {
   return createHash('sha256').update(JSON.stringify(data)).digest('hex');
@@ -105,4 +108,23 @@ test('DEMO DATA: zero real PII and zero secrets in dataset', () => {
       );
     }
   }
+});
+
+test('DEMO SERVICE: registers fake provider in Nest-provided ConnectorRegistryService', () => {
+  const registry = new ConnectorRegistryService();
+  assert.equal(registry.getDestinationAdapter(FAKE_PROVIDER), undefined);
+
+  const service = new QaDemoWorkspaceService(
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    registry,
+  );
+  service.onModuleInit();
+  assert.ok(registry.getDestinationAdapter(FAKE_PROVIDER), 'Destination adapter must be registered');
+  assert.ok(registry.getSourceAdapter(FAKE_PROVIDER), 'Source adapter must be registered');
 });
