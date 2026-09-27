@@ -137,7 +137,7 @@ export class QaDemoWorkspaceService {
     await this.db.execute(sql`
       insert into users (id, email)
       values (${operatorId}, ${operatorEmail})
-      on conflict (id) do update set email = excluded.email
+      on conflict (id) do nothing
     `);
 
     await this.db.execute(sql`

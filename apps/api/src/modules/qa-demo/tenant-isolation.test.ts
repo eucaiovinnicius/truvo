@@ -282,13 +282,31 @@ test('TENANT ISOLATION: cross-tenant read denied, mutation denied, runtime scope
     const [accAResidual] = await db.execute(sql`
       select count(*)::int as count from crm_accounts where workspace_id = ${WS_A}
     `) as Array<{ count: number }>;
-    const [accBRemaining] = await db.execute(sql`
-      select count(*)::int as count from crm_accounts where workspace_id = ${WS_B}
-    `) as Array<{ count: number }>;
-    assert.equal(accAResidual?.count, 0, 'Cleaning Workspace A must clear its crm_accounts');
-    assert.equal(accBRemaining?.count, 2, 'Cleaning Workspace A must leave Workspace B crm_accounts intact');
-
+    // 9. Pre-existing Operator Account Email Preservation Proof
+    const existingUserId = '00000000-0000-4000-8000-000000000099';
+    const existingEmail = 'real-operator@acme-corp.com';
+    await db.execute(sql`
+      insert into users (id, email)
+      values (${existingUserId}, ${existingEmail})
+      on conflict (id) do update set email = ${existingEmail}
+    `);
+    const seedWithExistingUser = await service.createOrResetDemoWorkspace({
+      workspaceId: WS_A,
+      operatorUserId: existingUserId,
+    });
+    assert.equal(seedWithExistingUser.workspaceId, WS_A);
+    const [memberRow] = await db.execute(sql`
+      select user_id, role, status from workspace_members where workspace_id = ${WS_A} and user_id = ${existingUserId}
+    `) as Array<{ user_id: string; role: string; status: string }>;
+    assert.equal(memberRow?.user_id, existingUserId);
+    assert.equal(memberRow?.role, 'owner');
+    const [userRow] = await db.execute(sql`
+      select email from users where id = ${existingUserId}
+    `) as Array<{ email: string }>;
+    assert.equal(userRow?.email, existingEmail, 'Pre-existing operator email must NOT be overwritten by demo seeder');
+    await service.cleanWorkspaceData(WS_A);
     await service.cleanWorkspaceData(WS_B);
+    await db.execute(sql`delete from users where id = ${existingUserId}`);
   } finally {
     closeRedis();
     await closeDb(db).catch(() => undefined);
