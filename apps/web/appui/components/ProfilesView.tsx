@@ -261,7 +261,7 @@ const DEFAULT_EVENT_META: EventMeta = {
 };
 
 function getEventMeta(kind: string): EventMeta {
-  if (kind && kind in EVENT_META) {
+  if (kind && Object.prototype.hasOwnProperty.call(EVENT_META, kind)) {
     return EVENT_META[kind as EventKind];
   }
   return {

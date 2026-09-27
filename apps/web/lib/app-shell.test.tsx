@@ -367,8 +367,8 @@ test('CUSTOMER PROFILE: safely adapts free-form event names and device response 
   const resolvedType = rawType.includes('desktop') ? 'desktop' : rawType.includes('tablet') ? 'tablet' : 'mobile';
   assert.equal(resolvedType, 'desktop');
 
-  // Timeline event mapping with custom/unrecognized event names
-  const customEvents = ['lead', 'refund', 'subscription_started', 'custom_action'];
+  // Timeline event mapping with custom/unrecognized event names and prototype keys
+  const customEvents = ['lead', 'refund', 'subscription_started', 'custom_action', 'constructor', 'toString', 'valueOf'];
   for (const name of customEvents) {
     const label = name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
     assert.ok(label.length > 0);
