@@ -92,7 +92,8 @@ interface AcquisitionChannel {
 interface CustomerDevice {
   name: string;
   os: string;
-  lastSeen: string; // ISO
+  firstSeen?: string; // ISO
+  lastSeen?: string; // ISO
   type: 'mobile' | 'desktop' | 'tablet';
 }
 
@@ -623,10 +624,12 @@ function adaptCanonicalProfile(
     const rawType = (d.device_type || '').toLowerCase();
     const type: 'mobile' | 'desktop' | 'tablet' =
       rawType.includes('desktop') ? 'desktop' : rawType.includes('tablet') ? 'tablet' : 'mobile';
-    const lastSeen = d.first_seen || d.last_seen_at || d.first_seen_at || '';
+    const firstSeen = d.first_seen || d.first_seen_at || undefined;
+    const lastSeen = d.last_seen_at || undefined;
     return {
       name: `Dispositivo ${i + 1}`,
       os: `${d.os || 'OS'} · ${d.browser || 'Browser'}`,
+      firstSeen,
       lastSeen,
       type,
     };
@@ -767,10 +770,11 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
     : null;
   const searchLive = useLive<ApiProfileSearchResponse>(searchPath, [submittedSearch?.q, submittedSearch?.type]);
 
-  // Quando a busca encontra um candidato, adota o canonical_id e navega via router:
+  // Quando a busca encontra um candidato, adota o canonical_id, limpa a busca pendente e navega via router:
   useEffect(() => {
-    if (isLive && searchLive.status === 'success' && searchLive.data?.results?.length) {
+    if (isLive && submittedSearch && searchLive.status === 'success' && searchLive.data?.results?.length) {
       const candidate = searchLive.data.results[0];
+      setSubmittedSearch(null);
       if (candidate?.canonical_id && candidate.canonical_id !== canonicalId) {
         setCanonicalId(candidate.canonical_id);
         if (typeof window !== 'undefined' && window.location.pathname.startsWith('/app/customers')) {
@@ -778,7 +782,7 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
         }
       }
     }
-  }, [isLive, searchLive.status, searchLive.data, canonicalId, router]);
+  }, [isLive, submittedSearch, searchLive.status, searchLive.data, canonicalId, router]);
 
   const profile: CustomerProfile = useMemo(() => {
     if (!isLive) {
@@ -1344,7 +1348,7 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
                           </span>
                         </div>
                         <span className="text-[9px] font-mono text-slate-400 shrink-0 text-right">
-                          {fmtDate(d.lastSeen)}
+                          {d.lastSeen ? fmtDate(d.lastSeen) : d.firstSeen ? `1º toque ${fmtDate(d.firstSeen)}` : ''}
                         </span>
                       </div>
                     );
