@@ -639,7 +639,7 @@ function adaptCanonicalProfile(
     device: ev.context?.device_type ? `${ev.context.device_type} · ${ev.context.os || ''}` : 'Dispositivo desconhecido',
     detail: `Evento: ${ev.event_name}${ev.source ? ` (${ev.source})` : ''}`,
     order: ev.order_id || undefined,
-    value: ev.value || undefined,
+    value: typeof ev.value === 'number' ? ev.value : (ev.value ?? undefined),
     currency: ev.currency || undefined,
     utm: ev.context ? { source: ev.context.utm_source, medium: ev.context.utm_medium, campaign: ev.context.utm_campaign } : undefined,
   }));
@@ -936,7 +936,7 @@ export default function ProfilesView({
   return (
     <LiveDataBoundary
       states={activeStates}
-      allowNotFoundAsEmpty={true}
+      allowNotFoundAsEmpty={Boolean(canonicalId && canonicalProfileLive.error?.kind === 'not_found')}
       empty={
         canonicalId
           ? (canonicalProfileLive.status === 'success' && !canonicalProfileLive.data) ||
