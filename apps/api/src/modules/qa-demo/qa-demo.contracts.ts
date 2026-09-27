@@ -119,7 +119,14 @@ export interface DemoWorkspaceSeedResult {
     status: string;
     definitionVersion: number;
     modelVersionId: string;
-    scoreBatchId: string;
+    scoringCutoff: string;
+    scoreBatch: {
+      workspaceId: string;
+      radarId: string;
+      modelVersionId: string;
+      scoringCutoff: string;
+    };
+    scoreBatchId?: string;
   };
   opportunityBatchId: string;
   decisionBatchId: string;

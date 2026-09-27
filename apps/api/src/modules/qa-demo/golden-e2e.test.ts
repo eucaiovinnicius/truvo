@@ -93,6 +93,19 @@ test('GOLDEN E2E: complete 9-step canonical journey on deterministic demo worksp
     const topScore = Number(scores[0]!.probability);
     assert.ok(topScore >= 0.85, 'Top score must be high propensity likely buyer');
 
+    // Step 6b: Score Batch Composite Identity Verification (radar_score_batches)
+    const [scoreBatchRow] = await db.execute(sql`
+      select status, scored_customer_count
+      from radar_score_batches
+      where workspace_id = ${seedResult.radar.scoreBatch.workspaceId}
+        and radar_id = ${seedResult.radar.scoreBatch.radarId}
+        and model_version_id = ${seedResult.radar.scoreBatch.modelVersionId}
+        and scoring_cutoff = ${seedResult.radar.scoreBatch.scoringCutoff}::timestamptz
+    `) as Array<{ status: string; scored_customer_count: number }>;
+    assert.ok(scoreBatchRow, 'Score batch must exist for the returned composite identity');
+    assert.equal(scoreBatchRow.status, 'completed');
+    assert.equal(scoreBatchRow.scored_customer_count, 5);
+
     // Step 7: Revenue Opportunities Materialization Verification (Canonical Tables: opportunity_batches & opportunity_rows)
     const [oppBatch] = await db.execute(sql`
       select id, row_count, eligible_count, status
