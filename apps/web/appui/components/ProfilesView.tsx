@@ -42,6 +42,7 @@ import {
 import { useLive } from '@/lib/live';
 import { LiveDataBoundary } from '@/lib/live-ui';
 import { useSession } from '@/lib/session';
+import { useRouter } from 'next/navigation';
 
 // ----------------------------------------------------------------------------
 // Tipos
@@ -712,6 +713,7 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
   const [submittedSearch, setSubmittedSearch] = useState<{ q: string; type: SearchType } | null>(null);
 
   const { isLive } = useSession();
+  const router = useRouter();
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -721,6 +723,30 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
       if (timerRef.current) clearTimeout(timerRef.current);
       if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
     };
+  }, []);
+
+  // Sincroniza canonicalId quando a rota/parâmetro initialCustomerId muda:
+  useEffect(() => {
+    if (initialCustomerId) {
+      setCanonicalId(initialCustomerId);
+    } else {
+      setCanonicalId(null);
+    }
+  }, [initialCustomerId]);
+
+  // Sincroniza canonicalId com o histórico do navegador (botão Voltar/Avançar):
+  useEffect(() => {
+    const handlePopState = () => {
+      if (typeof window !== 'undefined' && window.location.pathname.startsWith('/app/customers/')) {
+        const parts = window.location.pathname.split('/app/customers/');
+        const id = parts[1] ? decodeURIComponent(parts[1]) : null;
+        setCanonicalId(id || null);
+      } else if (typeof window !== 'undefined' && window.location.pathname === '/app/customers') {
+        setCanonicalId(null);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
   // 1. Resolução canônica direta (/app/customers/:canonicalId):
@@ -741,18 +767,18 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
     : null;
   const searchLive = useLive<ApiProfileSearchResponse>(searchPath, [submittedSearch?.q, submittedSearch?.type]);
 
-  // Quando a busca encontra um candidato, adota o canonical_id e atualiza a rota:
+  // Quando a busca encontra um candidato, adota o canonical_id e navega via router:
   useEffect(() => {
     if (isLive && searchLive.status === 'success' && searchLive.data?.results?.length) {
       const candidate = searchLive.data.results[0];
       if (candidate?.canonical_id && candidate.canonical_id !== canonicalId) {
         setCanonicalId(candidate.canonical_id);
         if (typeof window !== 'undefined' && window.location.pathname.startsWith('/app/customers')) {
-          window.history.pushState(null, '', `/app/customers/${encodeURIComponent(candidate.canonical_id)}`);
+          router.push(`/app/customers/${encodeURIComponent(candidate.canonical_id)}`);
         }
       }
     }
-  }, [isLive, searchLive.status, searchLive.data, canonicalId]);
+  }, [isLive, searchLive.status, searchLive.data, canonicalId, router]);
 
   const profile: CustomerProfile = useMemo(() => {
     if (!isLive) {
