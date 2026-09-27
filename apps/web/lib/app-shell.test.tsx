@@ -402,24 +402,29 @@ test('LIVE STATE: 404 response maps to not_found failure, resolving to error by 
   assert.equal(optInSurface, 'empty');
 });
 
-test('CUSTOMER PROFILE: preserves profile metric and timeline event currency and respects pagination cursor', () => {
+test('CUSTOMER PROFILE: preserves profile metric and timeline event currency and respects pagination cursor without inventing BRL for unknown currency', () => {
   const evBrl = { value: 150.0, currency: 'BRL' };
   const evUsd = { value: 99.9, currency: 'USD' };
   const evUnknown: { value: number; currency?: string } = { value: 50.0 };
 
   const fmtMoney = (n: number, currency?: string): string => {
-    const curr = (currency || 'BRL').toUpperCase();
+    const trimmed = currency?.trim().toUpperCase();
+    if (!trimmed) {
+      return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
     try {
-      return n.toLocaleString('pt-BR', { style: 'currency', currency: curr });
+      return n.toLocaleString('pt-BR', { style: 'currency', currency: trimmed });
     } catch {
-      return `${curr} ${n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      return `${trimmed} ${n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     }
   };
 
   // Event currency
   assert.match(fmtMoney(evBrl.value, evBrl.currency), /R\$/);
   assert.match(fmtMoney(evUsd.value, evUsd.currency), /US\$|USD/);
-  assert.match(fmtMoney(evUnknown.value, evUnknown.currency), /R\$/);
+  // Unknown currency renders as plain formatted number without synthetic currency symbol
+  assert.doesNotMatch(fmtMoney(evUnknown.value, evUnknown.currency), /R\$|USD|BRL/);
+  assert.equal(fmtMoney(evUnknown.value, evUnknown.currency), '50,00');
 
   // Profile metric currency (LTV / AOV)
   const profileMetrics = { ltv: 1250.5, aov: 250.1, currency: 'USD' };

@@ -137,11 +137,14 @@ const brl = (n: number): string =>
   n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 const fmtMoney = (n: number, currency?: string): string => {
-  const curr = (currency || 'BRL').toUpperCase();
+  const trimmed = currency?.trim().toUpperCase();
+  if (!trimmed) {
+    return n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
   try {
-    return n.toLocaleString('pt-BR', { style: 'currency', currency: curr });
+    return n.toLocaleString('pt-BR', { style: 'currency', currency: trimmed });
   } catch {
-    return `${curr} ${n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return `${trimmed} ${n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
 };
 
@@ -832,7 +835,14 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
     const q = query.trim();
     if (!q) return;
     if (timerRef.current) clearTimeout(timerRef.current);
-    setCanonicalId(null);
+    if (canonicalId) {
+      setCanonicalId(null);
+      try {
+        router.push('/app/customers');
+      } catch {
+        // fallback
+      }
+    }
     setSubmittedSearch({ q, type: searchType });
     if (!isLive) {
       setDemoLoading(true);
@@ -853,7 +863,14 @@ export default function ProfilesView({ initialCustomerId }: { initialCustomerId?
     setSearchType(type);
     setQuery(value);
     if (timerRef.current) clearTimeout(timerRef.current);
-    setCanonicalId(null);
+    if (canonicalId) {
+      setCanonicalId(null);
+      try {
+        router.push('/app/customers');
+      } catch {
+        // fallback
+      }
+    }
     setSubmittedSearch({ q: value.trim(), type });
     if (!isLive) {
       setDemoLoading(true);
