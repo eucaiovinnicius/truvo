@@ -1,4 +1,4 @@
-import { Injectable, type OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import { ConnectorRegistryService } from '../../connector-registry.service';
 import { createShopifyAdapter } from './shopify.adapter';
 
@@ -8,7 +8,7 @@ import { createShopifyAdapter } from './shopify.adapter';
  * of being called directly by a test. */
 @Injectable()
 export class ShopifyBootstrapService implements OnModuleInit {
-  constructor(private readonly registry: ConnectorRegistryService) {}
+  constructor(@Inject(ConnectorRegistryService) private readonly registry: ConnectorRegistryService) {}
 
   onModuleInit(): void {
     this.registry.registerSource(createShopifyAdapter());

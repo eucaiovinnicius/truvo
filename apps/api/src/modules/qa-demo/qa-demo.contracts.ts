@@ -138,4 +138,6 @@ export interface DemoWorkspaceOptions {
   workspaceSlug?: string;
   operatorUserId?: string;
   cleanBeforeSeed?: boolean;
+  injectFailureAfterCleanup?: boolean;
 }
+

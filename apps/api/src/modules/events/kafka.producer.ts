@@ -34,7 +34,7 @@ export class KafkaProducerService implements OnModuleInit, OnModuleDestroy {
       clientId: 'truvo-api',
       brokers,
       logLevel: logLevel.ERROR,
-      retry: { retries: 3 },
+      retry: { retries: process.env.NODE_ENV === 'test' ? 0 : 3 },
     });
     this.producer = kafka.producer({ allowAutoTopicCreation: true });
   }
@@ -44,13 +44,14 @@ export class KafkaProducerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
-    if (this.connected) {
-      await this.producer.disconnect().catch(() => undefined);
-      this.connected = false;
-    }
+    await this.producer.disconnect().catch(() => undefined);
+    this.connected = false;
   }
 
   private async connect(): Promise<void> {
+    if (process.env.NODE_ENV === 'test' && !process.env.KAFKA_BROKERS) {
+      return;
+    }
     try {
       await this.producer.connect();
       this.connected = true;

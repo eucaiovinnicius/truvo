@@ -180,6 +180,7 @@ async function main() {
       'src/modules/qa-demo/synthetic-dataset.test.ts',
       'src/modules/qa-demo/connector-fixtures.test.ts',
       'src/modules/qa-demo/tenant-isolation.test.ts',
+      'src/modules/qa-demo/nest-managed-demo.test.ts',
       'src/modules/qa-demo/golden-e2e.test.ts',
     ];
 
