@@ -80,6 +80,7 @@ try {
 }
 
 if (process.env.PREBETA_FOCUSED_ONLY !== '1') {
+  run(pnpm, ['test:demo-workspace']);
   run(pnpm, ['test:propensity']);
   run(pnpm, ['test:opportunities']);
   run(pnpm, ['test:decisions']);

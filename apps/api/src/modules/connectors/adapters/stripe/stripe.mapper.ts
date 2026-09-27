@@ -23,9 +23,13 @@ export function mapStripeCustomer(customer: StripeObject): NormalizedRecord {
 }
 
 export function mapStripeSubscription(subscription: StripeObject): NormalizedRecord {
+  const subId = idOf(subscription?.id);
+  if (!subId) {
+    throw new Error('Stripe subscription missing required id');
+  }
   const customerId = idOf(subscription.customer); const item = subscription.items?.data?.[0]; const price = item?.price;
   const customer = customerId ? { id: customerId } : undefined;
-  return { identifiers: identifiers(customer), billingSubscription: { providerNamespace: STRIPE_PROVIDER, providerSubscriptionId: subscription.id, providerCustomerId: customerId, status: subscription.status ?? 'unknown', productReference: idOf(price?.product), priceReference: idOf(price), quantity: item?.quantity, startedAt: iso(subscription.start_date), trialStartAt: iso(subscription.trial_start), trialEndAt: iso(subscription.trial_end), currentPeriodStart: iso(subscription.current_period_start), currentPeriodEnd: iso(subscription.current_period_end), cancelAt: iso(subscription.cancel_at), cancelledAt: iso(subscription.canceled_at), endedAt: iso(subscription.ended_at), collectionMethod: subscription.collection_method, paymentBehavior: subscription.payment_behavior, sourceUpdatedAt: observed(subscription) }, observedAt: observed(subscription) };
+  return { identifiers: identifiers(customer), billingSubscription: { providerNamespace: STRIPE_PROVIDER, providerSubscriptionId: subId, providerCustomerId: customerId, status: subscription.status ?? 'unknown', productReference: idOf(price?.product), priceReference: idOf(price), quantity: item?.quantity, startedAt: iso(subscription.start_date), trialStartAt: iso(subscription.trial_start), trialEndAt: iso(subscription.trial_end), currentPeriodStart: iso(subscription.current_period_start), currentPeriodEnd: iso(subscription.current_period_end), cancelAt: iso(subscription.cancel_at), cancelledAt: iso(subscription.canceled_at), endedAt: iso(subscription.ended_at), collectionMethod: subscription.collection_method, paymentBehavior: subscription.payment_behavior, sourceUpdatedAt: observed(subscription) }, observedAt: observed(subscription) };
 }
 
 export function mapStripeInvoice(invoice: StripeObject): NormalizedRecord {

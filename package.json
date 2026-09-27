@@ -26,6 +26,8 @@
     "test:decisions": "node scripts/test-decisions-runtime.mjs",
     "test:prebeta": "node scripts/test-prebeta.mjs",
     "test:onboarding": "node scripts/test-onboarding.mjs",
+    "test:demo-workspace": "node scripts/test-demo-workspace.mjs",
+    "demo:create": "node scripts/create-demo-workspace.mjs",
     "test:prebeta:staging": "node scripts/test-prebeta-staging.mjs",
     "test:propensity:python": "python -m unittest discover -s apps/propensity-worker/tests -t apps/propensity-worker -p test_core.py -v",
     "lint:propensity": "python -m ruff check apps/propensity-worker",
