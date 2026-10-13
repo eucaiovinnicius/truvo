@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { IdentityGraphService, SuppressedIdentifierError } from '../identity/identity-graph.service';
 import { CustomerContextService } from '../customer-context/customer-context.service';
 import type { TypedTraitValue } from '../customer-context/customer-context.contracts';
@@ -7,6 +7,7 @@ import { BillingContextWriteService } from './billing/billing-context-write.serv
 import { EngagementWriteService } from './engagement/engagement-write.service';
 import { CrmWriteService, type CrmOutcomeMapping } from './crm/crm-write.service';
 import type { NormalizedRecord, NormalizedTrait } from './contracts';
+import { ProductAnalyticsService } from '../product-analytics/product-analytics.service';
 
 /** Narrows the generic `{valueType, value}` shape into the discriminated union
  * `CustomerContextService.upsertTrait` expects — no `as` cast, exhaustive per type. */
@@ -63,6 +64,7 @@ export class CanonicalMappingService {
     @Inject(BillingContextWriteService) private readonly billing: BillingContextWriteService,
     @Inject(CrmWriteService) private readonly crm: CrmWriteService,
     @Inject(EngagementWriteService) private readonly engagement: EngagementWriteService,
+    @Optional() private readonly productAnalytics?: ProductAnalyticsService,
   ) {}
 
   /**
@@ -225,6 +227,11 @@ export class CanonicalMappingService {
           });
           result.traitsWritten += 1;
         }
+      }
+
+      const acceptedBusinessEvent = !!record.commerceOrder || hasBillingPayload || !!record.engagementEvent || !!record.crmDeal;
+      if (acceptedBusinessEvent) {
+        await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'first_event_received', metadata: { sourceCategory: 'connector' } });
       }
     }
 

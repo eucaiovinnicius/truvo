@@ -174,7 +174,7 @@ export class CommerceWriteService {
         })
         .returning({ id: customerOutcomes.id });
       purchaseOutcomeWritten = inserted.length > 0;
-      if (purchaseOutcomeWritten) await this.productAnalytics?.record({ workspaceId, eventName: 'first_outcome_observed', metadata: { outcomeCategory: 'purchase' } });
+      if (purchaseOutcomeWritten) await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'first_outcome_observed', metadata: { outcomeCategory: 'purchase' } });
     }
 
     return { orderId, purchaseOutcomeWritten, customerId: resolvedCustomerId };

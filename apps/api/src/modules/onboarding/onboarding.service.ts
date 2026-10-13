@@ -95,7 +95,7 @@ export class OnboardingService {
     const [row] = await this.db.execute(sql`select (select count(*) from customers where workspace_id=${workspaceId} and deleted_at is null) as customers,(select count(*) from customer_outcomes where workspace_id=${workspaceId}) as outcomes,(select count(*) from engagement_events where workspace_id=${workspaceId}) as events`);
     const counts = Object.fromEntries(Object.entries(row as Record<string, unknown>).map(([k, v]) => [k, Number(v)])); const detected = Object.values(counts).some((v) => v > 0);
     await this.db.execute(sql`update onboarding_progress set status=case when first_radar_id is null then ${detected ? 'data_detected' : 'waiting_for_data'} else status end,current_step=case when first_radar_id is null then ${detected ? 'readiness' : 'verify_data'} else current_step end,data_verified_at=case when first_radar_id is null and ${detected} then coalesce(data_verified_at,now()) else data_verified_at end,last_error_code=case when first_radar_id is null then ${detected ? null : 'no_incoming_data'} else last_error_code end,last_error_remediation=case when first_radar_id is null then ${detected ? null : 'Send a real event or wait for the initial connector sync'} else last_error_remediation end,updated_at=now() where workspace_id=${workspaceId}`);
-    if (detected) { await this.productAnalytics?.record({ workspaceId, eventName: 'first_event_received', metadata: { sourceCategory: progress.selected_path === 'custom' ? 'api' : 'connector' } }); await this.milestone(workspaceId, userId, 'incoming_data_verified'); }
+    if (detected) await this.milestone(workspaceId, userId, 'incoming_data_verified');
     return { ...(await this.get(workspaceId)), counts, detected };
   }
 
@@ -103,7 +103,7 @@ export class OnboardingService {
     const progress = await this.ensure(workspaceId); if (!progress.data_verified_at) throw new ConflictException('Verify incoming data first');
     const result = await this.quality.evaluate(workspaceId, request);
     await this.db.execute(sql`update onboarding_progress set status=case when first_radar_id is null then 'readiness_available' else status end,current_step=case when first_radar_id is null then 'create_radar' else current_step end,readiness_viewed_at=coalesce(readiness_viewed_at,now()),updated_at=now() where workspace_id=${workspaceId}`);
-    await this.productAnalytics?.record({ workspaceId, eventName: 'context_ready', metadata: { sourceCategory: progress.selected_path === 'custom' ? 'api' : 'connector' } });
+    if (result.radarReadiness.status === 'ready') await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'context_ready', metadata: { sourceCategory: progress.selected_path === 'custom' ? 'api' : 'connector' } });
     await this.milestone(workspaceId, userId, 'readiness_viewed'); return { ...(await this.get(workspaceId)), readiness: result };
   }
 

@@ -39,7 +39,7 @@ export class EventsService {
   async ingestOne(input: ApiIngestDto, workspaceId: string) {
     const event = this.normalize(input, workspaceId);
     await this.kafka.publish([{ key: workspaceId, value: JSON.stringify(event) }]);
-    await this.productAnalytics?.record({ workspaceId, eventName: 'first_event_received', metadata: { sourceCategory: 'api' } });
+    await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'first_event_received', metadata: { sourceCategory: 'api' } });
     metrics.increment('ingestion_accepted_total', { count: 1 });
     return { accepted: 1, event_id: event.event_id };
   }
@@ -50,7 +50,7 @@ export class EventsService {
     await this.kafka.publish(
       events.map((e) => ({ key: workspaceId, value: JSON.stringify(e) })),
     );
-    if (events.length) await this.productAnalytics?.record({ workspaceId, eventName: 'first_event_received', metadata: { sourceCategory: 'api' } });
+    if (events.length) await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'first_event_received', metadata: { sourceCategory: 'api' } });
     metrics.increment('ingestion_accepted_total', { count: events.length });
     return { accepted: events.length, event_ids: events.map((e) => e.event_id) };
   }

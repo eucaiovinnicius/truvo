@@ -222,7 +222,7 @@ export class OpportunitiesService {
         resourceId: result.id,
         metadata: auditMetadata,
       });
-      await this.productAnalytics?.record({ workspaceId, eventName: 'opportunities_generated', identity: result.id, metadata: { count: result.rows } });
+      await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'opportunities_generated', identity: result.id, metadata: { count: result.rows } });
     }
     return result;
   }
@@ -591,7 +591,7 @@ export class OpportunitiesService {
       resourceType: 'opportunity_export', resourceId: exportId,
       metadata: { radarId: input.radarId, batchId: batch.id, modelVersionId: batch.model_version_id, correlationId: input.correlationId, rowCount: rows.length },
     });
-    await this.productAnalytics?.record({ workspaceId, eventName: 'audience_exported', identity: exportId, metadata: { destinationCategory: 'csv' } });
+    await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'audience_exported', identity: exportId, metadata: { destinationCategory: 'csv' } });
     return { id: exportId, rowCount: rows.length, csv };
   }
 
@@ -652,7 +652,7 @@ export class OpportunitiesService {
         ${input.idempotencyKey},${JSON.stringify(input.selection)}::jsonb,${JSON.stringify(preview.counts)}::jsonb,'pending'
       )
     `);
-    await this.productAnalytics?.record({ workspaceId, eventName: 'activation_requested', identity: activationId, metadata: { destinationCategory: 'connector' } });
+    await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'activation_requested', identity: activationId, metadata: { destinationCategory: 'connector' } });
 
     // Re-check canonical privacy state immediately before each provider write.
     let attempted = 0;
@@ -718,7 +718,7 @@ export class OpportunitiesService {
       metadata: { radarId: input.radarId, modelVersionId: preview.modelVersionId, opportunityBatchId: preview.opportunityBatchId, connectionId: input.connectionId, correlationId: input.correlationId, status, counts },
     });
     if (this.decisions) await this.decisions.recordExecution(workspaceId, decisions.map((decision) => decision.id), { connectionId: input.connectionId, correlationId: input.correlationId, idempotencyKey: input.idempotencyKey, status: status === 'success' ? 'succeeded' : status === 'partial' ? 'partially_succeeded' : 'failed', remoteId: remoteAudienceId, counts, perDecision });
-    await this.productAnalytics?.record({ workspaceId, eventName: status === 'failed' ? 'activation_failed' : 'activation_completed', identity: activationId, metadata: status === 'failed' ? { destinationCategory: 'connector', reasonCode: 'provider_rejected' } : { destinationCategory: 'connector' } });
+    await this.productAnalytics?.recordSafely({ workspaceId, eventName: status === 'success' ? 'activation_completed' : 'activation_failed', identity: activationId, metadata: status === 'success' ? { destinationCategory: 'connector' } : { destinationCategory: 'connector', reasonCode: 'provider_rejected' } });
     return { replay: false, id: activationId, status, counts, remoteAudienceId, decisionBatchId: decisions[0] ? `dcb_${createHash('sha256').update([workspaceId,input.idempotencyKey].join('\u001f')).digest('hex').slice(0,26)}` : undefined, decisionCount: decisions.length };
   }
 

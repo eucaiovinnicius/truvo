@@ -162,7 +162,7 @@ export class EventProjectionService {
         set: { customerId: canonicalId, updatedAt: now },
       });
 
-    await this.productAnalytics?.record({ workspaceId, eventName: 'first_outcome_observed', metadata: { outcomeCategory: rule.outcomeKey.replace(/[^a-z0-9_]/g, '_').slice(0, 64) } });
+    await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'first_outcome_observed', metadata: { outcomeCategory: rule.outcomeKey.replace(/[^a-z0-9_]/g, '_').slice(0, 64) } });
 
     return { projected: true, outcomeId, deduped: existing !== undefined };
   }
