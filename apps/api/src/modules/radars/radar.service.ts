@@ -340,9 +340,11 @@ export class RadarService {
   }
 
   async validate(workspaceId: string, id: string) {
-    return this.db.transaction(async (tx) => {
+    let definitionVersion = 0;
+    const readiness = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`radar-validation:${workspaceId}:${id}`}))`);
       const { radar, definition } = await this.get(workspaceId, id, tx);
+      definitionVersion = definition.version;
       if (radar.status !== 'validating_data') {
         this.transition(radar.status, 'validating_data');
         const [started] = await tx.execute(sql`update radars set status='validating_data',updated_at=now() where workspace_id=${workspaceId} and id=${id} and current_definition_version=${definition.version} and status=${radar.status} returning id`);
@@ -354,10 +356,11 @@ export class RadarService {
       const [completed] = await tx.execute(sql`update radars set status=${readiness.status},updated_at=now() where workspace_id=${workspaceId} and id=${id} and current_definition_version=${definition.version} and status='validating_data' returning id`);
       if (!completed) throw new BadRequestException('Radar definition changed during validation');
       await tx.execute(sql`update radar_definition_versions set readiness=${JSON.stringify(readiness)}::jsonb where workspace_id=${workspaceId} and radar_id=${id} and version=${definition.version}`);
-      await this.productAnalytics?.record({ workspaceId, eventName: readiness.status === 'ready_to_train' ? 'radar_ready' : 'radar_failed', identity: `${id}:v${definition.version}`, metadata: readiness.status === 'ready_to_train' ? {} : { reasonCode: readiness.status === 'insufficient_data' ? 'insufficient_data' : 'validation_failed' } }, tx);
       this.logger.log(`Radar validation completed workspace=${workspaceId} radar=${id} definition=${definition.version} status=${readiness.status}`);
       return readiness;
     });
+    if (readiness.status !== 'ready_to_train') await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'radar_failed', identity: `${id}:v${definitionVersion}`, metadata: { reasonCode: readiness.status === 'insufficient_data' ? 'insufficient_data' : 'validation_failed' } });
+    return readiness;
   }
 
   async train(workspaceId: string, id: string, key: string) {

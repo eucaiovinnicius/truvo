@@ -25,7 +25,8 @@ export class ModelRegistryService {
   async latestTrainingRun(workspaceId: string, radarId: string) { await this.radar(workspaceId, radarId); const [row] = await this.db.execute(sql`select id,status,model_reference,failure_category,failure_reason,attempt_count,created_at,terminal_at,updated_at from radar_training_requests where workspace_id=${workspaceId} and radar_id=${radarId} order by created_at desc limit 1`); return row ?? null; }
 
   async reportTrainingResult(workspaceId: string, radarId: string, version: number, requestId: string, result: TrainingResult) {
-    return this.db.transaction(async (tx) => {
+    let recordFailure = false;
+    await this.db.transaction(async (tx) => {
       const [radar] = await tx.execute(sql`select * from radars where workspace_id=${workspaceId} and id=${radarId} for update`);
       if (!radar) throw new NotFoundException('Radar not found');
       const [request] = await tx.execute(sql`select * from radar_training_requests where workspace_id=${workspaceId} and id=${requestId} and radar_id=${radarId} and definition_version=${version} for update`);
@@ -40,7 +41,7 @@ export class ModelRegistryService {
         const state = radar.current_model_reference ? 'active' : result.status === 'insufficient_data' ? 'insufficient_data' : 'failed';
         await tx.execute(sql`update radar_training_requests set status=${result.status},failure_category=${result.status === 'insufficient_data' ? 'insufficient_data' : this.safe(result.failureCategory)},failure_reason=${this.safe(result.failureReason)},model_reference=null,claimed_by=null,lease_expires_at=null,terminal_at=now(),updated_at=now() where workspace_id=${workspaceId} and id=${requestId}`);
         await tx.execute(sql`update radars set status=${state},updated_at=now() where workspace_id=${workspaceId} and id=${radarId}`);
-        await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'radar_failed', identity: `${radarId}:v${version}:training`, metadata: { reasonCode: result.status === 'insufficient_data' ? 'insufficient_data' : 'training_failed' } }, tx);
+        recordFailure = true;
         return;
       }
       const modelId = result.modelReference?.trim(); if (!modelId) throw new BadRequestException('Successful training result requires model reference');
@@ -53,6 +54,7 @@ export class ModelRegistryService {
       await tx.execute(sql`update radars set status=${radar.current_model_reference ? 'active' : 'ready_to_train'},updated_at=now() where workspace_id=${workspaceId} and id=${radarId}`);
       await this.audit.record({ workspaceId, actorType: 'system', category: 'model_registry', action: 'training_validated', resourceType: 'radar_model', resourceId: modelId, metadata: { radarId, requestId, definitionVersion: version } });
     });
+    if (recordFailure) await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'radar_failed', identity: `${radarId}:v${version}:training`, metadata: { reasonCode: result.status === 'insufficient_data' ? 'insufficient_data' : 'training_failed' } });
   }
 
   async promote(workspaceId: string, radarId: string, modelId: string, actorUserId?: string, reason = 'explicit_promotion') { return this.activate(workspaceId, radarId, modelId, actorUserId, 'promoted', reason); }
@@ -91,9 +93,11 @@ export class ModelRegistryService {
   }
 
   private async activate(workspaceId: string, radarId: string, modelId: string, actorUserId: string | undefined, action: string, reason: string, allowRetired = false) {
-    return this.db.transaction(async (tx) => {
+    let definitionVersion = 0;
+    const activated = await this.db.transaction(async (tx) => {
       const [radar] = await tx.execute(sql`select * from radars where workspace_id=${workspaceId} and id=${radarId} for update`); if (!radar) throw new NotFoundException('Radar not found');
       const [model] = await tx.execute(sql`select * from radar_model_versions where workspace_id=${workspaceId} and id=${modelId} and radar_id=${radarId} for update`); if (!model) throw new NotFoundException('Model not found');
+      definitionVersion = Number(model.definition_version);
       if (!['validated', ...(allowRetired ? ['retired'] : [])].includes(String(model.status))) throw new BadRequestException('Model is not eligible for this lifecycle operation');
       if (Number(model.definition_version) !== Number(radar.current_definition_version)) throw new BadRequestException('Model is incompatible with current Radar definition');
       const artifact = await this.artifacts.verify(this.artifact(model as unknown as Model)); if (!artifact.ok) throw new BadRequestException(`Model artifact is unavailable: ${artifact.reason}`);
@@ -103,6 +107,8 @@ export class ModelRegistryService {
       await this.audit.record({ workspaceId, actorUserId, category: 'model_registry', action, resourceType: 'radar_model', resourceId: modelId, metadata: { radarId, reason } });
       return { modelId, status: 'active' };
     });
+    await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'radar_ready', identity: `${radarId}:v${definitionVersion}` });
+    return activated;
   }
   private async radar(workspaceId: string, radarId: string) { const [row] = await this.db.execute(sql`select id from radars where workspace_id=${workspaceId} and id=${radarId}`); if (!row) throw new NotFoundException('Radar not found'); return row; }
   private async model(workspaceId: string, radarId: string, modelId: string): Promise<Model> { const [row] = await this.db.execute(sql`select * from radar_model_versions where workspace_id=${workspaceId} and radar_id=${radarId} and id=${modelId}`); if (!row) throw new NotFoundException('Model not found'); return row as unknown as Model; }
