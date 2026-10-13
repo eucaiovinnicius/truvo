@@ -87,7 +87,7 @@ function productionToken(subject) {
   return `${header}.${payload}.${signature}`;
 }
 function startApi(name, image, commit) {
-  run('docker', ['run', '--name', name, '--network', network, '-p', '127.0.0.1::3333',
+  run('docker', ['run', '--name', name, '--network', network, '--add-host', 'host.docker.internal:host-gateway', '-p', '127.0.0.1::3333',
     '-e', 'NODE_ENV=production', '-e', 'CORS_ORIGINS=https://staging.truvo.invalid', '-e', 'TRUVO_DEV_AUTH_BYPASS=0',
     '-e', `RELEASE_COMMIT=${commit}`, '-e', 'RELEASE_VERSION=prebeta-staging',
     '-e', 'DATABASE_URL=postgresql://postgres:prebeta_test@pg:5432/truvo_prebeta',
@@ -172,7 +172,7 @@ try {
   console.log('[staging] web process passed');
 
   const dispatch = JSON.stringify({ workspaceId: 'prebeta', radarId: 'radar', definitionVersion: 1, trainingRequestId: 'missing', correlationId: 'prebeta-worker-entrypoint' });
-  const worker = await captureAsync('docker', ['run', '--rm', '--network', network,
+  const worker = await captureAsync('docker', ['run', '--rm', '--network', network, '--add-host', 'host.docker.internal:host-gateway',
     '-e', 'DATABASE_URL=postgresql://postgres:prebeta_test@pg:5432/truvo_prebeta', '-e', `SUPABASE_URL=http://host.docker.internal:${storagePort}`,
     '-e', 'SUPABASE_SERVICE_ROLE_KEY=prebeta-service-role', '-e', 'PROPENSITY_ARTIFACT_BUCKET=models', '-e', 'INTERNAL_API_SECRET=prebeta-internal-secret',
     images.worker, 'python', '-m', 'propensity_worker', '--once-json', dispatch]);
