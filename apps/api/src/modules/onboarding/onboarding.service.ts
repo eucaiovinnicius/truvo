@@ -77,12 +77,12 @@ export class OnboardingService {
     await this.milestone(workspaceId, userId, 'context_connection_started', { path: progress.selected_path });
     let connection;
     try { connection = await this.connections.get(workspaceId, connectionId); }
-    catch (error) { await this.milestone(workspaceId, userId, 'context_connection_failed'); await this.productAnalytics?.record({ workspaceId, eventName: 'integration_failed', identity: connectionId, metadata: { reasonCode: 'connection_unavailable' } }); throw error; }
+    catch (error) { await this.milestone(workspaceId, userId, 'context_connection_failed'); await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_failed', identity: connectionId, metadata: { reasonCode: 'connection_unavailable' } }); throw error; }
     if (connection.role === 'destination') throw new ConflictException('Destination connectors cannot be used as onboarding sources');
     const healthy = connection.lifecycleState === 'healthy' && connection.credentialStatus === 'valid';
     await this.db.execute(sql`update onboarding_progress set connection_id=case when first_radar_id is null then ${connectionId} else connection_id end,source_status=case when first_radar_id is null then ${healthy ? 'healthy' : connection.lifecycleState} else source_status end,status=case when first_radar_id is null then ${healthy ? 'waiting_for_data' : 'syncing'} else status end,current_step=case when first_radar_id is null then 'verify_data' else current_step end,healthy_context_at=case when first_radar_id is null and ${healthy} then coalesce(healthy_context_at,now()) else healthy_context_at end,last_error_code=case when first_radar_id is null then ${healthy ? null : 'source_not_ready'} else last_error_code end,last_error_remediation=case when first_radar_id is null then ${healthy ? null : 'Finish authorization and wait for the initial sync'} else last_error_remediation end,updated_at=now() where workspace_id=${workspaceId}`);
     await this.milestone(workspaceId, userId, healthy ? 'context_connection_succeeded' : 'context_connection_failed', { provider: connection.provider, sourceStatus: healthy ? 'healthy' : connection.lifecycleState });
-    await this.productAnalytics?.record({ workspaceId, eventName: healthy ? 'integration_connected' : 'integration_failed', identity: connectionId, metadata: healthy ? { providerCategory: connection.provider } : { providerCategory: connection.provider, reasonCode: 'source_not_ready' } });
+    await this.productAnalytics?.recordSafely({ workspaceId, eventName: healthy ? 'integration_connected' : 'integration_failed', identity: connectionId, metadata: healthy ? { providerCategory: connection.provider } : { providerCategory: connection.provider, reasonCode: 'source_not_ready' } });
     return this.get(workspaceId);
   }
 
