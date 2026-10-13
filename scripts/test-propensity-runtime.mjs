@@ -48,10 +48,13 @@ function httpRequest(url, options = {}, body) {
   });
 }
 
-async function readyHttp(url) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+async function readyHttp(url, container) {
+  for (let attempt = 0; attempt < 240; attempt += 1) {
     try { if ((await httpRequest(url)) < 500) return; } catch { /* retry */ }
     await delay(500);
+  }
+  if (container) {
+    spawnSync('docker', ['logs', container], { stdio: 'inherit' });
   }
   throw new Error(`${url} did not become ready`);
 }
@@ -77,6 +80,7 @@ async function main() {
     ]);
     run('docker', [
       'run', '--name', storageApiContainer,
+      '--add-host', 'host.docker.internal:host-gateway',
       '-e', 'SERVER_PORT=5000', '-e', `AUTH_JWT_SECRET=${storageJwtSecret}`, '-e', 'AUTH_JWT_ALGORITHM=HS256',
       '-e', `DATABASE_URL=postgresql://postgres:storage_test@host.docker.internal:${storagePostgresPort}/storage_test`,
       '-e', 'DB_INSTALL_ROLES=true', '-e', 'STORAGE_BACKEND=file', '-e', 'FILE_STORAGE_BACKEND_PATH=/var/lib/storage',
@@ -86,7 +90,7 @@ async function main() {
     ]);
     started.push(storageApiContainer);
     const storageApiPort = mappedPort(storageApiContainer, 5000);
-    await readyHttp(`http://127.0.0.1:${storageApiPort}/status`);
+    await readyHttp(`http://127.0.0.1:${storageApiPort}/status`, storageApiContainer);
     const bucketBody = JSON.stringify({ id: 'propensity-models', name: 'propensity-models', public: false });
     const bucketStatus = await httpRequest(`http://127.0.0.1:${storageApiPort}/bucket`, {
       method: 'POST', headers: { authorization: `Bearer ${storageServiceKey}`, apikey: storageServiceKey, 'content-type': 'application/json', 'content-length': Buffer.byteLength(bucketBody) },
