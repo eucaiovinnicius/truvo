@@ -23,6 +23,15 @@ function run(command, args, options = {}) {
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed (${result.status})`);
   return result;
 }
+async function runWithRetry(command, args, options = {}, attempts = 3) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const result = spawnSync(command, args, { stdio: 'inherit', ...options });
+    if (result.error) throw result.error;
+    if (result.status === 0) return;
+    if (attempt === attempts) throw new Error(`${command} ${args.join(' ')} failed (${result.status}) after ${attempts} attempts`);
+    await delay(attempt * 1_000);
+  }
+}
 function capture(command, args, options = {}) {
   const result = spawnSync(command, args, { encoding: 'utf8', ...options });
   if (result.error) throw result.error;
@@ -130,7 +139,7 @@ try {
   await Promise.all([ready(names.pg, ['pg_isready', '-U', 'postgres', '-d', 'truvo_prebeta']), ready(names.redis, ['redis-cli', 'ping']), ready(names.ch, ['wget', '--spider', '-q', '127.0.0.1:8123/ping']), ready(names.rp, ['rpk', 'cluster', 'health'])]);
   const hostEnv = { ...process.env, DATABASE_URL: `postgresql://postgres:prebeta_test@127.0.0.1:${port(names.pg, 5432)}/truvo_prebeta`, CLICKHOUSE_URL: `http://127.0.0.1:${port(names.ch, 8123)}`, CLICKHOUSE_USER: 'truvo', CLICKHOUSE_PASSWORD: 'truvo_local', CLICKHOUSE_DB: 'truvo' };
   run(pnpm, ['--filter', '@truvo/db', 'db:migrate'], { env: hostEnv });
-  run(pnpm, ['--filter', '@truvo/db', 'ch:migrate'], { env: hostEnv });
+  await runWithRetry(pnpm, ['--filter', '@truvo/db', 'ch:migrate'], { env: hostEnv });
   run(pnpm, ['--filter', '@truvo/db', 'db:migrate'], { env: hostEnv });
 
   if (process.env.PREBETA_SKIP_IMAGE_BUILD !== '1') {
