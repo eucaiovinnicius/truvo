@@ -45,6 +45,18 @@ jobs:
       - name: Test
         run: pnpm -w run test
 
+      - name: Product analytics runtime
+        run: pnpm test:product-analytics
+
+      - name: Order 140 regression gates
+        run: |
+          pnpm test:onboarding
+          pnpm test:app-shell
+          pnpm test:demo-workspace
+          pnpm test:prebeta
+          pnpm test:opportunities
+          pnpm test:decisions
+
       - name: Build
         run: pnpm -w run build
 

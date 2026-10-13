@@ -26,6 +26,7 @@
     "test:decisions": "node scripts/test-decisions-runtime.mjs",
     "test:prebeta": "node scripts/test-prebeta.mjs",
     "test:onboarding": "node scripts/test-onboarding.mjs",
+    "test:product-analytics": "node scripts/test-product-analytics.mjs",
     "test:demo-workspace": "node scripts/test-demo-workspace.mjs",
     "test:app-shell": "pnpm --filter @truvo/web test:app-shell",
     "demo:create": "node scripts/create-demo-workspace.mjs",

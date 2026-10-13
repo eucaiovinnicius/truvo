@@ -1,0 +1,1 @@
+import { z } from 'zod'; export const opportunityViewedSchema=z.object({opportunityId:z.string().regex(/^[a-zA-Z0-9_-]{1,120}$/),viewId:z.string().regex(/^[a-zA-Z0-9_-]{1,120}$/),surface:z.enum(['opportunity_detail','opportunity_list'])}).strict(); export type OpportunityViewedDto=z.infer<typeof opportunityViewedSchema>;

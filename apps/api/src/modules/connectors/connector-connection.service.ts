@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { and, eq, sql } from 'drizzle-orm';
 import { connectorConnections, type ConnectorConnectionRow, type ConnectorCredentialStatus, type ConnectorLifecycleState, type ConnectorRole } from '@truvo/db';
 import { DRIZZLE, type Database } from '../auth/database.provider';
@@ -7,6 +7,7 @@ import { AuditService } from '../audit/audit.service';
 import { ConnectorRegistryService } from './connector-registry.service';
 import { decryptJson, encryptJson } from './crypto';
 import type { ConnectionTestResult, ConnectorConnection, OAuthRefreshAdapter } from './contracts';
+import { ProductAnalyticsService } from '../product-analytics/product-analytics.service';
 
 export interface ConnectorActor {
   id?: string;
@@ -46,6 +47,7 @@ export class ConnectorConnectionService {
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly audit: AuditService,
     private readonly registry: ConnectorRegistryService,
+    @Optional() private readonly productAnalytics?: ProductAnalyticsService,
   ) {}
 
   private sanitize(row: ConnectorConnectionRow): ConnectorConnection {
@@ -81,7 +83,6 @@ export class ConnectorConnectionService {
       actorEmail: actor?.email,
       metadata: { provider: input.provider, role: input.role },
     });
-
     return this.sanitize(row!);
   }
 
@@ -279,7 +280,6 @@ export class ConnectorConnectionService {
         updatedAt: new Date(),
       })
       .where(and(eq(connectorConnections.workspaceId, workspaceId), eq(connectorConnections.id, id)));
-
     await this.audit.record({
       workspaceId,
       category: 'connector',
@@ -290,6 +290,7 @@ export class ConnectorConnectionService {
       actorEmail: actor?.email,
       metadata: { provider: connection.provider, ok: result.ok, credential_status: credentialStatus },
     });
+    await this.productAnalytics?.record({ workspaceId, eventName: result.ok ? 'integration_connected' : 'integration_failed', identity: id, metadata: result.ok ? { providerCategory: connection.provider } : { providerCategory: connection.provider, reasonCode: credentialStatus === 'invalid' ? 'invalid_credentials' : 'connection_failed' } });
 
     return result;
   }
@@ -317,6 +318,8 @@ export class ConnectorConnectionService {
       .update(connectorConnections)
       .set(patch)
       .where(and(eq(connectorConnections.workspaceId, workspaceId), eq(connectorConnections.id, id)));
+    if (outcome.state === 'healthy') await this.productAnalytics?.record({ workspaceId, eventName: 'integration_connected', identity: id });
+    if (outcome.state === 'error') await this.productAnalytics?.record({ workspaceId, eventName: 'integration_failed', identity: `${id}:sync`, metadata: { reasonCode: outcome.authFailure ? 'invalid_credentials' : 'sync_failed' } });
   }
 
   async disconnect(workspaceId: string, id: string, actor?: ConnectorActor): Promise<ConnectorConnection> {
