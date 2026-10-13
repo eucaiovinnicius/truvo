@@ -10,7 +10,7 @@ const FIRST_ONLY=new Set<ProductEventName>(['workspace_created','first_event_rec
   const v=validateProductEvent(input.eventName,input.metadata); const identity=FIRST_ONLY.has(v.name)?'first':input.identity;
   if(!identity||!/^[a-zA-Z0-9:_-]{1,200}$/.test(identity)) throw new Error(`Canonical identity required for ${v.name}`);
   const key=`${v.name}:${identity}`,id=`pa_${createHash('sha256').update(`${input.workspaceId}:${key}`).digest('hex').slice(0,26)}`;
-  const rows=await executor.execute(sql`insert into truvo_product_events (id,workspace_id,event_name,occurred_at,idempotency_key,metadata) values (${id},${input.workspaceId},${v.name},${(input.occurredAt??new Date()).toISOString()}::timestamptz,${key},${JSON.stringify(v.metadata)}::jsonb) on conflict (workspace_id,idempotency_key) do nothing returning *`);
+  const rows=await executor.execute(sql`insert into truvo_product_events (id,workspace_id,event_name,occurred_at,idempotency_key,metadata) values (${id},${input.workspaceId},${v.name},${(input.occurredAt??new Date()).toISOString()}::timestamptz,${key},(${JSON.stringify(v.metadata)}::text)::jsonb) on conflict (workspace_id,idempotency_key) do nothing returning *`);
   return {inserted:rows.length===1,event:rows[0]??null};
  }
  async workspaceFunnel(workspaceId:string){
