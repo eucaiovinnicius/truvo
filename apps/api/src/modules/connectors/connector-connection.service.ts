@@ -290,7 +290,11 @@ export class ConnectorConnectionService {
       actorEmail: actor?.email,
       metadata: { provider: connection.provider, ok: result.ok, credential_status: credentialStatus },
     });
-    await this.productAnalytics?.record({ workspaceId, eventName: result.ok ? 'integration_connected' : 'integration_failed', identity: id, metadata: result.ok ? { providerCategory: connection.provider } : { providerCategory: connection.provider, reasonCode: credentialStatus === 'invalid' ? 'invalid_credentials' : 'connection_failed' } });
+    if (result.ok && (nextLifecycle === 'connected' || nextLifecycle === 'healthy')) {
+      await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_connected', identity: id, metadata: { providerCategory: connection.provider } });
+    } else if (!result.ok) {
+      await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_failed', identity: id, metadata: { providerCategory: connection.provider, reasonCode: credentialStatus === 'invalid' ? 'invalid_credentials' : 'connection_failed' } });
+    }
 
     return result;
   }
@@ -318,8 +322,8 @@ export class ConnectorConnectionService {
       .update(connectorConnections)
       .set(patch)
       .where(and(eq(connectorConnections.workspaceId, workspaceId), eq(connectorConnections.id, id)));
-    if (outcome.state === 'healthy') await this.productAnalytics?.record({ workspaceId, eventName: 'integration_connected', identity: id });
-    if (outcome.state === 'error') await this.productAnalytics?.record({ workspaceId, eventName: 'integration_failed', identity: `${id}:sync`, metadata: { reasonCode: outcome.authFailure ? 'invalid_credentials' : 'sync_failed' } });
+    if (outcome.state === 'healthy') await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_connected', identity: id });
+    if (outcome.state === 'error') await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_failed', identity: `${id}:sync`, metadata: { reasonCode: outcome.authFailure ? 'invalid_credentials' : 'sync_failed' } });
   }
 
   async disconnect(workspaceId: string, id: string, actor?: ConnectorActor): Promise<ConnectorConnection> {
