@@ -130,6 +130,7 @@ export class OnboardingService {
     await this.milestone(workspaceId, userId, 'first_radar_initiated');
     await this.milestone(workspaceId, userId, 'first_radar_created'); await this.milestone(workspaceId, userId, 'onboarding_completed');
     const radarId = String((result.radar as { radar?: { id?: string } }).radar?.id);
+    if (!result.replay) await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'radar_created', identity: radarId, metadata: { radarType: `window_${radarInput.predictionWindowDays}d` } });
     if (!result.replay || await this.radars.requiresValidation(workspaceId, radarId)) {
       await this.failureInjector?.beforeRadarValidation?.(workspaceId, radarId);
       await this.radars.validate(workspaceId, radarId);

@@ -189,9 +189,10 @@ export class RadarService {
     await database.transaction(async (tx) => {
       await tx.execute(sql`insert into radars (workspace_id,id,name,status,current_definition_version) values (${workspaceId},${id},${input.name},'draft',1)`);
       await tx.execute(sql`insert into radar_definition_versions (workspace_id,radar_id,version,outcome_definition_id,audience_ast,prediction_window_days,optimization_goal,activation_destination) values (${workspaceId},${id},1,${input.outcomeDefinitionId},${JSON.stringify(audience)}::jsonb,${input.predictionWindowDays},${JSON.stringify(input.optimizationGoal ?? {})}::jsonb,${destination ? JSON.stringify(destination) : null}::jsonb)`);
-      await this.productAnalytics?.record({ workspaceId, eventName: 'radar_created', identity: id, metadata: { radarType: `window_${input.predictionWindowDays}d` } }, tx);
     });
-    return this.get(workspaceId, id, database);
+    const created = await this.get(workspaceId, id, database);
+    if (database === this.db) await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'radar_created', identity: id, metadata: { radarType: `window_${input.predictionWindowDays}d` } });
+    return created;
   }
 
   async get(workspaceId: string, id: string, database: RadarDb = this.db) {

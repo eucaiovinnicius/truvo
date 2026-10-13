@@ -718,7 +718,10 @@ export class OpportunitiesService {
       metadata: { radarId: input.radarId, modelVersionId: preview.modelVersionId, opportunityBatchId: preview.opportunityBatchId, connectionId: input.connectionId, correlationId: input.correlationId, status, counts },
     });
     if (this.decisions) await this.decisions.recordExecution(workspaceId, decisions.map((decision) => decision.id), { connectionId: input.connectionId, correlationId: input.correlationId, idempotencyKey: input.idempotencyKey, status: status === 'success' ? 'succeeded' : status === 'partial' ? 'partially_succeeded' : 'failed', remoteId: remoteAudienceId, counts, perDecision });
-    await this.productAnalytics?.recordSafely({ workspaceId, eventName: status === 'success' ? 'activation_completed' : 'activation_failed', identity: activationId, metadata: status === 'success' ? { destinationCategory: 'connector' } : { destinationCategory: 'connector', reasonCode: 'provider_rejected' } });
+    const failureReason = attempted === 0
+      ? (suppressedAfterPreview > 0 || preview.counts.suppressed > 0 ? 'privacy_suppressed' : preview.counts.missingDestinationIdentifier > 0 ? 'missing_destination_identifier' : 'no_deliverable_members')
+      : (retryableFailures > 0 && permanentFailures === 0 ? 'provider_retryable' : 'provider_rejected');
+    await this.productAnalytics?.recordSafely({ workspaceId, eventName: status === 'success' ? 'activation_completed' : 'activation_failed', identity: activationId, metadata: status === 'success' ? { destinationCategory: 'connector' } : { destinationCategory: 'connector', reasonCode: failureReason } });
     return { replay: false, id: activationId, status, counts, remoteAudienceId, decisionBatchId: decisions[0] ? `dcb_${createHash('sha256').update([workspaceId,input.idempotencyKey].join('\u001f')).digest('hex').slice(0,26)}` : undefined, decisionCount: decisions.length };
   }
 

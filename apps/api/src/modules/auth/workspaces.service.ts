@@ -45,7 +45,7 @@ export class WorkspacesService {
   async createWorkspace(ownerId: string, dto: CreateWorkspaceDto) {
     const slug = await this.resolveUniqueSlug(dto.slug ?? this.slugify(dto.name));
 
-    return this.db.transaction(async (tx) => {
+    const created = await this.db.transaction(async (tx) => {
       const [ws] = await tx
         .insert(workspaces)
         .values({
@@ -66,10 +66,10 @@ export class WorkspacesService {
         status: 'active',
       });
 
-      await this.productAnalytics?.record({ workspaceId: ws.id, eventName: 'workspace_created' }, tx);
-
       return { ...ws, role: 'owner' as WorkspaceRole };
     });
+    await this.productAnalytics?.recordSafely({ workspaceId: created.id, eventName: 'workspace_created' });
+    return created;
   }
 
   /** Lista os workspaces do usuário com seu papel em cada um. */
