@@ -82,7 +82,11 @@ export class OnboardingService {
     const healthy = connection.lifecycleState === 'healthy' && connection.credentialStatus === 'valid';
     await this.db.execute(sql`update onboarding_progress set connection_id=case when first_radar_id is null then ${connectionId} else connection_id end,source_status=case when first_radar_id is null then ${healthy ? 'healthy' : connection.lifecycleState} else source_status end,status=case when first_radar_id is null then ${healthy ? 'waiting_for_data' : 'syncing'} else status end,current_step=case when first_radar_id is null then 'verify_data' else current_step end,healthy_context_at=case when first_radar_id is null and ${healthy} then coalesce(healthy_context_at,now()) else healthy_context_at end,last_error_code=case when first_radar_id is null then ${healthy ? null : 'source_not_ready'} else last_error_code end,last_error_remediation=case when first_radar_id is null then ${healthy ? null : 'Finish authorization and wait for the initial sync'} else last_error_remediation end,updated_at=now() where workspace_id=${workspaceId}`);
     await this.milestone(workspaceId, userId, healthy ? 'context_connection_succeeded' : 'context_connection_failed', { provider: connection.provider, sourceStatus: healthy ? 'healthy' : connection.lifecycleState });
-    await this.productAnalytics?.recordSafely({ workspaceId, eventName: healthy ? 'integration_connected' : 'integration_failed', identity: connectionId, metadata: healthy ? { providerCategory: connection.provider } : { providerCategory: connection.provider, reasonCode: 'source_not_ready' } });
+    if (healthy) {
+      await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_connected', identity: connectionId, metadata: { providerCategory: connection.provider } });
+    } else if (connection.lifecycleState === 'error' || connection.credentialStatus === 'invalid') {
+      await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_failed', identity: connectionId, metadata: { providerCategory: connection.provider, reasonCode: connection.credentialStatus === 'invalid' ? 'invalid_credentials' : 'connection_error' } });
+    }
     return this.get(workspaceId);
   }
 

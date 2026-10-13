@@ -1,16 +1,17 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import { DRIZZLE, type Database } from '../auth/database.provider';
 import { AuditService } from '../audit/audit.service';
 import { ModelArtifactIntegrityService, type ArtifactIntegrityVerifier, type StoredModelArtifact } from './model-artifact-integrity.service';
+import { ProductAnalyticsService } from '../product-analytics/product-analytics.service';
 
 type Model = StoredModelArtifact & { id: string; workspace_id: string; radar_id: string; definition_version: number; status: string; model_role: string; target_outcome_definition_id: string; prediction_window_days: number; feature_schema_version: string; verified_at: Date; promoted_at: Date | null; metrics: unknown; calibration: unknown; provenance: unknown; validation: unknown; created_at: Date };
 type TrainingResult = { status: 'succeeded' | 'failed' | 'insufficient_data'; modelReference?: string; failureCategory?: string; failureReason?: string };
 
 @Injectable()
 export class ModelRegistryService {
-  constructor(@Inject(DRIZZLE) private readonly db: Database, private readonly audit: AuditService, private readonly artifacts: ModelArtifactIntegrityService) {}
+  constructor(@Inject(DRIZZLE) private readonly db: Database, private readonly audit: AuditService, private readonly artifacts: ModelArtifactIntegrityService, @Optional() private readonly productAnalytics?: ProductAnalyticsService) {}
 
   async list(workspaceId: string, radarId: string) {
     await this.radar(workspaceId, radarId);
@@ -39,6 +40,7 @@ export class ModelRegistryService {
         const state = radar.current_model_reference ? 'active' : result.status === 'insufficient_data' ? 'insufficient_data' : 'failed';
         await tx.execute(sql`update radar_training_requests set status=${result.status},failure_category=${result.status === 'insufficient_data' ? 'insufficient_data' : this.safe(result.failureCategory)},failure_reason=${this.safe(result.failureReason)},model_reference=null,claimed_by=null,lease_expires_at=null,terminal_at=now(),updated_at=now() where workspace_id=${workspaceId} and id=${requestId}`);
         await tx.execute(sql`update radars set status=${state},updated_at=now() where workspace_id=${workspaceId} and id=${radarId}`);
+        await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'radar_failed', identity: `${radarId}:v${version}:training`, metadata: { reasonCode: result.status === 'insufficient_data' ? 'insufficient_data' : 'training_failed' } }, tx);
         return;
       }
       const modelId = result.modelReference?.trim(); if (!modelId) throw new BadRequestException('Successful training result requires model reference');
