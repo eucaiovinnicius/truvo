@@ -8,6 +8,7 @@ const postgresContainer = `truvo-propensity-pg-${suffix}`;
 const redisContainer = `truvo-propensity-redis-${suffix}`;
 const storagePostgresContainer = `truvo-propensity-storage-pg-${suffix}`;
 const storageApiContainer = `truvo-propensity-storage-api-${suffix}`;
+const storageNetwork = `truvo-propensity-storage-${suffix}`;
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 const python = process.env.PROPENSITY_PYTHON ?? (process.platform === 'win32' ? 'python.exe' : 'python3');
 const storageJwtSecret = 'propensity-storage-test-secret-at-least-32-chars';
@@ -61,7 +62,10 @@ async function readyHttp(url, container) {
 
 async function main() {
   const started = [];
+  let networkStarted = false;
   try {
+    run('docker', ['network', 'create', storageNetwork]);
+    networkStarted = true;
     run('docker', ['run', '--name', postgresContainer, '-e', 'POSTGRES_PASSWORD=propensity_test', '-e', 'POSTGRES_DB=truvo_propensity_runtime', '-p', '127.0.0.1::5432', '-d', 'postgres:16-alpine']);
     started.push(postgresContainer);
     const postgresPort = mappedPort(postgresContainer, 5432);
@@ -70,9 +74,8 @@ async function main() {
     started.push(redisContainer);
     const redisPort = mappedPort(redisContainer, 6379);
     const redisUrl = `redis://127.0.0.1:${redisPort}`;
-    run('docker', ['run', '--name', storagePostgresContainer, '-e', 'POSTGRES_PASSWORD=storage_test', '-e', 'POSTGRES_DB=storage_test', '-p', '127.0.0.1::5432', '-d', 'postgres:16-alpine']);
+    run('docker', ['run', '--name', storagePostgresContainer, '--network', storageNetwork, '-e', 'POSTGRES_PASSWORD=storage_test', '-e', 'POSTGRES_DB=storage_test', '-d', 'postgres:16-alpine']);
     started.push(storagePostgresContainer);
-    const storagePostgresPort = mappedPort(storagePostgresContainer, 5432);
     await Promise.all([
       ready(postgresContainer, ['pg_isready', '-U', 'postgres', '-d', 'truvo_propensity_runtime']),
       ready(redisContainer, ['redis-cli', 'ping']),
@@ -80,9 +83,9 @@ async function main() {
     ]);
     run('docker', [
       'run', '--name', storageApiContainer,
-      '--add-host', 'host.docker.internal:host-gateway',
+      '--network', storageNetwork,
       '-e', 'SERVER_PORT=5000', '-e', `AUTH_JWT_SECRET=${storageJwtSecret}`, '-e', 'AUTH_JWT_ALGORITHM=HS256',
-      '-e', `DATABASE_URL=postgresql://postgres:storage_test@host.docker.internal:${storagePostgresPort}/storage_test`,
+      '-e', `DATABASE_URL=postgresql://postgres:storage_test@${storagePostgresContainer}:5432/storage_test`,
       '-e', 'DB_INSTALL_ROLES=true', '-e', 'STORAGE_BACKEND=file', '-e', 'FILE_STORAGE_BACKEND_PATH=/var/lib/storage',
       '-e', 'TENANT_ID=stub', '-e', 'REGION=stub', '-e', 'GLOBAL_S3_BUCKET=stub', '-e', 'FILE_SIZE_LIMIT=52428800',
       '-e', 'UPLOAD_FILE_SIZE_LIMIT=52428800', '-e', 'UPLOAD_FILE_SIZE_LIMIT_STANDARD=52428800',
@@ -111,6 +114,11 @@ async function main() {
       const cleanup = spawnSync('docker', ['rm', '-f', container], { stdio: 'inherit' });
       if (cleanup.error) throw cleanup.error;
       if (cleanup.status !== 0) throw new Error(`Failed to remove disposable container ${container}`);
+    }
+    if (networkStarted) {
+      const cleanup = spawnSync('docker', ['network', 'rm', storageNetwork], { stdio: 'inherit' });
+      if (cleanup.error) throw cleanup.error;
+      if (cleanup.status !== 0) throw new Error(`Failed to remove disposable network ${storageNetwork}`);
     }
   }
 }
