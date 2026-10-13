@@ -15,6 +15,16 @@ function run(command, args, options = {}) {
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed (${result.status})`);
 }
 
+async function runWithRetry(command, args, options = {}, attempts = 3) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const result = spawnSync(command, args, { stdio: 'inherit', ...options });
+    if (result.error) throw result.error;
+    if (result.status === 0) return;
+    if (attempt === attempts) throw new Error(`${command} ${args.join(' ')} failed (${result.status}) after ${attempts} attempts`);
+    await delay(attempt * 1_000);
+  }
+}
+
 function mappedPort(container, containerPort) {
   const result = spawnSync('docker', ['port', container, `${containerPort}/tcp`], { encoding: 'utf8' });
   const match = result.stdout.trim().match(/:(\d+)$/);
@@ -72,7 +82,10 @@ try {
   };
   run(pnpm, ['--filter', '@truvo/db', 'db:migrate'], { env });
   run(pnpm, ['--filter', '@truvo/db', 'db:migrate'], { env });
-  run(pnpm, ['--filter', '@truvo/db', 'ch:migrate'], { env });
+  // The HTTP ping can succeed a moment before ClickHouse accepts a complete
+  // migration batch. Retry only this idempotent migration boundary so a
+  // transient startup connection reset does not invalidate the full gate.
+  await runWithRetry(pnpm, ['--filter', '@truvo/db', 'ch:migrate'], { env });
   run(pnpm, ['--filter', '@truvo/api', 'exec', 'tsx', '--test', 'src/prebeta/prebeta.runtime.test.ts', 'src/prebeta/golden-path.runtime.test.ts'], { env });
   run(pnpm, ['--filter', '@truvo/api', 'test'], { env });
 } finally {
