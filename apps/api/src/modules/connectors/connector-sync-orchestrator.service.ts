@@ -291,7 +291,7 @@ export class ConnectorSyncOrchestratorService {
         .set({ status: 'failed', lastError: errorReason, updatedAt: finishedAt })
         .where(and(eq(connectorSyncCheckpoints.workspaceId, workspaceId), eq(connectorSyncCheckpoints.connectionId, connectionId), eq(connectorSyncCheckpoints.streamKey, streamKey)));
       if (reauthorizationRequired) {
-        await this.connections.markAuthorizationRevoked(workspaceId, connectionId);
+        await this.connections.markAuthorizationRevoked(workspaceId, connectionId, runId);
       } else {
         await this.connections.applySyncOutcome(workspaceId, connectionId, {
           state: 'error',

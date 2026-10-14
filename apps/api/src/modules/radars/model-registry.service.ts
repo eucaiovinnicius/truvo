@@ -107,7 +107,7 @@ export class ModelRegistryService {
       await this.audit.record({ workspaceId, actorUserId, category: 'model_registry', action, resourceType: 'radar_model', resourceId: modelId, metadata: { radarId, reason } });
       return { modelId, status: 'active' };
     });
-    await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'radar_ready', identity: `${radarId}:v${definitionVersion}` });
+    await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'radar_ready', identity: `${radarId}:v${definitionVersion}:${modelId}` });
     return activated;
   }
   private async radar(workspaceId: string, radarId: string) { const [row] = await this.db.execute(sql`select id from radars where workspace_id=${workspaceId} and id=${radarId}`); if (!row) throw new NotFoundException('Radar not found'); return row; }

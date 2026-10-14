@@ -294,7 +294,7 @@ export class ConnectorConnectionService {
     if (result.ok && (nextLifecycle === 'connected' || nextLifecycle === 'healthy')) {
       await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_connected', identity: id, metadata: { providerCategory: connection.provider } });
     } else if (!result.ok) {
-      await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_failed', identity: `${id}:credential-test:${checkedAt.toISOString()}`, metadata: { providerCategory: connection.provider, reasonCode: credentialStatus === 'invalid' ? 'invalid_credentials' : 'connection_failed' } });
+      await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_failed', identity: `${id}:credential-test:${checkedAt.getTime()}`, metadata: { providerCategory: connection.provider, reasonCode: credentialStatus === 'invalid' ? 'invalid_credentials' : 'connection_failed' } });
     }
 
     return result;
@@ -354,8 +354,10 @@ export class ConnectorConnectionService {
   }
 
   /** Provider revocation is a credential fact, not a generic sync-health issue. */
-  async markAuthorizationRevoked(workspaceId: string, id: string): Promise<void> {
-    await this.db.update(connectorConnections).set({ credentialStatus: 'invalid', lifecycleState: 'disconnected', lastError: 'provider authorization revoked', updatedAt: new Date() }).where(and(eq(connectorConnections.workspaceId, workspaceId), eq(connectorConnections.id, id)));
+  async markAuthorizationRevoked(workspaceId: string, id: string, attemptId?: string): Promise<void> {
+    const revokedAt = new Date();
+    await this.db.update(connectorConnections).set({ credentialStatus: 'invalid', lifecycleState: 'disconnected', lastError: 'provider authorization revoked', updatedAt: revokedAt }).where(and(eq(connectorConnections.workspaceId, workspaceId), eq(connectorConnections.id, id)));
+    await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_failed', identity: `${id}:authorization-revoked:${attemptId ?? revokedAt.getTime()}`, metadata: { reasonCode: 'invalid_credentials' } });
   }
 
   async remove(workspaceId: string, id: string, actor?: ConnectorActor): Promise<void> {
