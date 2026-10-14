@@ -297,6 +297,7 @@ export class ConnectorSyncOrchestratorService {
           state: 'error',
           error: errorReason,
           authFailure: failure.reason.startsWith('http_401') || failure.reason === 'http_403',
+          attemptId: runId,
         });
       }
     } else {

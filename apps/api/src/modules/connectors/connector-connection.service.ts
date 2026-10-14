@@ -269,13 +269,14 @@ export class ConnectorConnectionService {
     const lifecycleAdvanceFrom: ConnectorLifecycleState[] = ['draft', 'authorizing', 'error'];
     const nextLifecycle: ConnectorLifecycleState =
       result.ok && lifecycleAdvanceFrom.includes(connection.lifecycleState) ? 'connected' : connection.lifecycleState;
+    const checkedAt = new Date();
 
     await this.db
       .update(connectorConnections)
       .set({
         credentialStatus,
         lifecycleState: nextLifecycle,
-        lastCredentialCheckAt: new Date(),
+        lastCredentialCheckAt: checkedAt,
         lastError: result.ok ? null : result.message,
         updatedAt: new Date(),
       })
@@ -293,7 +294,7 @@ export class ConnectorConnectionService {
     if (result.ok && (nextLifecycle === 'connected' || nextLifecycle === 'healthy')) {
       await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_connected', identity: id, metadata: { providerCategory: connection.provider } });
     } else if (!result.ok) {
-      await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_failed', identity: id, metadata: { providerCategory: connection.provider, reasonCode: credentialStatus === 'invalid' ? 'invalid_credentials' : 'connection_failed' } });
+      await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_failed', identity: `${id}:credential-test:${checkedAt.toISOString()}`, metadata: { providerCategory: connection.provider, reasonCode: credentialStatus === 'invalid' ? 'invalid_credentials' : 'connection_failed' } });
     }
 
     return result;
@@ -308,12 +309,13 @@ export class ConnectorConnectionService {
   async applySyncOutcome(
     workspaceId: string,
     id: string,
-    outcome: { state: ConnectorLifecycleState; error?: string | null; authFailure?: boolean },
+    outcome: { state: ConnectorLifecycleState; error?: string | null; authFailure?: boolean; attemptId?: string },
   ): Promise<void> {
+    const syncAt = new Date();
     const patch: Partial<typeof connectorConnections.$inferInsert> = {
       lifecycleState: outcome.state,
       lastError: outcome.error ?? null,
-      lastSyncAt: new Date(),
+      lastSyncAt: syncAt,
       updatedAt: new Date(),
     };
     if (outcome.authFailure) patch.credentialStatus = 'invalid';
@@ -323,7 +325,7 @@ export class ConnectorConnectionService {
       .set(patch)
       .where(and(eq(connectorConnections.workspaceId, workspaceId), eq(connectorConnections.id, id)));
     if (outcome.state === 'healthy') await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_connected', identity: id });
-    if (outcome.state === 'error') await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_failed', identity: `${id}:sync`, metadata: { reasonCode: outcome.authFailure ? 'invalid_credentials' : 'sync_failed' } });
+    if (outcome.state === 'error') await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_failed', identity: `${id}:sync:${outcome.attemptId ?? syncAt.toISOString()}`, metadata: { reasonCode: outcome.authFailure ? 'invalid_credentials' : 'sync_failed' } });
   }
 
   async disconnect(workspaceId: string, id: string, actor?: ConnectorActor): Promise<ConnectorConnection> {
