@@ -20,8 +20,10 @@ describe('Order 140 product analytics runtime',{concurrency:1},()=>{
   await assert.rejects(()=>service.recordOpportunityViewed(B,{opportunityId:'not_owned',viewId:'view_1',surface:'opportunity_detail'}));
  });
  test('batch/activation identities dedupe independently and aggregates define 30-day retained Radar activity',async()=>{
+  await clear();
   await service.record({workspaceId:B,eventName:'workspace_created'});await service.record({workspaceId:B,eventName:'radar_created',identity:'r2'});await service.record({workspaceId:B,eventName:'opportunities_generated',identity:'batch_a'});
   await service.record({workspaceId:B,eventName:'opportunities_generated',identity:'batch_b'});await service.record({workspaceId:B,eventName:'radar_ready',identity:'r2_v1'});await service.record({workspaceId:B,eventName:'activation_requested',identity:'act_b'});await service.record({workspaceId:B,eventName:'activation_requested',identity:'act_b'});
-  const aggregate=await service.aggregates(new Date('2025-01-01'),new Date());assert.equal(aggregate.retainedWindowDays,RETAINED_RADAR_WINDOW_DAYS);assert.ok(Number(aggregate.first_radar_workspaces)>=1);assert.ok(aggregate.firstRadarRate>0);
+  const funnel=await service.workspaceFunnel(B);assert.equal(funnel.first_activation_or_export_at,null);
+  const aggregate=await service.aggregates(new Date('2025-01-01'),new Date());assert.equal(aggregate.retainedWindowDays,RETAINED_RADAR_WINDOW_DAYS);assert.ok(Number(aggregate.first_radar_workspaces)>=1);assert.ok(aggregate.firstRadarRate>0);assert.equal(Number(aggregate.activated_workspaces),0);assert.equal(aggregate.activationExportRate,0);
  });
 });

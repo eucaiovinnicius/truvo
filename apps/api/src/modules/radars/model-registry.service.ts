@@ -54,7 +54,7 @@ export class ModelRegistryService {
       await tx.execute(sql`update radars set status=${radar.current_model_reference ? 'active' : 'ready_to_train'},updated_at=now() where workspace_id=${workspaceId} and id=${radarId}`);
       await this.audit.record({ workspaceId, actorType: 'system', category: 'model_registry', action: 'training_validated', resourceType: 'radar_model', resourceId: modelId, metadata: { radarId, requestId, definitionVersion: version } });
     });
-    if (recordFailure) await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'radar_failed', identity: `${radarId}:v${version}:training`, metadata: { reasonCode: result.status === 'insufficient_data' ? 'insufficient_data' : 'training_failed' } });
+    if (recordFailure) await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'radar_failed', identity: `${radarId}:v${version}:training:${requestId}`, metadata: { reasonCode: result.status === 'insufficient_data' ? 'insufficient_data' : 'training_failed' } });
   }
 
   async promote(workspaceId: string, radarId: string, modelId: string, actorUserId?: string, reason = 'explicit_promotion') { return this.activate(workspaceId, radarId, modelId, actorUserId, 'promoted', reason); }
