@@ -86,7 +86,6 @@ export class CanonicalMappingService {
       commerceOrdersWritten: 0, billingObjectsWritten: 0, crmObjectsWritten: 0, crmAssociationsWritten: 0,
       engagementEventsWritten: 0,
     };
-    let acceptedBusinessEvent = false;
 
     for (const record of records) {
       const hasCrmPayload = !!record.crmAccount || !!record.crmDeal || !!record.crmAssociations?.length || !!record.crmAssociationScope || !!record.crmDeletion;
@@ -230,10 +229,10 @@ export class CanonicalMappingService {
         }
       }
 
-      acceptedBusinessEvent ||= !!record.commerceOrder || hasBillingPayload || !!record.engagementEvent || !!record.crmDeal;
+      if (!!record.commerceOrder || hasBillingPayload || !!record.engagementEvent || !!record.crmDeal) {
+        await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'first_event_received', metadata: { sourceCategory: 'connector' } });
+      }
     }
-
-    if (acceptedBusinessEvent) await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'first_event_received', metadata: { sourceCategory: 'connector' } });
 
     return result;
   }
