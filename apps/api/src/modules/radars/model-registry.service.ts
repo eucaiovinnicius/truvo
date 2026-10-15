@@ -93,21 +93,20 @@ export class ModelRegistryService {
   }
 
   private async activate(workspaceId: string, radarId: string, modelId: string, actorUserId: string | undefined, action: string, reason: string, allowRetired = false) {
-    let definitionVersion = 0;
+    const activationOperationId = `mao_${ulid()}`;
     const activated = await this.db.transaction(async (tx) => {
       const [radar] = await tx.execute(sql`select * from radars where workspace_id=${workspaceId} and id=${radarId} for update`); if (!radar) throw new NotFoundException('Radar not found');
       const [model] = await tx.execute(sql`select * from radar_model_versions where workspace_id=${workspaceId} and id=${modelId} and radar_id=${radarId} for update`); if (!model) throw new NotFoundException('Model not found');
-      definitionVersion = Number(model.definition_version);
       if (!['validated', ...(allowRetired ? ['retired'] : [])].includes(String(model.status))) throw new BadRequestException('Model is not eligible for this lifecycle operation');
       if (Number(model.definition_version) !== Number(radar.current_definition_version)) throw new BadRequestException('Model is incompatible with current Radar definition');
       const artifact = await this.artifacts.verify(this.artifact(model as unknown as Model)); if (!artifact.ok) throw new BadRequestException(`Model artifact is unavailable: ${artifact.reason}`);
       await tx.execute(sql`update radar_model_versions set status='retired' where workspace_id=${workspaceId} and radar_id=${radarId} and model_role='propensity' and status='active' and id<>${modelId}`);
-      await tx.execute(sql`update radar_model_versions set status='active',promoted_at=now(),validation=validation || jsonb_build_object('lastLifecycleOperation',${action}::text,'lastLifecycleAt',now()) where workspace_id=${workspaceId} and id=${modelId}`);
+      await tx.execute(sql`update radar_model_versions set status='active',promoted_at=now(),validation=validation || jsonb_build_object('lastLifecycleOperation',${action}::text,'lastLifecycleOperationId',${activationOperationId}::text,'lastLifecycleAt',now()) where workspace_id=${workspaceId} and id=${modelId}`);
       await tx.execute(sql`update radars set status='active',current_model_reference=${modelId},updated_at=now() where workspace_id=${workspaceId} and id=${radarId}`);
-      await this.audit.record({ workspaceId, actorUserId, category: 'model_registry', action, resourceType: 'radar_model', resourceId: modelId, metadata: { radarId, reason } });
+      await this.audit.record({ workspaceId, actorUserId, category: 'model_registry', action, resourceType: 'radar_model', resourceId: modelId, metadata: { radarId, reason, activationOperationId } });
       return { modelId, status: 'active' };
     });
-    await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'radar_ready', identity: `${radarId}:v${definitionVersion}:${modelId}` });
+    await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'radar_ready', identity: activationOperationId });
     return activated;
   }
   private async radar(workspaceId: string, radarId: string) { const [row] = await this.db.execute(sql`select id from radars where workspace_id=${workspaceId} and id=${radarId}`); if (!row) throw new NotFoundException('Radar not found'); return row; }
