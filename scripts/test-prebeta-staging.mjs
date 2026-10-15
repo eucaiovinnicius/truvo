@@ -23,6 +23,15 @@ function run(command, args, options = {}) {
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed (${result.status})`);
   return result;
 }
+async function runWithRetry(command, args, options = {}, attempts = 3) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const result = spawnSync(command, args, { stdio: 'inherit', ...options });
+    if (result.error) throw result.error;
+    if (result.status === 0) return;
+    if (attempt === attempts) throw new Error(`${command} ${args.join(' ')} failed (${result.status}) after ${attempts} attempts`);
+    await delay(attempt * 1_000);
+  }
+}
 function capture(command, args, options = {}) {
   const result = spawnSync(command, args, { encoding: 'utf8', ...options });
   if (result.error) throw result.error;
@@ -87,7 +96,7 @@ function productionToken(subject) {
   return `${header}.${payload}.${signature}`;
 }
 function startApi(name, image, commit) {
-  run('docker', ['run', '--name', name, '--network', network, '-p', '127.0.0.1::3333',
+  run('docker', ['run', '--name', name, '--network', network, '--add-host', 'host.docker.internal:host-gateway', '-p', '127.0.0.1::3333',
     '-e', 'NODE_ENV=production', '-e', 'CORS_ORIGINS=https://staging.truvo.invalid', '-e', 'TRUVO_DEV_AUTH_BYPASS=0',
     '-e', `RELEASE_COMMIT=${commit}`, '-e', 'RELEASE_VERSION=prebeta-staging',
     '-e', 'DATABASE_URL=postgresql://postgres:prebeta_test@pg:5432/truvo_prebeta',
@@ -130,7 +139,7 @@ try {
   await Promise.all([ready(names.pg, ['pg_isready', '-U', 'postgres', '-d', 'truvo_prebeta']), ready(names.redis, ['redis-cli', 'ping']), ready(names.ch, ['wget', '--spider', '-q', '127.0.0.1:8123/ping']), ready(names.rp, ['rpk', 'cluster', 'health'])]);
   const hostEnv = { ...process.env, DATABASE_URL: `postgresql://postgres:prebeta_test@127.0.0.1:${port(names.pg, 5432)}/truvo_prebeta`, CLICKHOUSE_URL: `http://127.0.0.1:${port(names.ch, 8123)}`, CLICKHOUSE_USER: 'truvo', CLICKHOUSE_PASSWORD: 'truvo_local', CLICKHOUSE_DB: 'truvo' };
   run(pnpm, ['--filter', '@truvo/db', 'db:migrate'], { env: hostEnv });
-  run(pnpm, ['--filter', '@truvo/db', 'ch:migrate'], { env: hostEnv });
+  await runWithRetry(pnpm, ['--filter', '@truvo/db', 'ch:migrate'], { env: hostEnv });
   run(pnpm, ['--filter', '@truvo/db', 'db:migrate'], { env: hostEnv });
 
   if (process.env.PREBETA_SKIP_IMAGE_BUILD !== '1') {
@@ -172,7 +181,7 @@ try {
   console.log('[staging] web process passed');
 
   const dispatch = JSON.stringify({ workspaceId: 'prebeta', radarId: 'radar', definitionVersion: 1, trainingRequestId: 'missing', correlationId: 'prebeta-worker-entrypoint' });
-  const worker = await captureAsync('docker', ['run', '--rm', '--network', network,
+  const worker = await captureAsync('docker', ['run', '--rm', '--network', network, '--add-host', 'host.docker.internal:host-gateway',
     '-e', 'DATABASE_URL=postgresql://postgres:prebeta_test@pg:5432/truvo_prebeta', '-e', `SUPABASE_URL=http://host.docker.internal:${storagePort}`,
     '-e', 'SUPABASE_SERVICE_ROLE_KEY=prebeta-service-role', '-e', 'PROPENSITY_ARTIFACT_BUCKET=models', '-e', 'INTERNAL_API_SECRET=prebeta-internal-secret',
     images.worker, 'python', '-m', 'propensity_worker', '--once-json', dispatch]);

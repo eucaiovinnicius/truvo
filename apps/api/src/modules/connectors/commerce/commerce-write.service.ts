@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { commerceOrders, commerceOrderLineItems, commerceRefunds, customerOutcomes, outcomeDefinitions, type ContextProvenance } from '@truvo/db';
 import { DRIZZLE, type Database } from '../../auth/database.provider';
 import { CustomerContextService } from '../../customer-context/customer-context.service';
 import { findOutcomeProjectionRule } from '../../customer-context/outcome-projection.registry';
 import type { NormalizedCommerceOrder } from '../contracts';
+import { ProductAnalyticsService } from '../../product-analytics/product-analytics.service';
 
 /** Sentinel meaning "this sync doesn't actually know the order's current status"
  * (e.g. a Shopify refund-only webhook, which never carries the parent order's
@@ -65,6 +66,7 @@ export class CommerceWriteService {
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly customerContext: CustomerContextService,
+    @Optional() private readonly productAnalytics?: ProductAnalyticsService,
   ) {}
 
   async upsertOrder(
@@ -172,6 +174,7 @@ export class CommerceWriteService {
         })
         .returning({ id: customerOutcomes.id });
       purchaseOutcomeWritten = inserted.length > 0;
+      if (purchaseOutcomeWritten) await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'first_outcome_observed', metadata: { outcomeCategory: 'purchase' } });
     }
 
     return { orderId, purchaseOutcomeWritten, customerId: resolvedCustomerId };

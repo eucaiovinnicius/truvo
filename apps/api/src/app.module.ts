@@ -27,12 +27,14 @@ import { OpportunitiesModule } from './modules/opportunities/opportunities.modul
 import { DecisionsModule } from './modules/decisions/decisions.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { QaDemoModule } from './modules/qa-demo/qa-demo.module';
+import { ProductAnalyticsModule } from './modules/product-analytics/product-analytics.module';
 
 @Module({
   imports: [
     HealthModule,
     AuthModule,
     AuditModule, // @Global — registrar cedo (Order 035 §4)
+    ProductAnalyticsModule, // Order 140 — internal Truvo product events, separate from customer events
     EventsModule,
     TrackingModule,
     WebhooksModule,

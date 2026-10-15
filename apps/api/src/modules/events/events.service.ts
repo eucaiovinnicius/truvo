@@ -1,10 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { ulid } from 'ulid';
 import type { TruvoEvent } from '@truvo/event-schema';
 import { KafkaProducerService } from './kafka.producer';
 import { getClickHouse } from './infra';
 import type { ApiIngestDto, ApiBatchDto } from './dto/ingest.dto';
 import { metrics } from '@truvo/observability';
+import { ProductAnalyticsService } from '../product-analytics/product-analytics.service';
 
 /** Formata um Date como DateTime64 do ClickHouse ('YYYY-MM-DD HH:MM:SS.mmm', UTC). */
 function toChDateTime(iso: string): string {
@@ -13,7 +14,7 @@ function toChDateTime(iso: string): string {
 
 @Injectable()
 export class EventsService {
-  constructor(private readonly kafka: KafkaProducerService) {}
+  constructor(private readonly kafka: KafkaProducerService, @Optional() private readonly productAnalytics?: ProductAnalyticsService) {}
 
   /**
    * Normaliza um payload de ingestão em um TruvoEvent completo:
@@ -38,6 +39,7 @@ export class EventsService {
   async ingestOne(input: ApiIngestDto, workspaceId: string) {
     const event = this.normalize(input, workspaceId);
     await this.kafka.publish([{ key: workspaceId, value: JSON.stringify(event) }]);
+    await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'first_event_received', metadata: { sourceCategory: 'api' } });
     metrics.increment('ingestion_accepted_total', { count: 1 });
     return { accepted: 1, event_id: event.event_id };
   }
@@ -48,6 +50,7 @@ export class EventsService {
     await this.kafka.publish(
       events.map((e) => ({ key: workspaceId, value: JSON.stringify(e) })),
     );
+    if (events.length) await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'first_event_received', metadata: { sourceCategory: 'api' } });
     metrics.increment('ingestion_accepted_total', { count: events.length });
     return { accepted: events.length, event_ids: events.map((e) => e.event_id) };
   }

@@ -4,6 +4,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
@@ -15,6 +16,7 @@ import { AuditService } from '../audit/audit.service';
 import type { CreateWorkspaceDto, UpdateWorkspaceDto } from './dto/workspace.dto';
 import type { InviteDto, UpdateMemberDto } from './dto/member.dto';
 import type { WorkspaceRole } from './roles';
+import { ProductAnalyticsService } from '../product-analytics/product-analytics.service';
 
 export interface ActingUser {
   id: string;
@@ -36,13 +38,14 @@ export class WorkspacesService {
     @Inject(DRIZZLE) private readonly db: Database,
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly audit: AuditService,
+    @Optional() private readonly productAnalytics?: ProductAnalyticsService,
   ) {}
 
   /** Cria workspace + membership de owner atomicamente. */
   async createWorkspace(ownerId: string, dto: CreateWorkspaceDto) {
     const slug = await this.resolveUniqueSlug(dto.slug ?? this.slugify(dto.name));
 
-    return this.db.transaction(async (tx) => {
+    const created = await this.db.transaction(async (tx) => {
       const [ws] = await tx
         .insert(workspaces)
         .values({
@@ -65,6 +68,8 @@ export class WorkspacesService {
 
       return { ...ws, role: 'owner' as WorkspaceRole };
     });
+    await this.productAnalytics?.recordSafely({ workspaceId: created.id, eventName: 'workspace_created' });
+    return created;
   }
 
   /** Lista os workspaces do usuário com seu papel em cada um. */

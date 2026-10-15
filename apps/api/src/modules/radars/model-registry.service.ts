@@ -1,16 +1,17 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { sql } from 'drizzle-orm';
 import { ulid } from 'ulid';
 import { DRIZZLE, type Database } from '../auth/database.provider';
 import { AuditService } from '../audit/audit.service';
 import { ModelArtifactIntegrityService, type ArtifactIntegrityVerifier, type StoredModelArtifact } from './model-artifact-integrity.service';
+import { ProductAnalyticsService } from '../product-analytics/product-analytics.service';
 
 type Model = StoredModelArtifact & { id: string; workspace_id: string; radar_id: string; definition_version: number; status: string; model_role: string; target_outcome_definition_id: string; prediction_window_days: number; feature_schema_version: string; verified_at: Date; promoted_at: Date | null; metrics: unknown; calibration: unknown; provenance: unknown; validation: unknown; created_at: Date };
 type TrainingResult = { status: 'succeeded' | 'failed' | 'insufficient_data'; modelReference?: string; failureCategory?: string; failureReason?: string };
 
 @Injectable()
 export class ModelRegistryService {
-  constructor(@Inject(DRIZZLE) private readonly db: Database, private readonly audit: AuditService, private readonly artifacts: ModelArtifactIntegrityService) {}
+  constructor(@Inject(DRIZZLE) private readonly db: Database, private readonly audit: AuditService, private readonly artifacts: ModelArtifactIntegrityService, @Optional() private readonly productAnalytics?: ProductAnalyticsService) {}
 
   async list(workspaceId: string, radarId: string) {
     await this.radar(workspaceId, radarId);
@@ -24,7 +25,8 @@ export class ModelRegistryService {
   async latestTrainingRun(workspaceId: string, radarId: string) { await this.radar(workspaceId, radarId); const [row] = await this.db.execute(sql`select id,status,model_reference,failure_category,failure_reason,attempt_count,created_at,terminal_at,updated_at from radar_training_requests where workspace_id=${workspaceId} and radar_id=${radarId} order by created_at desc limit 1`); return row ?? null; }
 
   async reportTrainingResult(workspaceId: string, radarId: string, version: number, requestId: string, result: TrainingResult) {
-    return this.db.transaction(async (tx) => {
+    let recordFailure = false;
+    await this.db.transaction(async (tx) => {
       const [radar] = await tx.execute(sql`select * from radars where workspace_id=${workspaceId} and id=${radarId} for update`);
       if (!radar) throw new NotFoundException('Radar not found');
       const [request] = await tx.execute(sql`select * from radar_training_requests where workspace_id=${workspaceId} and id=${requestId} and radar_id=${radarId} and definition_version=${version} for update`);
@@ -39,6 +41,7 @@ export class ModelRegistryService {
         const state = radar.current_model_reference ? 'active' : result.status === 'insufficient_data' ? 'insufficient_data' : 'failed';
         await tx.execute(sql`update radar_training_requests set status=${result.status},failure_category=${result.status === 'insufficient_data' ? 'insufficient_data' : this.safe(result.failureCategory)},failure_reason=${this.safe(result.failureReason)},model_reference=null,claimed_by=null,lease_expires_at=null,terminal_at=now(),updated_at=now() where workspace_id=${workspaceId} and id=${requestId}`);
         await tx.execute(sql`update radars set status=${state},updated_at=now() where workspace_id=${workspaceId} and id=${radarId}`);
+        recordFailure = true;
         return;
       }
       const modelId = result.modelReference?.trim(); if (!modelId) throw new BadRequestException('Successful training result requires model reference');
@@ -51,6 +54,7 @@ export class ModelRegistryService {
       await tx.execute(sql`update radars set status=${radar.current_model_reference ? 'active' : 'ready_to_train'},updated_at=now() where workspace_id=${workspaceId} and id=${radarId}`);
       await this.audit.record({ workspaceId, actorType: 'system', category: 'model_registry', action: 'training_validated', resourceType: 'radar_model', resourceId: modelId, metadata: { radarId, requestId, definitionVersion: version } });
     });
+    if (recordFailure) await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'radar_failed', identity: `${radarId}:v${version}:training:${requestId}`, metadata: { reasonCode: result.status === 'insufficient_data' ? 'insufficient_data' : 'training_failed' } });
   }
 
   async promote(workspaceId: string, radarId: string, modelId: string, actorUserId?: string, reason = 'explicit_promotion') { return this.activate(workspaceId, radarId, modelId, actorUserId, 'promoted', reason); }
@@ -89,18 +93,21 @@ export class ModelRegistryService {
   }
 
   private async activate(workspaceId: string, radarId: string, modelId: string, actorUserId: string | undefined, action: string, reason: string, allowRetired = false) {
-    return this.db.transaction(async (tx) => {
+    const activationOperationId = `mao_${ulid()}`;
+    const activated = await this.db.transaction(async (tx) => {
       const [radar] = await tx.execute(sql`select * from radars where workspace_id=${workspaceId} and id=${radarId} for update`); if (!radar) throw new NotFoundException('Radar not found');
       const [model] = await tx.execute(sql`select * from radar_model_versions where workspace_id=${workspaceId} and id=${modelId} and radar_id=${radarId} for update`); if (!model) throw new NotFoundException('Model not found');
       if (!['validated', ...(allowRetired ? ['retired'] : [])].includes(String(model.status))) throw new BadRequestException('Model is not eligible for this lifecycle operation');
       if (Number(model.definition_version) !== Number(radar.current_definition_version)) throw new BadRequestException('Model is incompatible with current Radar definition');
       const artifact = await this.artifacts.verify(this.artifact(model as unknown as Model)); if (!artifact.ok) throw new BadRequestException(`Model artifact is unavailable: ${artifact.reason}`);
       await tx.execute(sql`update radar_model_versions set status='retired' where workspace_id=${workspaceId} and radar_id=${radarId} and model_role='propensity' and status='active' and id<>${modelId}`);
-      await tx.execute(sql`update radar_model_versions set status='active',promoted_at=now(),validation=validation || jsonb_build_object('lastLifecycleOperation',${action}::text,'lastLifecycleAt',now()) where workspace_id=${workspaceId} and id=${modelId}`);
+      await tx.execute(sql`update radar_model_versions set status='active',promoted_at=now(),validation=validation || jsonb_build_object('lastLifecycleOperation',${action}::text,'lastLifecycleOperationId',${activationOperationId}::text,'lastLifecycleAt',now()) where workspace_id=${workspaceId} and id=${modelId}`);
       await tx.execute(sql`update radars set status='active',current_model_reference=${modelId},updated_at=now() where workspace_id=${workspaceId} and id=${radarId}`);
-      await this.audit.record({ workspaceId, actorUserId, category: 'model_registry', action, resourceType: 'radar_model', resourceId: modelId, metadata: { radarId, reason } });
+      await this.audit.record({ workspaceId, actorUserId, category: 'model_registry', action, resourceType: 'radar_model', resourceId: modelId, metadata: { radarId, reason, activationOperationId } });
       return { modelId, status: 'active' };
     });
+    await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'radar_ready', identity: activationOperationId });
+    return activated;
   }
   private async radar(workspaceId: string, radarId: string) { const [row] = await this.db.execute(sql`select id from radars where workspace_id=${workspaceId} and id=${radarId}`); if (!row) throw new NotFoundException('Radar not found'); return row; }
   private async model(workspaceId: string, radarId: string, modelId: string): Promise<Model> { const [row] = await this.db.execute(sql`select * from radar_model_versions where workspace_id=${workspaceId} and radar_id=${radarId} and id=${modelId}`); if (!row) throw new NotFoundException('Model not found'); return row as unknown as Model; }

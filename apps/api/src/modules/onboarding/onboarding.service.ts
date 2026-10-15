@@ -6,6 +6,7 @@ import { ConnectorConnectionService } from '../connectors/connector-connection.s
 import { EventContextQualityService } from '../data-quality/event-context-quality.service';
 import { RadarService } from '../radars/radar.service';
 import type { CreateFirstRadarDto, SelectPathDto } from './onboarding.dto';
+import { ProductAnalyticsService } from '../product-analytics/product-analytics.service';
 
 type Progress = Record<string, unknown> & { workspace_id: string; selected_path?: string | null; connection_id?: string | null; first_radar_id?: string | null; started_at?: Date | null; first_radar_created_at?: Date | null };
 const SAFE_METADATA = new Set(['path', 'provider', 'sourceStatus']);
@@ -14,7 +15,7 @@ export interface OnboardingFailureInjector { afterRadarPersistence?(workspaceId:
 
 @Injectable()
 export class OnboardingService {
-  constructor(@Inject(DRIZZLE) private readonly db: Database, private readonly workspaces: WorkspacesService, private readonly connections: ConnectorConnectionService, private readonly quality: EventContextQualityService, private readonly radars: RadarService, @Optional() @Inject(ONBOARDING_FAILURE_INJECTOR) private readonly failureInjector?: OnboardingFailureInjector) {}
+  constructor(@Inject(DRIZZLE) private readonly db: Database, private readonly workspaces: WorkspacesService, private readonly connections: ConnectorConnectionService, private readonly quality: EventContextQualityService, private readonly radars: RadarService, @Optional() @Inject(ONBOARDING_FAILURE_INJECTOR) private readonly failureInjector?: OnboardingFailureInjector, @Optional() private readonly productAnalytics?: ProductAnalyticsService) {}
 
   private async ensure(workspaceId: string): Promise<Progress> {
     await this.db.execute(sql`insert into onboarding_progress (workspace_id) values (${workspaceId}) on conflict (workspace_id) do nothing`);
@@ -81,6 +82,11 @@ export class OnboardingService {
     const healthy = connection.lifecycleState === 'healthy' && connection.credentialStatus === 'valid';
     await this.db.execute(sql`update onboarding_progress set connection_id=case when first_radar_id is null then ${connectionId} else connection_id end,source_status=case when first_radar_id is null then ${healthy ? 'healthy' : connection.lifecycleState} else source_status end,status=case when first_radar_id is null then ${healthy ? 'waiting_for_data' : 'syncing'} else status end,current_step=case when first_radar_id is null then 'verify_data' else current_step end,healthy_context_at=case when first_radar_id is null and ${healthy} then coalesce(healthy_context_at,now()) else healthy_context_at end,last_error_code=case when first_radar_id is null then ${healthy ? null : 'source_not_ready'} else last_error_code end,last_error_remediation=case when first_radar_id is null then ${healthy ? null : 'Finish authorization and wait for the initial sync'} else last_error_remediation end,updated_at=now() where workspace_id=${workspaceId}`);
     await this.milestone(workspaceId, userId, healthy ? 'context_connection_succeeded' : 'context_connection_failed', { provider: connection.provider, sourceStatus: healthy ? 'healthy' : connection.lifecycleState });
+    if (healthy) {
+      await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_connected', identity: connectionId, metadata: { providerCategory: connection.provider } });
+    } else if (connection.lifecycleState === 'error' || connection.credentialStatus === 'invalid') {
+      await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'integration_failed', identity: connectionId, metadata: { providerCategory: connection.provider, reasonCode: connection.credentialStatus === 'invalid' ? 'invalid_credentials' : 'connection_error' } });
+    }
     return this.get(workspaceId);
   }
 
@@ -101,6 +107,7 @@ export class OnboardingService {
     const progress = await this.ensure(workspaceId); if (!progress.data_verified_at) throw new ConflictException('Verify incoming data first');
     const result = await this.quality.evaluate(workspaceId, request);
     await this.db.execute(sql`update onboarding_progress set status=case when first_radar_id is null then 'readiness_available' else status end,current_step=case when first_radar_id is null then 'create_radar' else current_step end,readiness_viewed_at=coalesce(readiness_viewed_at,now()),updated_at=now() where workspace_id=${workspaceId}`);
+    if (result.radarReadiness.status === 'ready') await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'context_ready', metadata: { sourceCategory: progress.selected_path === 'custom' ? 'api' : 'connector' } });
     await this.milestone(workspaceId, userId, 'readiness_viewed'); return { ...(await this.get(workspaceId)), readiness: result };
   }
 
@@ -123,6 +130,7 @@ export class OnboardingService {
     await this.milestone(workspaceId, userId, 'first_radar_initiated');
     await this.milestone(workspaceId, userId, 'first_radar_created'); await this.milestone(workspaceId, userId, 'onboarding_completed');
     const radarId = String((result.radar as { radar?: { id?: string } }).radar?.id);
+    if (!result.replay) await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'radar_created', identity: radarId, metadata: { radarType: `window_${radarInput.predictionWindowDays}d` } });
     if (!result.replay || await this.radars.requiresValidation(workspaceId, radarId)) {
       await this.failureInjector?.beforeRadarValidation?.(workspaceId, radarId);
       await this.radars.validate(workspaceId, radarId);

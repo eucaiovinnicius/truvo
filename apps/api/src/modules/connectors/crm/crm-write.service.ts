@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { and, eq, isNull, or, sql } from 'drizzle-orm';
 import {
   crmAccounts,
@@ -14,6 +14,7 @@ import {
 import { DRIZZLE, type Database } from '../../auth/database.provider';
 import { SuppressionService } from '../../customer-context/suppression.service';
 import type { NormalizedCrmAccount, NormalizedCrmAssociation, NormalizedCrmAssociationScope, NormalizedCrmDeal, NormalizedCrmDeletionSignal } from '../contracts';
+import { ProductAnalyticsService } from '../../product-analytics/product-analytics.service';
 
 /**
  * Order 061 §2/§4/§5 — a workspace-configured, versionable mapping describing which
@@ -69,6 +70,7 @@ export class CrmWriteService {
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly suppression?: SuppressionService,
+    @Optional() private readonly productAnalytics?: ProductAnalyticsService,
   ) {}
 
   /**
@@ -422,6 +424,7 @@ export class CrmWriteService {
         target: [customerOutcomes.workspaceId, customerOutcomes.outcomeNamespace, customerOutcomes.outcomeKey, customerOutcomes.dedupeKey],
         set: { customerId, updatedAt: new Date() },
       });
+    await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'first_outcome_observed', metadata: { outcomeCategory: 'crm' } });
   }
 
   private dealPropertyValue(deal: NormalizedCrmDeal, propertyName: string): string | undefined {

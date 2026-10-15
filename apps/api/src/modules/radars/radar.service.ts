@@ -5,6 +5,7 @@ import { DRIZZLE, type Database } from '../auth/database.provider';
 import { EventContextQualityService } from '../data-quality/event-context-quality.service';
 import { PropensityDispatchService } from './propensity-dispatch.service';
 import { ModelRegistryService } from './model-registry.service';
+import { ProductAnalyticsService } from '../product-analytics/product-analytics.service';
 
 export const RADAR_WINDOWS = [7, 14, 30, 60] as const;
 export const DEFAULT_AUDIENCE = { version: 1, op: 'identified' } as const;
@@ -161,6 +162,7 @@ export class RadarService {
     private readonly quality: EventContextQualityService,
     @Optional() private readonly propensityDispatch?: PropensityDispatchService,
     private readonly modelRegistry?: ModelRegistryService,
+    @Optional() private readonly productAnalytics?: ProductAnalyticsService,
   ) {}
 
   private async radar(workspaceId: string, id: string, database: RadarDb = this.db): Promise<RadarRow> {
@@ -188,7 +190,9 @@ export class RadarService {
       await tx.execute(sql`insert into radars (workspace_id,id,name,status,current_definition_version) values (${workspaceId},${id},${input.name},'draft',1)`);
       await tx.execute(sql`insert into radar_definition_versions (workspace_id,radar_id,version,outcome_definition_id,audience_ast,prediction_window_days,optimization_goal,activation_destination) values (${workspaceId},${id},1,${input.outcomeDefinitionId},${JSON.stringify(audience)}::jsonb,${input.predictionWindowDays},${JSON.stringify(input.optimizationGoal ?? {})}::jsonb,${destination ? JSON.stringify(destination) : null}::jsonb)`);
     });
-    return this.get(workspaceId, id, database);
+    const created = await this.get(workspaceId, id, database);
+    if (database === this.db) await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'radar_created', identity: id, metadata: { radarType: `window_${input.predictionWindowDays}d` } });
+    return created;
   }
 
   async get(workspaceId: string, id: string, database: RadarDb = this.db) {
@@ -337,9 +341,11 @@ export class RadarService {
   }
 
   async validate(workspaceId: string, id: string) {
-    return this.db.transaction(async (tx) => {
+    let definitionVersion = 0;
+    const readiness = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`radar-validation:${workspaceId}:${id}`}))`);
       const { radar, definition } = await this.get(workspaceId, id, tx);
+      definitionVersion = definition.version;
       if (radar.status !== 'validating_data') {
         this.transition(radar.status, 'validating_data');
         const [started] = await tx.execute(sql`update radars set status='validating_data',updated_at=now() where workspace_id=${workspaceId} and id=${id} and current_definition_version=${definition.version} and status=${radar.status} returning id`);
@@ -354,6 +360,8 @@ export class RadarService {
       this.logger.log(`Radar validation completed workspace=${workspaceId} radar=${id} definition=${definition.version} status=${readiness.status}`);
       return readiness;
     });
+    if (readiness.status !== 'ready_to_train') await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'radar_failed', identity: `${id}:v${definitionVersion}`, metadata: { reasonCode: readiness.status === 'insufficient_data' ? 'insufficient_data' : 'validation_failed' } });
+    return readiness;
   }
 
   async train(workspaceId: string, id: string, key: string) {

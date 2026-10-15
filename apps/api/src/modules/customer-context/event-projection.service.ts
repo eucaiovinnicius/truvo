@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { and, eq, isNull } from 'drizzle-orm';
 import { customers, customerOutcomes, outcomeDefinitions, type ContextProvenance } from '@truvo/db';
 import { DRIZZLE, type Database } from '../auth/database.provider';
 import { findOutcomeProjectionRule } from './outcome-projection.registry';
+import { ProductAnalyticsService } from '../product-analytics/product-analytics.service';
 
 /** sourceNamespace usado pelas linhas que este projetor escreve (catálogo + observação). */
 export const PROJECTION_SOURCE_NAMESPACE = 'truvo.projection';
@@ -52,7 +53,7 @@ function asString(v: unknown): string | undefined {
  */
 @Injectable()
 export class EventProjectionService {
-  constructor(@Inject(DRIZZLE) private readonly db: Database) {}
+  constructor(@Inject(DRIZZLE) private readonly db: Database, @Optional() private readonly productAnalytics?: ProductAnalyticsService) {}
 
   async project(workspaceId: string, canonicalId: string, event: ProjectableEvent): Promise<ProjectionResult> {
     const rule = findOutcomeProjectionRule(event.event_name);
@@ -160,6 +161,8 @@ export class EventProjectionService {
         ],
         set: { customerId: canonicalId, updatedAt: now },
       });
+
+    await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'first_outcome_observed', metadata: { outcomeCategory: rule.outcomeKey.replace(/[^a-z0-9_]/g, '_').slice(0, 64) } });
 
     return { projected: true, outcomeId, deduped: existing !== undefined };
   }
