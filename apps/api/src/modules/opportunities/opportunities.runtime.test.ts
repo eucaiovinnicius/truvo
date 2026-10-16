@@ -323,7 +323,7 @@ describe('Order 100 real PostgreSQL runtime', { concurrency: 1 }, () => {
     assert.equal(first.items.filter((left) => second.items.some((right) => right.id === left.id)).length, 0);
     const plan = await db.execute(sql`explain (format json) select id from opportunity_rows where workspace_id=${WS} and batch_id=${batch.id} and eligibility_state='eligible' and probability < .9 order by probability desc,id asc limit 50`) as Array<{ 'QUERY PLAN': any }>;
     const serialized = JSON.stringify(plan);
-    assert.match(serialized, /opportunity_rows_probability_rank_idx|Index Scan|Bitmap/);
+    assert.match(serialized, /opportunity_rows_probability_rank_idx|Index(?: Only)? Scan|Bitmap/);
     const [otherCount] = await db.execute(sql`select count(*)::int count from opportunity_rows where workspace_id=${OTHER_WS}`);
     assert.equal(Number((otherCount as { count: number }).count), 0);
   });
