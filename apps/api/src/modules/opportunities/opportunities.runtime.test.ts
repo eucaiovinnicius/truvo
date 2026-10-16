@@ -193,42 +193,6 @@ describe('Order 100 real PostgreSQL runtime', { concurrency: 1 }, () => {
     await assert.rejects(() => opportunities.materialize(WS, RADAR), /corrupt_score_batch/);
   });
 
-  test('product analytics advances only for eligible user-visible opportunities', async () => {
-    const now = Date.now();
-    const cohortStart = new Date(now - 60_000);
-    const cohortEnd = new Date(now + 60_000);
-    await productAnalytics.record({ workspaceId: WS, eventName: 'workspace_created', occurredAt: cohortStart });
-    await productAnalytics.record({ workspaceId: OTHER_WS, eventName: 'workspace_created', occurredAt: cohortStart });
-
-    await db.execute(sql`update customers set deleted_at=now() where workspace_id=${WS}`);
-    const suppressed = await opportunities.materialize(WS, RADAR, 'all_suppressed');
-    assert.equal(suppressed.rows, 7);
-    assert.equal(suppressed.eligible, 0);
-    const [zeroEventCount] = await db.execute(sql`select count(*)::int count from truvo_product_events where workspace_id=${WS} and event_name='opportunities_generated'`);
-    assert.equal(Number((zeroEventCount as { count: number }).count), 0);
-    assert.equal((await productAnalytics.workspaceFunnel(WS)).first_opportunities_generated_at, null);
-    const zeroAggregate = await productAnalytics.aggregates(cohortStart, cohortEnd);
-    assert.equal(Number(zeroAggregate.first_opportunity_workspaces), 0);
-    assert.equal(zeroAggregate.firstOpportunityRate, 0);
-    assert.equal((await productAnalytics.workspaceFunnel(OTHER_WS)).first_opportunities_generated_at, null);
-
-    await db.execute(sql`update customers set deleted_at=null where workspace_id=${WS}`);
-    await seedScoreBatch(WS, CUTOFF_B, 7);
-    const eligible = await opportunities.materialize(WS, RADAR, 'eligible_batch');
-    assert.equal(eligible.eligible, 7);
-    const replay = await opportunities.materialize(WS, RADAR, 'eligible_batch_replay');
-    assert.equal(replay.id, eligible.id);
-    assert.equal(replay.reused, true);
-    const events = await db.execute(sql`select idempotency_key,metadata from truvo_product_events where workspace_id=${WS} and event_name='opportunities_generated'`);
-    assert.equal(events.length, 1);
-    assert.equal((events[0] as { idempotency_key: string }).idempotency_key, `opportunities_generated:${eligible.id}`);
-    assert.deepEqual((events[0] as { metadata: unknown }).metadata, { count: 7 });
-    const positiveAggregate = await productAnalytics.aggregates(cohortStart, cohortEnd);
-    assert.equal(Number(positiveAggregate.first_opportunity_workspaces), 1);
-    assert.equal(positiveAggregate.firstOpportunityRate, 0.5);
-    assert.equal((await productAnalytics.workspaceFunnel(OTHER_WS)).first_opportunities_generated_at, null);
-  });
-
   test('pre-Order-100 completed scores backfill once without retraining or rescoring', async () => {
     const [before] = await db.execute(sql`
       select
@@ -362,6 +326,42 @@ describe('Order 100 real PostgreSQL runtime', { concurrency: 1 }, () => {
     assert.match(serialized, /opportunity_rows_probability_rank_idx|Index Scan|Bitmap/);
     const [otherCount] = await db.execute(sql`select count(*)::int count from opportunity_rows where workspace_id=${OTHER_WS}`);
     assert.equal(Number((otherCount as { count: number }).count), 0);
+  });
+
+  test('product analytics advances only for eligible user-visible opportunities', async () => {
+    const now = Date.now();
+    const cohortStart = new Date(now - 60_000);
+    const cohortEnd = new Date(now + 60_000);
+    await productAnalytics.record({ workspaceId: WS, eventName: 'workspace_created', occurredAt: cohortStart });
+    await productAnalytics.record({ workspaceId: OTHER_WS, eventName: 'workspace_created', occurredAt: cohortStart });
+
+    await db.execute(sql`update customers set deleted_at=now() where workspace_id=${WS}`);
+    const suppressed = await opportunities.materialize(WS, RADAR, 'all_suppressed');
+    assert.equal(suppressed.rows, 7);
+    assert.equal(suppressed.eligible, 0);
+    const [zeroEventCount] = await db.execute(sql`select count(*)::int count from truvo_product_events where workspace_id=${WS} and event_name='opportunities_generated'`);
+    assert.equal(Number((zeroEventCount as { count: number }).count), 0);
+    assert.equal((await productAnalytics.workspaceFunnel(WS)).first_opportunities_generated_at, null);
+    const zeroAggregate = await productAnalytics.aggregates(cohortStart, cohortEnd);
+    assert.equal(Number(zeroAggregate.first_opportunity_workspaces), 0);
+    assert.equal(zeroAggregate.firstOpportunityRate, 0);
+    assert.equal((await productAnalytics.workspaceFunnel(OTHER_WS)).first_opportunities_generated_at, null);
+
+    await db.execute(sql`update customers set deleted_at=null where workspace_id=${WS}`);
+    await seedScoreBatch(WS, CUTOFF_B, 7);
+    const eligible = await opportunities.materialize(WS, RADAR, 'eligible_batch');
+    assert.equal(eligible.eligible, 7);
+    const replay = await opportunities.materialize(WS, RADAR, 'eligible_batch_replay');
+    assert.equal(replay.id, eligible.id);
+    assert.equal(replay.reused, true);
+    const events = await db.execute(sql`select idempotency_key,metadata from truvo_product_events where workspace_id=${WS} and event_name='opportunities_generated'`);
+    assert.equal(events.length, 1);
+    assert.equal((events[0] as { idempotency_key: string }).idempotency_key, `opportunities_generated:${eligible.id}`);
+    assert.deepEqual((events[0] as { metadata: unknown }).metadata, { count: 7 });
+    const positiveAggregate = await productAnalytics.aggregates(cohortStart, cohortEnd);
+    assert.equal(Number(positiveAggregate.first_opportunity_workspaces), 1);
+    assert.equal(positiveAggregate.firstOpportunityRate, 0.5);
+    assert.equal((await productAnalytics.workspaceFunnel(OTHER_WS)).first_opportunities_generated_at, null);
   });
 
   test('existing leader lock elects one Opportunity scheduler replica, isolates workspace failure and Redis is not read truth', async () => {
