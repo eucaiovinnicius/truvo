@@ -222,7 +222,9 @@ export class OpportunitiesService {
         resourceId: result.id,
         metadata: auditMetadata,
       });
-      await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'opportunities_generated', identity: result.id, metadata: { count: result.rows } });
+      if (result.eligible > 0) {
+        await this.productAnalytics?.recordSafely({ workspaceId, eventName: 'opportunities_generated', identity: result.id, metadata: { count: result.eligible } });
+      }
     }
     return result;
   }
