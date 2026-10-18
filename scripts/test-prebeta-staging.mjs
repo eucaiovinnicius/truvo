@@ -14,6 +14,9 @@ const network = `truvo-staging-net-${suffix}`;
 const imageSuffix = process.env.PREBETA_IMAGE_SUFFIX || suffix;
 const images = { api: `truvo-api-prebeta:${imageSuffix}`, prior: `truvo-api-prebeta-prior:${imageSuffix}`, consumer: `truvo-consumer-prebeta:${imageSuffix}`, web: `truvo-web-prebeta:${imageSuffix}`, worker: `truvo-worker-prebeta:${imageSuffix}` };
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+// The API readiness endpoint bounds each dependency probe at 2s. The harness
+// must wait longer than that bound or it races the valid degraded response.
+const HTTP_PROBE_TIMEOUT_MS = 5_000;
 const started = [];
 const temp = mkdtempSync(join(tmpdir(), 'truvo-prebeta-baseline-'));
 
@@ -61,14 +64,18 @@ async function ready(container, args) {
   throw new Error(`${container} did not become ready`);
 }
 async function getJson(url, expectedStatus = 200) {
+  let lastObservation = 'no response';
   for (let attempt = 0; attempt < 80; attempt += 1) {
     try {
       const response = await requestBody(url);
       if (response.status === expectedStatus) return JSON.parse(response.body);
-    } catch { /* retry */ }
+      lastObservation = `HTTP ${response.status}: ${response.body.slice(0, 500)}`;
+    } catch (error) {
+      lastObservation = error instanceof Error ? error.message : String(error);
+    }
     await delay(500);
   }
-  throw new Error(`${url} did not return ${expectedStatus}`);
+  throw new Error(`${url} did not return ${expectedStatus}; last observation: ${lastObservation}`);
 }
 async function getOk(url) {
   for (let attempt = 0; attempt < 80; attempt += 1) {
@@ -84,7 +91,7 @@ function requestBody(url, options = {}) {
       response.on('data', (chunk) => chunks.push(chunk));
       response.on('end', () => resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }));
     });
-    request.setTimeout(2_000, () => request.destroy(new Error('http_probe_timeout')));
+    request.setTimeout(HTTP_PROBE_TIMEOUT_MS, () => request.destroy(new Error(`http_probe_timeout_${HTTP_PROBE_TIMEOUT_MS}ms`)));
     request.once('error', reject);
   });
 }
