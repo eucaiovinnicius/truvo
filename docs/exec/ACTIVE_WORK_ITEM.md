@@ -1,48 +1,55 @@
 # ACTIVE WORK ITEM
 
-## Execution Order 142 — MVP Release Cut & Production Readiness
+## Execution Order 143 — Controlled Beta Rollout & Hosted Environment Go-Live
 
 **Priority:** P0
-**Phase:** MVP Release
-**Code State:** Release candidate preparation
-**Status:** In progress
-**Readiness:** Authorized
+**Phase:** Controlled Beta
+**Code State:** Authorized release candidate
+**Status:** Blocked on authenticated provider access
+**Readiness:** NO-GO
 
 ## Authority
 
 This file remains the repository-local execution authority defined by `AGENTS.md`.
-It was stale at Execution Order 20; EO 142 restores it to the explicitly authorized
-sequence without rewriting prior history. The detailed EO 142 execution prompt is
-the scope authority for this work item.
+Execution Order 142 is complete. The detailed EO 143 execution prompt is the scope
+authority for this work item; prior execution history is not rewritten here.
 
 ## Baseline
 
-- Canonical main SHA: `b0093248d49545fc7431af7ff5ba9422225ea99c`
-- Previous order: EO 141 — DONE
-- Post-merge CI run: `39150816985` — SUCCESS
+- Canonical main SHA: `692fc3b2c23324f62d581a660446a786bf602644`
+- Previous order: EO 142 — DONE
+- Authorized release candidate: `v0.1.0-rc.1`
+- Release candidate SHA: `692fc3b2c23324f62d581a660446a786bf602644`
 
 ## Objective
 
-Cut the first traceable MVP release candidate from the existing product without
-adding features. Validate code, configuration, migrations, runtime, health,
-critical flows, observability, rollback, CI, and release provenance.
+Turn the validated release candidate into an operationally safe hosted staging and
+controlled beta environment. Inventory the real providers, prove isolation,
+configuration, backups and restore, migrations, health, critical flows, access
+control, observability, and operational rollback before enabling a beta cohort.
 
 ## Scope constraints
 
-- Blocker-driven release/readiness changes only.
-- No Personalization, Experimentation, new analytics, new integrations, redesign,
-  broad refactor, dependency upgrade, or architecture rewrite.
-- Production deployment is not implied by the release cut and must not occur
-  without configured provider infrastructure, credentials, and explicit safety proof.
+- Operational rollout and beta go-live blocker fixes only.
+- Hosted staging and controlled beta are authorized; unrestricted public/GA launch
+  is not authorized.
+- No Personalization, Experimentation, new models, new algorithms, new product
+  features, redesign, broad refactor, or opportunistic dependency upgrades.
+- Never fabricate provider evidence, expose credentials, weaken safety gates, or
+  deploy when a hard go-live gate is unresolved.
 
 ## Completion gates
 
-- frozen install, lint, typecheck, tests, build, migrations, staging, readiness,
-  critical flows, tenant isolation, rollback, and security sanity are proven;
-- review is clean and required CI passes;
-- protected merge and post-merge `main` CI succeed;
-- the release candidate tag/artifact points to the validated merge SHA;
-- final handoff follows the EO 142 required format and ends with
+- real provider inventory and secure environment contract are verified;
+- hosted staging exists and is isolated from the beta/production data plane;
+- backup tier and safe Postgres restore proof are verified;
+- migrations, domains/TLS, CORS, production auth, release identity, health,
+  readiness, workers, critical flows, tenant isolation, and live/demo truthfulness
+  pass in the hosted environment;
+- beta access is restricted, logs are safe, and hosted rollback is proven;
+- formal decision is GO before any controlled beta cohort is enabled;
+- any repository change has clean review, protected merge, and green post-merge CI;
+- final handoff follows the EO 143 required format and ends with
   `TRUVO_CODEX_HANDOFF_END`.
 
 Do not start the next execution order automatically.
