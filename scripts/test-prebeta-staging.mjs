@@ -152,7 +152,7 @@ try {
   if (process.env.PREBETA_SKIP_IMAGE_BUILD !== '1') {
     run('docker', ['build', '-f', 'apps/api/Dockerfile', '-t', images.api, '.']);
     run('docker', ['build', '-f', 'apps/consumer/Dockerfile', '-t', images.consumer, '.']);
-    run('docker', ['build', '-f', 'apps/propensity-worker/Dockerfile', '-t', images.worker, 'apps/propensity-worker']);
+    run('docker', ['build', '-f', 'apps/propensity-worker/Dockerfile', '-t', images.worker, '.']);
     run('docker', ['build', '-f', 'apps/web/Dockerfile', '--build-arg', 'NEXT_PUBLIC_API_URL=http://localhost:3333', '-t', images.web, '.']);
     run('git', ['archive', '--format=tar', '-o', join(temp, 'baseline.tar'), baseline]);
     run('tar', ['-xf', join(temp, 'baseline.tar'), '-C', temp]);

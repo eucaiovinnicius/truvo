@@ -9,7 +9,7 @@ This is the operational contract for Truvo releases. Existing providers are pres
 | Local | Copy `.env.example` to ignored `.env`; run `pnpm infra:up` before API/consumer. | Local credentials only; `TRUVO_DEV_AUTH_BYPASS=1` is permitted only outside production. |
 | Preview / PR | Vercel preview sets `NEXT_PUBLIC_API_URL` to a non-production API intended for the PR. Railway preview is optional and provider-managed. | Never point a preview at production writable infrastructure or service-role secrets. |
 | Staging | Use the production-required backend variables with staging Supabase/ClickHouse/Kafka/Redis and staging Vercel origin in `CORS_ORIGINS`. | Use isolated workspaces/test credentials and run the smoke checklist. |
-| Production | Railway runs API/consumer/identity worker; Vercel builds `NEXT_PUBLIC_API_URL` into the web artifact. | `NODE_ENV=production`, non-empty `CORS_ORIGINS`, and `TRUVO_DEV_AUTH_BYPASS` other than `1` are enforced at API boot. |
+| Production | Railway runs API, event consumer, identity worker, and propensity worker; Vercel builds `NEXT_PUBLIC_API_URL` into the web artifact. | `NODE_ENV=production`, non-empty `CORS_ORIGINS`, and `TRUVO_DEV_AUTH_BYPASS` other than `1` are enforced at API boot. |
 
 The full variable list and service matrix remain in `.env.example` and `DEPLOY.md`. Required API boot variables are `SUPABASE_URL`, one Supabase key, `DATABASE_URL`, `CLICKHOUSE_URL`, `KAFKA_BROKERS`, and `REDIS_URL`. The API exits before opening dependencies when one is missing; optional integrations remain fail-closed. `NEXT_PUBLIC_API_URL` is a Vercel/Docker build-time input, never a secret.
 
@@ -36,7 +36,7 @@ The canonical GitHub remote is configured. Protected merges must use the normal 
 1. Run `pnpm release:identity` and compare it with the Railway/Vercel deployment commit.
 2. Record `pnpm db:pg` and `pnpm db:ch` output from staging. Do not run them against production without a reviewed backup/change window.
 3. Run `pnpm migration:validate`, then frozen install, lint, typecheck, test and build.
-4. Deploy API, consumer, identity worker and web with staging URLs/secrets.
+4. Deploy API, event consumer, identity worker, propensity worker, and web with staging URLs/secrets. Verify the propensity worker starts with its private artifact bucket and server-only credentials, and fails closed if artifact verification configuration is absent.
 5. Verify `GET /health` release version/commit and `GET /health/ready` HTTP 200 with Postgres/ClickHouse healthy.
 6. Authenticate on staging, switch workspaces, verify live mode has no demo data, and send one authorized tracking event using no production customer data.
 7. Verify CORS from the staging Vercel origin, inspect browser assets for no production secret, and confirm a flagged feature is enabled only for its intended workspace.
