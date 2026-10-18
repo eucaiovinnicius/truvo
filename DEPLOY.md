@@ -10,6 +10,7 @@ Guia passo-a-passo para subir a stack em produção. **Ordem importa** (infra �
 | `apps/api` (NestJS) | **Railway** (serviço) | `apps/api/Dockerfile` + `apps/api/railway.json` |
 | `apps/consumer` — pipeline M2 | **Railway** (serviço) | `apps/consumer/Dockerfile` + `apps/consumer/railway.json` |
 | `apps/consumer` — stitch M8 | **Railway** (serviço) | mesma imagem + `apps/consumer/railway.identity.json` |
+| `apps/propensity-worker` — training/scoring | **Railway** (serviço) | `apps/propensity-worker/Dockerfile` + `apps/propensity-worker/railway.json` |
 | Postgres + Auth | **Supabase** | (managed) |
 | ClickHouse | **Railway** (ou ClickHouse Cloud) | template/imagem |
 | Redpanda/Kafka | **Railway** (ou Redpanda Cloud/Upstash) | template/imagem |
@@ -56,14 +57,16 @@ Para um banco v3.2 existente que já possua exatamente o schema baseline auditad
 Rollback de schema não é automático: faça backup e valide em ambiente descartável antes do deploy. Prefira uma migration aditiva de forward-fix. Não edite nem remova linhas do histórico Drizzle manualmente.
 
 ## Passo 4 — Railway: API + workers
-Crie **3 serviços** apontando para o MESMO repo GitHub; em cada um, defina *Settings → Config-as-code file path*:
+Crie **4 serviços** apontando para o MESMO repo GitHub; em cada um, defina *Settings → Config-as-code file path*:
 1. **api** → `apps/api/railway.json` (healthcheck `/health`; a porta 3333 é detectada do `EXPOSE`).
 2. **consumer** → `apps/consumer/railway.json` (pipeline de eventos).
 3. **identity-worker** → `apps/consumer/railway.identity.json` (stitching M8).
+4. **propensity-worker** → `apps/propensity-worker/railway.json` (training/scoring M90).
 
 Configure as **variáveis de ambiente** (ver a matriz no fim). Pontos críticos:
 - `INTERNAL_API_URL` (no consumer e no identity-worker) = URL **interna** da api: `http://api.railway.internal:3333`.
 - `SCHEDULER_ENABLED=1` (apenas na **api**) para ligar os crons (leader-lock garante 1 execução).
+- No **propensity-worker**, configure também `DATABASE_URL`, `KAFKA_BROKERS`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `PROPENSITY_ARTIFACT_BUCKET`, `INTERNAL_API_URL` e `INTERNAL_API_SECRET`; o bucket deve existir e ser privado.
 - `NODE_ENV=production` em todos (neutraliza o `TRUVO_DEV_AUTH_BYPASS`).
 
 Gere um domínio público só para a **api** (Settings → Networking → Generate Domain). Anote a URL pública (`https://truvo-api-xxxx.up.railway.app`).
@@ -86,26 +89,29 @@ Gere um domínio público só para a **api** (Settings → Networking → Genera
 ## Matriz de variáveis de ambiente
 Fonte de verdade: `.env.example`. Onde cada uma vai:
 
-| Variável | api | consumer | identity | web | Observação |
-|---|:--:|:--:|:--:|:--:|---|
-| `NODE_ENV=production` | ✅ | ✅ | ✅ | — | neutraliza bypass de auth |
-| `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` | ✅ | — | — | — | service-role só no backend (regra 3) |
-| `DATABASE_URL` | ✅ | — | — | — | Supabase session pooler (5432, sslmode=require) |
-| `CLICKHOUSE_URL/USER/PASSWORD/DB` | ✅ | ✅ | ✅ | — | interno do Railway |
-| `KAFKA_BROKERS` | ✅ | ✅ | ✅ | — | `redpanda.railway.internal:9092` |
-| `REDIS_URL` | ✅ | ✅ | ✅ | — | interno do Railway |
-| `INTERNAL_API_SECRET` | ✅ | ✅ | ✅ | — | mesmo segredo nos 3 (server-to-server) |
-| `INTERNAL_API_URL` | — | ✅ | ✅ | — | `http://api.railway.internal:3333` |
-| `INTEGRATIONS_ENCRYPTION_KEY` | ✅ | — | — | — | ≥32 bytes; destrava M4/M9 |
-| `CORS_ORIGINS` | ✅ | — | — | — | domínio(s) da Vercel |
-| `SCHEDULER_ENABLED=1` | ✅ | — | — | — | liga os crons (só na api) |
-| `NEXT_PUBLIC_API_URL` | — | — | — | ✅ | URL pública da api (Railway) |
-| Stripe / Ads / Anthropic / Email `*` | ✅ | — | — | — | opcionais, fail-closed sem elas |
+| Variável | api | consumer | identity | propensity | web | Observação |
+|---|:--:|:--:|:--:|:--:|:--:|---|
+| `NODE_ENV=production` | ✅ | ✅ | ✅ | — | — | neutraliza bypass de auth nos serviços Node |
+| `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` | ✅ | — | — | ✅¹ | — | service-role só no backend (regra 3) |
+| `DATABASE_URL` | ✅ | — | — | ✅ | — | Supabase session pooler (5432, sslmode=require) |
+| `CLICKHOUSE_URL/USER/PASSWORD/DB` | ✅ | ✅ | ✅ | — | — | interno do Railway |
+| `KAFKA_BROKERS` | ✅ | ✅ | ✅ | ✅ | — | `redpanda.railway.internal:9092` |
+| `REDIS_URL` | ✅ | ✅ | ✅ | — | — | interno do Railway |
+| `INTERNAL_API_SECRET` | ✅ | ✅ | ✅ | ✅ | — | mesmo segredo nos serviços server-to-server |
+| `INTERNAL_API_URL` | — | ✅ | ✅ | ✅ | — | `http://api.railway.internal:3333` |
+| `INTEGRATIONS_ENCRYPTION_KEY` | ✅ | — | — | — | — | ≥32 bytes; destrava M4/M9 |
+| `CORS_ORIGINS` | ✅ | — | — | — | — | domínio(s) da Vercel |
+| `SCHEDULER_ENABLED=1` | ✅ | — | — | — | — | liga os crons (só na api) |
+| `NEXT_PUBLIC_API_URL` | — | — | — | — | ✅ | URL pública da api (Railway) |
+| `PROPENSITY_ARTIFACT_BUCKET` | — | — | — | ✅ | — | bucket privado; nunca expor a chave no frontend |
+| Stripe / Ads / Anthropic / Email `*` | ✅ | — | — | — | — | opcionais, fail-closed sem elas |
+
+¹ O propensity worker exige `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY`; não usa a anon key.
 
 ---
 
 ## Notas & pegadinhas
-- **Buildar as imagens antes** — os `Dockerfile`s nunca foram buildados de verdade (dev estava offline). Rode `docker build -f apps/api/Dockerfile .` (e consumer/web) localmente uma vez para pegar ajustes de path do monorepo antes do 1º deploy no Railway.
+- **Imagens validadas no CI** — o gate `test:prebeta:staging` constrói API, consumer, propensity worker e web a partir dos Dockerfiles reais. Preserve esse gate antes de cada release.
 - **2 processos do consumer** — pipeline (M2) e stitching (M8) são serviços **separados**; escalam independente. Mesma imagem, `startCommand` diferente (já nos `railway.json`).
 - **Ordem de boot** — a api valida env no start (`validateEnv`, fail-fast) e conecta Kafka; suba a infra (passo 2) **antes** da api/consumer.
 - **Migrações em ClickHouse já populado** — o `ch:migrate` é idempotente (`IF NOT EXISTS`), mas mudanças de schema em tabelas com dados podem exigir `ALTER`/backfill manual.

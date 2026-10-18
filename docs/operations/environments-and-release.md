@@ -1,6 +1,6 @@
 # Environments, CI/CD and release operations
 
-This is the operational contract for Truvo releases. Existing providers are preserved: Vercel hosts `apps/web`; Railway runs the API and two consumer processes; Supabase provides Postgres/Auth; ClickHouse, Kafka and Redis remain managed infrastructure as documented in `DEPLOY.md`.
+This is the operational contract for Truvo releases. Existing providers are preserved: Vercel hosts `apps/web`; Railway runs the API, event consumer, identity worker, and propensity worker; Supabase provides Postgres/Auth and private model artifact storage; ClickHouse, Kafka and Redis remain managed infrastructure as documented in `DEPLOY.md`.
 
 ## Environment contract
 
@@ -27,9 +27,9 @@ Flags are parsed at API boot. Invalid values fail boot; missing/unknown flags ar
 
 ## CI contract
 
-`.github/workflows/ci.yml` runs on `main` pushes and pull requests: frozen pnpm install, `pnpm migration:validate`, lint, typecheck, tests, build, and release identity output with the GitHub SHA. Migration validation is static and validates existing ClickHouse DDL naming/order only. It neither connects to a database nor implements/applies a versioned Postgres migration framework; that remains Execution Order 27.
+`.github/workflows/ci.yml` runs on `main` pushes and pull requests: frozen pnpm install, static validation of the versioned Postgres and ClickHouse migration artifacts, lint, typecheck, general tests, Product Analytics, the pre-beta/staging regression chain, build, and release identity output with the GitHub SHA. Runtime migration tests use disposable databases in the regression chain; production migration application remains an explicit deploy step.
 
-This checkout has no Git remote. Branch protection, required checks, preview deployments and provider status are therefore unverified. Configure the remote repository to require the `verify` job before merge.
+The canonical GitHub remote is configured. Protected merges must use the normal pull-request path with the `verify` job green; never use an administrative bypass for a release cut. Provider deployment status is separate from repository CI and must be verified in the provider consoles before production deployment.
 
 ## Staging smoke and release checklist
 
@@ -67,4 +67,4 @@ This is the **minimum reproducible procedure** required by Order 035 §6. It val
 
 For application-only defects, redeploy the previous known-good Railway/Vercel commit, confirm `/health` release identity, and repeat smoke checks. Disable a newly released workspace capability by setting its flag to `false` and redeploying the API; flags do not replace rollback for an unflagged defect.
 
-Database rollback is constrained: Postgres uses `drizzle-kit push` and has no versioned, reversible migration history; ClickHouse DDL may be additive or require a manual backfill. Take/verify backups, review schema diffs in a disposable environment, and prefer forward-fixes to destructive reversals. Execution Order 27 must establish versioned Postgres migrations before schema changes are automatically rollbackable.
+Database rollback is constrained even with versioned Postgres migrations: the runner applies forward SQL under an advisory lock and the repository does not define automatic down migrations. ClickHouse DDL may also require a manual backfill. Take/verify backups, review schema changes in a disposable environment, and prefer additive forward-fixes to destructive reversals. Never use `drizzle-kit push` in staging or production.
